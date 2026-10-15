@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoQueueforLive - กำลังโหลดระบบ...</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body {
+            background: #020617;
+            font-family: 'Kanit', sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* 🚀 PRELOADER SPLASH SCREEN (AutoQueueforLive By Dreamdev) */
+        #appLoadingOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: radial-gradient(circle at 50% 35%, #1e1b4b 0%, #0f172a 55%, #020617 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            overflow: hidden;
+            transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1), transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        #appLoadingOverlay.fade-out {
+            opacity: 0;
+            transform: scale(1.04);
+            pointer-events: none;
+        }
+
+        .loader-ambient-glow {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.35;
+            pointer-events: none;
+            animation: pulseGlow 4s ease-in-out infinite alternate;
+        }
+        .loader-glow-1 {
+            width: 380px;
+            height: 380px;
+            background: #6366f1;
+            top: 15%;
+            left: 20%;
+        }
+        .loader-glow-2 {
+            width: 320px;
+            height: 320px;
+            background: #06b6d4;
+            bottom: 20%;
+            right: 25%;
+            animation-delay: -2s;
+        }
+        .loader-glow-3 {
+            width: 350px;
+            height: 350px;
+            background: #ec4899;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            opacity: 0.18;
+            filter: blur(100px);
+        }
+
+        .loader-card {
+            position: relative;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            padding: 30px;
+            max-width: 440px;
+            width: 90%;
+        }
+
+        /* 🌟 Animated Logo Ring */
+        .loader-logo-ring {
+            position: relative;
+            width: 124px;
+            height: 124px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .loader-logo-ring::before {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border-radius: 36px;
+            background: conic-gradient(from 0deg, #38bdf8, #6366f1, #ec4899, #38bdf8);
+            animation: rotateBorder 3s linear infinite;
+            filter: blur(6px);
+            opacity: 0.85;
+        }
+
+        .loader-logo-glow {
+            position: absolute;
+            inset: 0;
+            border-radius: 32px;
+            background: linear-gradient(135deg, rgba(56,189,248,0.4), rgba(99,102,241,0.4));
+            filter: blur(12px);
+        }
+
+        .loader-logo-box {
+            position: relative;
+            width: 114px;
+            height: 114px;
+            border-radius: 30px;
+            background: #0f172a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.2);
+            animation: logoFloat 3s ease-in-out infinite;
+        }
+
+        .loader-logo-box svg {
+            width: 86px;
+            height: 86px;
+            border-radius: 20px;
+        }
+
+        /* 🔤 Brand Typography */
+        .loader-title {
+            margin: 0 0 8px 0;
+            font-size: 2.2rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            background: linear-gradient(135deg, #ffffff 30%, #93c5fd 70%, #c084fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 30px rgba(99, 102, 241, 0.3);
+        }
+
+        .loader-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 16px;
+            border-radius: 999px;
+            background: rgba(99, 102, 241, 0.12);
+            border: 1px solid rgba(129, 140, 248, 0.3);
+            color: #c7d2fe;
+            font-size: 0.85rem;
+            font-weight: 500;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            margin-bottom: 32px;
+        }
+
+        .loader-badge-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            box-shadow: 0 0 8px #22c55e, 0 0 16px #22c55e;
+            animation: pulseDot 1.5s ease-in-out infinite;
+        }
+
+        /* 📊 Animated Progress Bar */
+        .loader-progress-container {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .loader-progress-track {
+            width: 100%;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 999px;
+            overflow: hidden;
+            position: relative;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+        }
+
+        .loader-progress-fill {
+            height: 100%;
+            width: 10%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #38bdf8, #6366f1, #a855f7, #ec4899);
+            box-shadow: 0 0 16px rgba(99, 102, 241, 0.8);
+            position: relative;
+            transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .loader-progress-shimmer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.7), transparent);
+            animation: shimmer 1.5s infinite;
+        }
+
+        .loader-progress-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.88rem;
+            color: #94a3b8;
+            font-weight: 400;
+        }
+
+        #loaderPercentText {
+            color: #38bdf8;
+            font-weight: 600;
+            font-family: monospace;
+            font-size: 0.95rem;
+        }
+
+        /* 🎬 Keyframe Animations */
+        @keyframes rotateBorder {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @keyframes logoFloat {
+            0%, 100% { transform: translateY(0px) scale(1); }
+            50% { transform: translateY(-7px) scale(1.02); }
+        }
+
+        @keyframes pulseGlow {
+            0% { opacity: 0.25; transform: scale(0.9); }
+            100% { opacity: 0.45; transform: scale(1.1); }
+        }
+
+        @keyframes pulseDot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.85); }
+        }
+
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(200%); }
+        }
+    </style>
+</head>
+<body>
+    <!-- 🚀 หน้าโหลดระบบสุดพรีเมียม (AutoQueueforLive By Dreamdev Instant Loader) -->
+    <div id="appLoadingOverlay">
+        <div class="loader-ambient-glow loader-glow-1"></div>
+        <div class="loader-ambient-glow loader-glow-2"></div>
+        <div class="loader-ambient-glow loader-glow-3"></div>
+
+        <div class="loader-card">
+            <!-- Animated 3D Logo Box -->
+            <div class="loader-logo-ring">
+                <div class="loader-logo-glow"></div>
+                <div class="loader-logo-box">
+                    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#1E293B" /><stop offset="50%" stop-color="#0F172A" /><stop offset="100%" stop-color="#020617" />
+                            </linearGradient>
+                            <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#38BDF8" /><stop offset="50%" stop-color="#6366F1" /><stop offset="100%" stop-color="#A855F7" />
+                            </linearGradient>
+                            <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#FDE047" /><stop offset="100%" stop-color="#EAB308" />
+                            </linearGradient>
+                            <linearGradient id="scanGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#22C55E" stop-opacity="0" /><stop offset="50%" stop-color="#4ADE80" stop-opacity="0.9" /><stop offset="100%" stop-color="#22C55E" stop-opacity="0" />
+                            </linearGradient>
+                            <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                                <feGaussianBlur stdDeviation="10" result="blur" /><feComposite in="SourceGraphic" in2="blur" operator="over" />
+                            </filter>
+                        </defs>
+                        <rect width="512" height="512" rx="115" fill="url(#bgGrad)" />
+                        <rect width="508" height="508" x="2" y="2" rx="113" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3" />
+                        <circle cx="256" cy="256" r="140" fill="#6366F1" opacity="0.2" filter="url(#glow)" />
+                        <circle cx="210" cy="190" r="90" fill="#38BDF8" opacity="0.25" filter="url(#glow)" />
+                        <g stroke="#38BDF8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" opacity="0.75">
+                            <path d="M 120 170 L 120 135 A 15 15 0 0 1 135 120 L 170 120" /><path d="M 342 120 L 377 120 A 15 15 0 0 1 392 135 L 392 170" /><path d="M 392 342 L 392 377 A 15 15 0 0 1 377 392 L 342 392" /><path d="M 170 392 L 135 392 A 15 15 0 0 1 120 377 L 120 342" />
+                        </g>
+                        <path d="M 256 160 L 345 205 L 256 250 L 167 205 Z" fill="#4F46E5" />
+                        <path d="M 256 160 L 345 205 L 256 250 L 167 205 Z" fill="url(#accentGrad)" opacity="0.9" />
+                        <path d="M 167 218 L 250 260 L 250 358 L 167 312 Z" fill="#312E81" />
+                        <path d="M 167 218 L 250 260 L 250 358 L 167 312 Z" fill="url(#accentGrad)" opacity="0.4" />
+                        <path d="M 262 260 L 345 218 L 345 312 L 262 358 Z" fill="#4338CA" />
+                        <path d="M 262 260 L 345 218 L 345 312 L 262 358 Z" fill="url(#accentGrad)" opacity="0.7" />
+                        <line x1="125" y1="260" x2="387" y2="260" stroke="url(#scanGrad)" stroke-width="6" stroke-linecap="round" filter="url(#glow)" />
+                        <line x1="150" y1="260" x2="362" y2="260" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.9" />
+                        <g transform="translate(256, 218)">
+                            <path d="M 0 -22 Q 0 0 22 0 Q 0 0 0 22 Q 0 0 -22 0 Q 0 0 0 -22 Z" fill="url(#goldGrad)" filter="url(#glow)" />
+                            <circle cx="0" cy="0" r="5" fill="#FFFFFF" />
+                        </g>
+                        <g transform="translate(355, 345) scale(0.9)">
+                            <circle cx="0" cy="0" r="32" fill="#0F172A" stroke="rgba(255,255,255,0.15)" stroke-width="3" />
+                            <circle cx="0" cy="0" r="28" fill="#10B981" />
+                            <path d="M -6 -10 L 4 -10 L -2 2 L 6 2 L -7 12 L -3 4 L -8 4 Z" fill="#FFFFFF" />
+                        </g>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Brand Header -->
+            <h1 class="loader-title">AutoQueueforLive</h1>
+            <div class="loader-badge">
+                <span class="loader-badge-dot"></span>
+                <span>By Dreamdev</span>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="loader-progress-container">
+                <div class="loader-progress-track">
+                    <div id="loaderProgressBar" class="loader-progress-fill">
+                        <div class="loader-progress-shimmer"></div>
+                    </div>
+                </div>
+                <div class="loader-progress-info">
+                    <span id="loaderStatusText">กำลังเริ่มต้นระบบเซิร์ฟเวอร์...</span>
+                    <span id="loaderPercentText">10%</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const progressBar = document.getElementById('loaderProgressBar');
+        const percentText = document.getElementById('loaderPercentText');
+        const statusText = document.getElementById('loaderStatusText');
+        const overlay = document.getElementById('appLoadingOverlay');
+
+        let isServerReady = false;
+        let animationFinished = false;
+        let redirected = false;
+
+        // ⏱️ หน่วงเวลาแสดงผลแอนิเมชันให้โชว์ความเท่เต็มตา 3 วินาที (3,000 ms) ตามต้องการ
+        const DURATION = 3000;
+        const startTime = performance.now();
+
+        const statusStages = [
+            { threshold: 0.20, text: '🚀 กำลังเริ่มต้นระบบ AutoQueue Engine...' },
+            { threshold: 0.48, text: '📦 เชื่อมต่อฐานข้อมูลคำสั่งซื้อ & สต็อกสินค้า...' },
+            { threshold: 0.76, text: '⚡ กำหนดค่าระบบ Slip Verification & Tunnel...' },
+            { threshold: 0.94, text: '🛡️ ซิงก์ข้อมูลคิวสดและตรวจสอบความพร้อม...' },
+            { threshold: 1.00, text: '✨ ระบบพร้อมเริ่มไลฟ์สดแล้ว 100%!' }
+        ];
+
+        function getStatus(progressRatio) {
+            for (const stage of statusStages) {
+                if (progressRatio <= stage.threshold) return stage.text;
+            }
+            return statusStages[statusStages.length - 1].text;
+        }
+
+        // ฟังก์ชัน Easing นุ่มนวลให้หลอดวิ่งแบบโปร
+        function easeOutCubic(x) {
+            return 1 - Math.pow(1 - x, 3);
+        }
+
+        function updateProgress(now) {
+            const elapsed = now - startTime;
+            const linearRatio = Math.min(1, elapsed / DURATION);
+            const easedRatio = easeOutCubic(linearRatio);
+
+            const displayPercent = Math.min(100, Math.round(easedRatio * 100));
+            if (progressBar) progressBar.style.width = displayPercent + '%';
+            if (percentText) percentText.innerText = displayPercent + '%';
+            if (statusText) statusText.innerText = getStatus(linearRatio);
+
+            if (linearRatio < 1) {
+                requestAnimationFrame(updateProgress);
+            } else {
+                animationFinished = true;
+                checkReadyAndProceed();
+            }
+        }
+
+        requestAnimationFrame(updateProgress);
+
+        // เช็คเซิร์ฟเวอร์ใน Background
+        function pollServer() {
+            fetch('http://localhost:3000/api/health')
+                .then(res => res.json())
+                .then(data => {
+                    if (data && data.status === 'ok') {
+                        isServerReady = true;
+                        if (animationFinished) {
+                            checkReadyAndProceed();
+                        }
+                    } else {
+                        setTimeout(pollServer, 200);
+                    }
+                })
+                .catch(() => {
+                    setTimeout(pollServer, 200);
+                });
+        }
+
+        setTimeout(pollServer, 300);
+
+        function checkReadyAndProceed() {
+            if (redirected) return;
+
+            if (isServerReady && animationFinished) {
+                redirected = true;
+                if (statusText) statusText.innerText = '✨ ยินดีต้อนรับ! กำลังเปิดหน้า Dashboard...';
+                if (progressBar) progressBar.style.width = '100%';
+                if (percentText) percentText.innerText = '100%';
+
+                // แช่แสง 100% ไว้ 350ms แล้วค่อยๆ Fade-out เข้าหน้าเว็บ
+                setTimeout(() => {
+                    if (overlay) overlay.classList.add('fade-out');
+                    setTimeout(() => {
+                        window.location.replace('http://localhost:3000');
+                    }, 400);
+                }, 350);
+            } else if (animationFinished && !isServerReady) {
+                // กรณีเครื่องคอมพ์กำลังโหลดเซิร์ฟเวอร์ยังไม่เสร็จใน 3 วินาที
+                if (statusText) statusText.innerText = '⏳ กำลังรอสัญญาณจากเซิร์ฟเวอร์หลังบ้าน...';
+            }
+        }
+    </script>
+</body>
+</html>

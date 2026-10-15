@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%" style="border-radius: 115px; box-shadow: 0 20px 40px rgba(0,0,0,0.15);">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B" />
+      <stop offset="50%" stop-color="#0F172A" />
+      <stop offset="100%" stop-color="#020617" />
+    </linearGradient>
+
+    <!-- Glowing Accent Gradient -->
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="50%" stop-color="#6366F1" />
+      <stop offset="100%" stop-color="#A855F7" />
+    </linearGradient>
+
+    <!-- Golden Luck Gradient -->
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE047" />
+      <stop offset="100%" stop-color="#EAB308" />
+    </linearGradient>
+
+    <!-- Scan Line Gradient -->
+    <linearGradient id="scanGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22C55E" stop-opacity="0" />
+      <stop offset="50%" stop-color="#4ADE80" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#22C55E" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- Soft Glow Filter -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Squircle App Icon Base -->
+  <rect width="512" height="512" rx="115" fill="url(#bgGrad)" />
+  <rect width="508" height="508" x="2" y="2" rx="113" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3" />
+
+  <!-- Background Ambient Glow -->
+  <circle cx="256" cy="256" r="140" fill="#6366F1" opacity="0.2" filter="url(#glow)" />
+  <circle cx="210" cy="190" r="90" fill="#38BDF8" opacity="0.25" filter="url(#glow)" />
+
+  <!-- Scanner Frame (Corner Brackets) -->
+  <g stroke="#38BDF8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" opacity="0.75">
+    <path d="M 120 170 L 120 135 A 15 15 0 0 1 135 120 L 170 120" />
+    <path d="M 342 120 L 377 120 A 15 15 0 0 1 392 135 L 392 170" />
+    <path d="M 392 342 L 392 377 A 15 15 0 0 1 377 392 L 342 392" />
+    <path d="M 170 392 L 135 392 A 15 15 0 0 1 120 377 L 120 342" />
+  </g>
+
+  <!-- Lucky Box Body (Isometric / 3D Look) -->
+  <!-- Top Lid Face -->
+  <path d="M 256 160 L 345 205 L 256 250 L 167 205 Z" fill="#4F46E5" />
+  <path d="M 256 160 L 345 205 L 256 250 L 167 205 Z" fill="url(#accentGrad)" opacity="0.9" />
+
+  <!-- Left Box Face -->
+  <path d="M 167 218 L 250 260 L 250 358 L 167 312 Z" fill="#312E81" />
+  <path d="M 167 218 L 250 260 L 250 358 L 167 312 Z" fill="url(#accentGrad)" opacity="0.4" />
+
+  <!-- Right Box Face -->
+  <path d="M 262 260 L 345 218 L 345 312 L 262 358 Z" fill="#4338CA" />
+  <path d="M 262 260 L 345 218 L 345 312 L 262 358 Z" fill="url(#accentGrad)" opacity="0.7" />
+
+  <!-- Laser / Scanner Beam Line -->
+  <line x1="125" y1="260" x2="387" y2="260" stroke="url(#scanGrad)" stroke-width="6" stroke-linecap="round" filter="url(#glow)" />
+  <line x1="150" y1="260" x2="362" y2="260" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.9" />
+
+  <!-- Center Mystery Emblem (Q / Ticket / Star Motif) -->
+  <g transform="translate(256, 218)">
+    <!-- Golden Lucky Star / Spark -->
+    <path d="M 0 -22 Q 0 0 22 0 Q 0 0 0 22 Q 0 0 -22 0 Q 0 0 0 -22 Z" fill="url(#goldGrad)" filter="url(#glow)" />
+    <circle cx="0" cy="0" r="5" fill="#FFFFFF" />
+  </g>
+
+  <!-- Speed Lightning Indicator (Bottom Right Badge) -->
+  <g transform="translate(355, 345) scale(0.9)">
+    <circle cx="0" cy="0" r="32" fill="#0F172A" stroke="rgba(255,255,255,0.15)" stroke-width="3" />
+    <circle cx="0" cy="0" r="28" fill="#10B981" />
+    <!-- Checkmark / Lightning Hybrid -->
+    <path d="M -6 -10 L 4 -10 L -2 2 L 6 2 L -7 12 L -3 4 L -8 4 Z" fill="#FFFFFF" />
+  </g>
+</svg>

@@ -1,0 +1,13 @@
+{
+  "version": "1.0.5",
+  "releaseDate": "2026-10-15",
+  "title": "AutoQueueforLive v1.0.5",
+  "changelog": [
+    "เพิ่มระบบ Remote Monitor เชื่อมต่อแจ้งเตือนเข้า Discord แบบ Real-time",
+    "เพิ่มระบบ Auto-Diagnosis วิเคราะห์และอธิบายสาเหตุ Error เป็นภาษาไทยเข้าใจง่าย พร้อมวิธีแก้ไข",
+    "ส่งลิงก์ Cloudflare เข้า Discord ทันทีที่เปิดโปรแกรม เพื่อดู Dashboard ระยะไกลได้ทันที",
+    "ระบบแจ้งเตือนด่วนกรณีโควตาตรวจสลิปหมด หรือสัญญาณเชื่อมต่อหลุด"
+  ],
+  "downloadUrl": "https://github.com/Napat-Newbie/AutoQueueforLive/releases/download/v1.0.5/update_v1.0.5.zip",
+  "fileSizeKB": 314.6
+}

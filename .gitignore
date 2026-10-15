@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment variables & secrets
+.env
+*.env.local
+*.env.*.local
+*.txt
+
+# Local Database & data
+data.sqlite
+data.sqlite-journal
+*.db
+uploads/manual_*
+
+# Large binaries (downloaded via installer or setup)
+bin_node.exe
+cloudflared.exe
+
+# Temporary files & logs
+*.log
+install_mingit.ps1
+scratch/
+scratch_*.js
+*.tmp
