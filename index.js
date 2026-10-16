@@ -1090,7 +1090,10 @@ function isLoginRateLimited(req) {
 
 const DREAMDEV_USERNAME = (process.env.DREAMDEV_USERNAME || 'Dreamdev').trim();
 const DREAMDEV_PASSWORD = (process.env.DREAMDEV_PASSWORD || '').trim();
-const DREAMDEV_PASSWORD_HASH = (process.env.DREAMDEV_PASSWORD_HASH || '').trim();
+// 🔐 รหัส Dev ค่าเริ่มต้น (เก็บเฉพาะค่าที่เข้ารหัสทางเดียวแล้ว) ใช้เมื่อเครื่องนั้นไม่ได้ตั้ง DREAMDEV_PASSWORD / DREAMDEV_PASSWORD_HASH ใน .env
+// v1.0.8-v1.0.9 ไม่มีค่าเริ่มต้น ทำให้ผู้พัฒนาล็อกอินเครื่องร้านไม่ได้
+const DEFAULT_DREAMDEV_PASSWORD_HASH = 'scrypt$899b1191002df3dec15e0fff24606f2d$961635d198a3ad611ff5566e10024fbec5d84e17838add421c45d09e5b2fb378cbd846925e421d82b582f218c58ae5d2999fb37782694da0d007bc481bf9a790';
+const DREAMDEV_PASSWORD_HASH = ((process.env.DREAMDEV_PASSWORD_HASH || '').trim()) || (DREAMDEV_PASSWORD ? '' : DEFAULT_DREAMDEV_PASSWORD_HASH);
 
 // 🛡️ Middleware ป้องกันการเข้าถึง Endpoint จัดการระบบโดยไม่ได้รับอนุญาต (Three-Tier RBAC, เข้ากันได้กับสิทธิ์เดิมของ v1.0.7)
 app.use((req, res, next) => {
@@ -4024,7 +4027,9 @@ function isUpdateUrlAllowed(url) {
         const isOfficialGitHub = (
             (hostname === 'github.com' && pathname.startsWith('/Napat-Newbie/AutoQueueforLive/')) ||
             (hostname === 'raw.githubusercontent.com' && pathname.startsWith('/Napat-Newbie/AutoQueueforLive/')) ||
-            (hostname === 'objects.githubusercontent.com' && pathname.includes('AutoQueueforLive'))
+            (hostname === 'objects.githubusercontent.com' && pathname.includes('AutoQueueforLive')) ||
+            // GitHub ย้ายไฟล์ release ไปโดเมนนี้ (ต.ค. 2026) อนุญาตเฉพาะไฟล์ของ repo นี้ (repo id 1419733580)
+            (hostname === 'release-assets.githubusercontent.com' && pathname.startsWith('/github-production-release-asset/1419733580/'))
         );
 
         return isOfficialGitHub;
