@@ -5,7 +5,12 @@ const { execSync } = require('child_process');
 const GITHUB_REPO = 'Napat-Newbie/AutoQueueforLive';
 
 // Usage: node pack_update.js [version] ["Changelog 1; Changelog 2; ..."] [--publish]
-const targetVersion = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : '1.0.1';
+const targetVersion = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : null;
+if (!targetVersion || !/^\d+\.\d+\.\d+$/.test(targetVersion)) {
+    // 🛡️ เดิมถ้าลืมใส่เวอร์ชันจะตั้งเป็น 1.0.1 อัตโนมัติ ทำให้ package.json ถอยเวอร์ชันโดยไม่ตั้งใจ
+    console.error('❌ กรุณาระบุเวอร์ชันให้ชัดเจน เช่น: node pack_update.js 1.0.8 "รายการที่ 1; รายการที่ 2"');
+    process.exit(1);
+}
 const rawChangelog = process.argv[3] && !process.argv[3].startsWith('-') 
     ? process.argv[3] 
     : '✨ ปรับปรุงแบบฟอร์ม Kerry Express (KEX) EasyShip สมบูรณ์แบบ 100%;⚡ ปรับปรุงระบบตรวจจับสลิปและสกัดที่อยู่ลูกค้าด้วย AI;🚀 เพิ่มระบบ Auto-Updater ตรวจสอบและอัปเดตเวอร์ชันได้ในคลิกเดียว;🛡️ ปรับปรุงความเสถียรและความปลอดภัยของฐานข้อมูลร้านค้า 100%';
@@ -52,9 +57,11 @@ function copyFolderSync(from, to, excludes = []) {
 }
 
 // Files to include
+// ⚠️ index.js ต้องใช้ keep_awake.js และโฟลเดอร์ sentinel/ ตอนเปิดโปรแกรม ถ้าไม่แนบไป เครื่องแม่ค้าจะเปิดโปรแกรมไม่ขึ้นหลังอัปเดต
 const filesToCopy = [
     'index.js',
     'db.js',
+    'keep_awake.js',
     'package.json',
     'updater.bat',
     'run_background.bat',
@@ -68,8 +75,13 @@ filesToCopy.forEach(f => {
     }
 });
 
-// Copy public (exclude uploads and manual_images to keep update tiny)
-copyFolderSync(path.join(__dirname, 'public'), path.join(stagingDir, 'public'), ['uploads', 'manual_images']);
+// Copy sentinel module (ไม่รวมไฟล์ข้อมูล runtime ของเครื่องผู้พัฒนา)
+if (fs.existsSync(path.join(__dirname, 'sentinel'))) {
+    copyFolderSync(path.join(__dirname, 'sentinel'), path.join(stagingDir, 'sentinel'), ['proposals.json', 'README.md']);
+}
+
+// Copy public (exclude uploads, manual_images and developer telemetry to keep update tiny & private)
+copyFolderSync(path.join(__dirname, 'public'), path.join(stagingDir, 'public'), ['uploads', 'manual_images', 'agent_telemetry.json']);
 
 // Copy templates
 if (fs.existsSync(path.join(__dirname, 'templates'))) {
@@ -89,7 +101,10 @@ execSync(psCommand, { stdio: 'inherit' });
 // Get zip size
 const stats = fs.statSync(zipFilePath);
 const sizeKB = (stats.size / 1024).toFixed(1);
+// 🛡️ apply_update บนเครื่องแม่ค้าบังคับตรวจ SHA-256 ถ้า manifest ไม่มีค่านี้ จะติดตั้งอัปเดตไม่ได้
+const sha256 = require('crypto').createHash('sha256').update(fs.readFileSync(zipFilePath)).digest('hex');
 console.log(`🎉 Created ${zipFileName} (${sizeKB} KB)`);
+console.log(`🔐 SHA-256: ${sha256}`);
 
 // 4. Create version.json manifest
 const manifest = {
@@ -98,7 +113,8 @@ const manifest = {
     title: `AutoQueueforLive v${targetVersion}`,
     changelog: changelogList,
     downloadUrl: `https://github.com/${GITHUB_REPO}/releases/download/v${targetVersion}/${zipFileName}`,
-    fileSizeKB: parseFloat(sizeKB)
+    fileSizeKB: parseFloat(sizeKB),
+    sha256
 };
 
 const manifestPath = path.join(releasesDir, 'version.json');

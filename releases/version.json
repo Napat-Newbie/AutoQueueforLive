@@ -1,13 +1,17 @@
 {
-  "version": "1.0.5",
-  "releaseDate": "2026-10-15",
-  "title": "AutoQueueforLive v1.0.5",
-  "changelog": [
-    "เพิ่มระบบ Remote Monitor เชื่อมต่อแจ้งเตือนเข้า Discord แบบ Real-time",
-    "เพิ่มระบบ Auto-Diagnosis วิเคราะห์และอธิบายสาเหตุ Error เป็นภาษาไทยเข้าใจง่าย พร้อมวิธีแก้ไข",
-    "ส่งลิงก์ Cloudflare เข้า Discord ทันทีที่เปิดโปรแกรม เพื่อดู Dashboard ระยะไกลได้ทันที",
-    "ระบบแจ้งเตือนด่วนกรณีโควตาตรวจสลิปหมด หรือสัญญาณเชื่อมต่อหลุด"
-  ],
-  "downloadUrl": "https://github.com/Napat-Newbie/AutoQueueforLive/releases/download/v1.0.5/update_v1.0.5.zip",
-  "fileSizeKB": 314.6
+    "version":  "1.0.11",
+    "releaseDate":  "2026-10-17",
+    "title":  "AutoQueueforLive v1.0.11",
+    "changelog":  [
+                      "ลูกค้าโอนยอดไม่พอ ขึ้นการ์ดสีส้มในคิวรอ บอกว่าลืมค่าส่งหรือโอนไม่ครบ และยอดที่ต้องโอนเพิ่ม",
+                      "ลูกค้าโอนเพิ่มจนครบ การ์ดเปลี่ยนเป็นคิวปกติในตำแหน่งเดิม",
+                      "บอทแจ้งลูกค้าใน LINE เมื่อยอดยังไม่พอ",
+                      "หน้าหลักแสดงยอดโอนล่าสุด 30 รายการ",
+                      "ลูกค้าที่โอนก่อนกดเริ่มไลฟ์ไม่ถูกเก็บค่าส่งซ้ำ",
+                      "โอนเท่าราคาสินค้าพอดีแต่ลืมค่าส่ง ระบบรอค่าส่ง",
+                      "ยอดในกระเป๋าลูกค้าไม่ถูกบวกค่าส่งเกินจริง"
+                  ],
+    "downloadUrl":  "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/b8654be7b57f9669db49480be317f270be469478/releases/update_v1.0.11.zip",
+    "fileSizeKB":  378.2,
+    "sha256":  "7b3717736df1f6e8755ad2f8e67d03c6d68056f3522074d4c23a9166e6307ce5"
 }

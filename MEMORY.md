@@ -17,7 +17,7 @@
 * **Installed Location on Merchant PC:** `D:\Users\napat\AppData\Local\Programs\AutoQueueforLive`
 * **Local Development Workspace:** `c:\Users\napat\OneDrive\Desktop\Project-SlipAPI`
 * **Active Cloudflare Tunnel URL:** `https://released-wrote-infrared-radical.trycloudflare.com`
-* **Discord Alert Webhook:** `https://discordapp.com/api/webhooks/1560336154786668545/6JofEN84L1gXPZfyWAR3ol3Bo1MB9dqaIyJJwf9ms6MT-RIgTwrwMbKZDiEEpsAYQy2v`
+* **Discord Alert Webhook:** `(เก็บไว้ใน .env -> DISCORD_WEBHOOK_URL เท่านั้น ห้ามใส่ลิงก์จริงในไฟล์นี้)`
 
 ## 3. Important System Audit Findings (v1.0.5)
 1. **BUG-01 (Critical):** In `index.js`, LINE Webhook handler only takes `events[0]`. When multiple customers send slips at the same second, subsequent slips in the batch array are dropped. Needs `for (const event of events)`.

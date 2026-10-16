@@ -231,16 +231,16 @@ class SentinelAgent {
                 problemSummary: message || 'เกิดข้อผิดพลาดที่ไม่คาดคิดในระบบ',
                 rootCause: stack ? stack.split('\n')[0] : 'ระบบเกิดข้อผิดพลาดขณะทำงาน',
                 impact: 'อาจกระทบต่อการทำงานบางส่วนของระบบ',
-                proposedVersion: 'v1.0.6 (Patch)',
+                proposedVersion: `v${(() => { try { const v = require('../package.json').version.split('.').map(Number); v[2] += 1; return v.join('.'); } catch (e) { return '?'; } })()} (Patch)`,
                 targetFile: 'index.js',
                 recommendedFix: 'ตรวจสอบข้อผิดพลาดและปรับปรุงความเสถียรของฟังก์ชัน'
             };
             review = {
-                reviewerName: 'Gemini Reasoning Reviewer (Fallback)',
-                verdict: 'APPROVED_SAFE',
-                explanation: 'ระบบตรวจพบความผิดปกติ แนะนำให้ตรวจสอบโค้ดและดำเนินการแก้ไขเพื่อความเสถียร',
-                riskLevel: 'ปานกลาง',
-                regressionRisk: 'ไม่มีผลกระทบต่อระบบเดิม'
+                reviewerName: 'ไม่ได้ผ่านการรีวิวโดย AI (AI ไม่ตอบสนอง)',
+                verdict: 'UNREVIEWED',
+                explanation: 'ระบบ AI วิเคราะห์/รีวิวไม่สำเร็จ ข้อเสนอนี้ยังไม่ได้รับการตรวจสอบ กรุณาให้ผู้พัฒนาตรวจสอบเองก่อนอนุมัติ',
+                riskLevel: 'ไม่ทราบ (ยังไม่ได้ตรวจ)',
+                regressionRisk: 'ยังไม่ได้ประเมิน'
             };
         }
 
@@ -437,7 +437,7 @@ class SentinelAgent {
                 },
                 {
                     name: `🛡️ ผลการรีวิวโดย: ${review.reviewerName || 'Senior AI'}`,
-                    value: `**สถานะ:** ${review.verdict === 'APPROVED_SAFE' ? '✅ ผ่านการตรวจสอบความปลอดภัย 100%' : '⚠️ แนะนำให้ตรวจสอบเพิ่มเติม'}\n**ความเห็น:** ${review.explanation}\n**ระดับความเสี่ยง:** ${review.riskLevel || 'ต่ำ'} | **ผลข้างเคียง:** ${review.regressionRisk || 'ไม่มี'}`
+                    value: `**สถานะ:** ${review.verdict === 'APPROVED_SAFE' ? '✅ ผ่านการตรวจสอบโดย AI' : (review.verdict === 'UNREVIEWED' ? '⚪ ยังไม่ได้รีวิว (AI ไม่ตอบสนอง) — ห้ามอนุมัติก่อนตรวจเอง' : '⚠️ แนะนำให้ตรวจสอบเพิ่มเติม')}\n**ความเห็น:** ${review.explanation}\n**ระดับความเสี่ยง:** ${review.riskLevel || 'ต่ำ'} | **ผลข้างเคียง:** ${review.regressionRisk || 'ไม่มี'}`
                 },
                 {
                     name: '📦 รายละเอียดเวอร์ชันและไฟล์ที่แก้ไข',
@@ -472,10 +472,21 @@ class SentinelAgent {
             };
         }
 
-        if (proposal.token !== token) {
+        // 🛡️ เทียบ Token แบบ constant-time และกำหนดอายุลิงก์ 72 ชั่วโมง (ลิงก์ที่หลุดไปจะใช้ไม่ได้ตลอดไป)
+        const expectedTok = Buffer.from(String(proposal.token || ''));
+        const givenTok = Buffer.from(String(token || ''));
+        if (!expectedTok.length || expectedTok.length !== givenTok.length || !crypto.timingSafeEqual(expectedTok, givenTok)) {
             return {
                 success: false,
                 html: this.renderResponsePage('การเข้าถึงไม่ถูกต้อง', 'Security Token ไม่ถูกต้องหรือหมดอายุ', 'error')
+            };
+        }
+
+        const createdMs = Date.parse(proposal.createdAt || '');
+        if (proposal.status === 'PENDING' && Number.isFinite(createdMs) && Date.now() - createdMs > 72 * 60 * 60 * 1000) {
+            return {
+                success: false,
+                html: this.renderResponsePage('ลิงก์หมดอายุแล้ว', 'ลิงก์อนุมัตินี้เกิน 72 ชั่วโมงแล้ว เพื่อความปลอดภัยกรุณาตรวจสอบปัญหาใหม่อีกครั้ง', 'error')
             };
         }
 
@@ -491,8 +502,11 @@ class SentinelAgent {
             proposal.resolvedAt = new Date().toISOString();
             this.saveProposals();
 
-            // 1. Create a safe backup before modifying
-            const targetFilePath = path.join(__dirname, '..', proposal.targetFile || 'index.js');
+            // 1. Create a safe backup before modifying (เฉพาะไฟล์ใน Allowlist ป้องกัน path ที่ AI ส่งมาชี้ออกนอกโปรแกรม)
+            const BACKUP_ALLOWLIST = ['index.js', 'db.js', 'keep_awake.js', 'public/index.html', 'public/history.html'];
+            const requestedTarget = String(proposal.targetFile || 'index.js').replace(/\\/g, '/').replace(/^\.\//, '');
+            const safeTarget = BACKUP_ALLOWLIST.includes(requestedTarget) ? requestedTarget : 'index.js';
+            const targetFilePath = path.join(__dirname, '..', safeTarget);
             if (fs.existsSync(targetFilePath)) {
                 const backupPath = `${targetFilePath}.bak_${Date.now()}`;
                 try {
@@ -507,8 +521,8 @@ class SentinelAgent {
             if (this.webhookUrl) {
                 axios.post(this.webhookUrl, {
                     embeds: [{
-                        title: `🎉 [อนุมัติเรียบร้อย] ทำการปรับปรุงเวอร์ชัน ${proposal.diagnosis.proposedVersion} สำเร็จ`,
-                        description: `คุณได้กดยืนยันอนุมัติจากมือถือ ระบบได้ทำการสำรองไฟล์โค้ดเดิม และบันทึกสถานะการอัปเกรดเรียบร้อยแล้ว`,
+                        title: `✅ [บันทึกการอนุมัติ] ข้อเสนอ ${proposal.diagnosis.proposedVersion}`,
+                        description: `บันทึกการอนุมัติและสำรองไฟล์เดิมแล้ว — ระบบยังไม่ได้แก้โค้ดอัตโนมัติ ผู้พัฒนาต้องนำข้อเสนอไปแก้และออกอัปเดตเวอร์ชันใหม่เอง`,
                         color: 0x10B981,
                         fields: [
                             { name: 'ไฟล์ที่ปรับปรุง', value: `\`${proposal.targetFile}\``, inline: true },
@@ -522,8 +536,8 @@ class SentinelAgent {
             return {
                 success: true,
                 html: this.renderResponsePage(
-                    'อนุมัติสำเร็จ! 🎉',
-                    `ระบบทำการบันทึกและปรับปรุงเป็นเวอร์ชัน <strong>${proposal.diagnosis.proposedVersion}</strong> เรียบร้อยแล้ว ระบบบนเครื่องแม่ค้าพร้อมทำงานต่อได้อย่างเสถียร`,
+                    'บันทึกการอนุมัติแล้ว ✅',
+                    `บันทึกการอนุมัติข้อเสนอ <strong>${String(proposal.diagnosis.proposedVersion || '').replace(/[&<>"']/g, '')}</strong> และสำรองไฟล์เดิมเรียบร้อย<br>หมายเหตุ: ระบบยังไม่ได้แก้โค้ดบนเครื่องแม่ค้าอัตโนมัติ ผู้พัฒนาต้องออกอัปเดตเวอร์ชันใหม่`,
                     'success'
                 )
             };

@@ -1,3 +1,44 @@
+// ⚡ Self-Healing: ตัวเฝ้าโปรแกรม (Supervisor)
+// ถ้าโปรแกรมหลักปิดตัวเองผิดปกติ ระบบจะเปิดใหม่ให้อัตโนมัติภายใน 5 วินาที (สูงสุด 5 ครั้งใน 10 นาที กันวนไม่จบ)
+// ปิดปกติ (ปุ่มปิดโปรแกรม / ติดตั้งอัปเดต / เปิดซ้ำ) = รหัส 0 -> ตัวเฝ้าปิดตามทันที ไม่เปิดใหม่
+// ตั้ง AQ_NO_SUPERVISOR=1 เพื่อปิดตัวเฝ้า
+if (!process.env.AQ_SUPERVISED && process.env.AQ_NO_SUPERVISOR !== '1') {
+    const { spawn } = require('child_process');
+    const fsSup = require('fs');
+    const pathSup = require('path');
+    const supLog = (msg) => { try { fsSup.appendFileSync(pathSup.join(__dirname, 'supervisor.log'), `[${new Date().toISOString()}] ${msg}\n`); } catch (e) {} };
+    let restartTimes = [];
+    let totalRestarts = 0;
+    let child = null;
+    let stopping = false;
+    const launch = () => {
+        child = spawn(process.execPath, [__filename, ...process.argv.slice(2)], {
+            cwd: __dirname, stdio: 'inherit', windowsHide: true,
+            env: { ...process.env, AQ_SUPERVISED: '1', AQ_RESTART_COUNT: String(totalRestarts) }
+        });
+        child.on('exit', (code, signal) => {
+            if (stopping || code === 0) process.exit(code || 0);
+            const now = Date.now();
+            restartTimes = restartTimes.filter(t => now - t < 10 * 60 * 1000);
+            if (restartTimes.length >= 5) {
+                supLog(`โปรแกรมหยุดทำงานซ้ำ ${restartTimes.length} ครั้งใน 10 นาที (code=${code}, signal=${signal}) หยุดเปิดใหม่อัตโนมัติ`);
+                process.exit(code || 1);
+            }
+            restartTimes.push(now);
+            totalRestarts++;
+            supLog(`โปรแกรมหยุดทำงานผิดปกติ (code=${code}, signal=${signal}) กำลังเปิดใหม่ครั้งที่ ${totalRestarts}`);
+            setTimeout(launch, 5000);
+        });
+    };
+    ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'].forEach(sig => process.on(sig, () => {
+        stopping = true;
+        try { if (child) child.kill(sig); } catch (e) {}
+        setTimeout(() => process.exit(0), 3000).unref();
+    }));
+    launch();
+    return; // ตัวเฝ้าไม่รันโค้ดโปรแกรมหลักเอง
+}
+
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -20,6 +61,40 @@ enableSleepBlocker();
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+
+// 🛡️ DEV-ONLY GUARD: เส้นทางของ Sentinel / Pixel Office / Telemetry ถูกประกาศก่อน RBAC middleware หลัก
+// จึงต้องป้องกันแยก: อนุญาตเฉพาะ (1) คำขอจากเครื่องนี้โดยตรง (ไม่ผ่าน Tunnel) หรือ (2) Session ของ Dreamdev
+// ยกเว้น /api/sentinel/action ซึ่งมี Token รายข้อเสนอของตัวเองสำหรับปุ่มอนุมัติจากมือถือ
+function isDirectLocalRequest(req) {
+    const addr = req.socket?.remoteAddress || '';
+    const isLoopback = addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+    // คำขอที่วิ่งผ่าน Cloudflare Tunnel / LocalTunnel จะมี Header เหล่านี้ติดมาเสมอ (มาจาก loopback เช่นกัน)
+    const viaProxy = req.headers['cf-connecting-ip'] || req.headers['cf-ray'] || req.headers['x-forwarded-for'];
+    return isLoopback && !viaProxy;
+}
+function isSentinelIngestSecretValid(req) {
+    const secret = (process.env.SENTINEL_INGEST_SECRET || '').trim();
+    const provided = String(req.headers['x-sentinel-secret'] || '');
+    if (!secret || !provided) return false;
+    const a = Buffer.from(provided); const b = Buffer.from(secret);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+app.use((req, res, next) => {
+    const p = req.path.toLowerCase();
+    const isDevSurface = (
+        (p.startsWith('/api/sentinel/') && p !== '/api/sentinel/action') ||
+        p.startsWith('/api/subagents/') ||
+        p === '/sentinel/office' ||
+        p === '/observer.html' ||
+        p === '/agent_telemetry.json'
+    );
+    if (!isDevSurface) return next();
+    if (isDirectLocalRequest(req)) return next();
+    if (p === '/api/sentinel/telemetry_ingest' && isSentinelIngestSecretValid(req)) return next();
+    const session = getSession(req);
+    if (session && session.role === 'dreamdev') return next();
+    return res.status(403).json({ success: false, message: 'FORBIDDEN: ส่วนนี้ใช้ได้เฉพาะเครื่องผู้พัฒนาเท่านั้น' });
+});
 
 // 🛰️ Realtime SubAgents Telemetry Watcher (Method 1)
 const telemetryWatcher = new TelemetryWatcher({ io });
@@ -66,7 +141,7 @@ async function processDiscordQueue() {
 
             const item = discordAlertQueue.shift();
             try {
-                await axios.post(DISCORD_WEBHOOK_URL, item.payload, { timeout: 8000 });
+                await axios.post(item.url || DISCORD_WEBHOOK_URL, item.payload, { timeout: 8000 });
                 // เว้นระยะห่างอย่างน้อย 1,500ms ระหว่างการส่งข้อความแต่ละครั้งตามมาตรฐาน Discord Webhook
                 await new Promise(r => setTimeout(r, 1500));
             } catch (err) {
@@ -171,7 +246,7 @@ async function sendDiscordAlert(options = {}) {
     const fields = [
         { name: '🏢 ร้านค้า', value: shopName, inline: true },
         { name: '🕒 เวลา', value: new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }), inline: true },
-        { name: '📦 เวอร์ชัน', value: 'v1.0.6', inline: true }
+        { name: '📦 เวอร์ชัน', value: `v${require('./package.json').version}`, inline: true }
     ];
 
     if (publicUrl) {
@@ -220,6 +295,161 @@ async function reportSelfHealingToDiscord(options = {}) {
         details: details,
         force: true
     });
+    // 📡 รายงานเข้าช่องผู้พัฒนา (ช่อง 2) ด้วย ว่าระบบแก้ไขอะไรเองไปบ้าง
+    queueDevReport({ kind: 'SELF_HEALING', category, message: `${title}: ${issue}`, actionDetails });
+}
+
+// =====================================================================================
+// 📡 Discord 2 ช่องของผู้พัฒนา (ตั้งค่าใน .env ผ่านหน้าตั้งค่า เฉพาะผู้พัฒนา)
+//   ช่อง 1 DISCORD_ACTIVITY_WEBHOOK_URL : บันทึกการใช้งานทุกกิจกรรม รวมเป็นสรุปทุก 1 นาที (กันชนขีดจำกัด Discord)
+//   ช่อง 2 DISCORD_DEVREPORT_WEBHOOK_URL: เมื่อพบ Error ส่งทันที พร้อมประเมินความรุนแรงและแนวทางแก้ไขในเวอร์ชันถัดไป
+//   ไม่ส่งเบอร์โทร/ที่อยู่ลูกค้า: ปิดบังเบอร์โทรและเลขบัตรก่อนส่งทุกครั้ง และไม่ส่งรายละเอียดทางเทคนิคของกิจกรรมทั่วไป
+// =====================================================================================
+const DISCORD_WEBHOOK_RE = /^https:\/\/(?:discord|discordapp)\.com\/api\/webhooks\/\d{5,30}\/[A-Za-z0-9_-]{20,120}$/;
+function isValidDiscordWebhook(u) { return DISCORD_WEBHOOK_RE.test(String(u || '').trim()); }
+function maskDiscordWebhook(u) {
+    const m = String(u || '').trim().match(/webhooks\/(\d+)\//);
+    return m ? `...${m[1].slice(-4)}` : '';
+}
+function getActivityWebhook() { const u = (process.env.DISCORD_ACTIVITY_WEBHOOK_URL || '').trim(); return isValidDiscordWebhook(u) ? u : ''; }
+function getDevReportWebhook() { const u = (process.env.DISCORD_DEVREPORT_WEBHOOK_URL || '').trim(); return isValidDiscordWebhook(u) ? u : ''; }
+function getAppVersionSafe() { try { return require('./package.json').version; } catch (e) { return '?'; } }
+function getShopLabel() {
+    const n = (merchantAccountName || process.env.MERCHANT_ACCOUNT_NAME || '').trim();
+    return n ? `ร้าน${n}` : 'ร้านค้า (AutoQueue)';
+}
+
+// 🛡️ ปิดบังข้อมูลส่วนตัวลูกค้าก่อนส่งออกนอกเครื่อง
+function redactPersonalInfo(text) {
+    return String(text === undefined || text === null ? '' : text)
+        .replace(/(?<!\d)\d{13}(?!\d)/g, '[เลขบัตร]')
+        .replace(/(?<!\d)0\d[\d\- ]{7,11}\d(?!\d)/g, (m) => {
+            const digits = m.replace(/\D/g, '');
+            return (digits.length === 9 || digits.length === 10) ? `0xx-xxx-${digits.slice(-4, -2)}xx` : m;
+        });
+}
+
+// 🎯 ประเมินความรุนแรงและแนวทางแก้ไข (กฎตายตัว ไม่ใช้ AI จึงไม่เสียโควตา)
+function assessErrorForDevReport(category, text) {
+    const t = `${category || ''} ${text || ''}`.toLowerCase();
+    const rules = [
+        { test: /system_crash|uncaught|unhandled|เก็บสลิปสำรองไม่สำเร็จ/, severity: 'CRITICAL',
+          cause: 'โค้ดเกิดข้อผิดพลาดที่ไม่มีการดักไว้ หรือสลิปของลูกค้าอาจตกหล่น',
+          fix: 'ดู Stack ใน "บันทึกระบบ" ของร้าน หาบรรทัดที่พัง เพิ่มการตรวจค่าว่าง/try-catch ตรงจุดนั้น แล้วเขียนทดสอบกรณีนี้ก่อนออกเวอร์ชันถัดไป' },
+        { test: /บันทึกสลิปอัตโนมัติ|sqlite|database|ฐานข้อมูล/, severity: 'HIGH',
+          cause: 'ฐานข้อมูลบันทึกไม่สำเร็จ (ไฟล์ถูกล็อก ดิสก์เต็ม หรือข้อมูลผิดรูปแบบ)',
+          fix: 'ตรวจพื้นที่ดิสก์และขนาดไฟล์ WAL ของร้าน ถ้าเกิดซ้ำให้ลดงานเขียนพร้อมกัน หรือย้ายงานเขียนเข้าคิวเดียว' },
+        { test: /slipok|easyslip|thunder|quota|เครดิต|ตรวจสลิป|1009|402|401/, severity: 'HIGH',
+          cause: 'บริการตรวจสลิปตอบกลับผิดพลาด (เครดิตหมด รหัสผิด หรือบริการล่ม)',
+          fix: 'ตรวจเครดิตและรหัสของผู้ให้บริการ พิจารณาเพิ่มการสลับผู้ให้บริการอัตโนมัติ/แจ้งเตือนเครดิตต่ำให้เร็วขึ้น' },
+        { test: /line|webhook|reply|push/, severity: 'HIGH',
+          cause: 'เชื่อมต่อ LINE ไม่สำเร็จ (Token หมดอายุ Webhook ไม่ตรง หรือโควตาข้อความเต็ม)',
+          fix: 'ตรวจ LINE Access Token และ Webhook URL ใน LINE Developers ถ้าเกี่ยวกับโควตา ลดข้อความ Push' },
+        { test: /tunnel|cloudflare|localtunnel/, severity: 'MEDIUM',
+          cause: 'ท่อเชื่อมต่ออินเทอร์เน็ตหลุด หรือเน็ตร้านไม่เสถียร',
+          fix: 'ดูว่าระบบเชื่อมต่อใหม่ได้เองหรือไม่ ถ้าหลุดบ่อย พิจารณาใช้ Cloudflare Tunnel แบบมีบัญชี (ลิงก์ถาวร)' },
+        { test: /gemini|ai|ที่อยู่/, severity: 'MEDIUM',
+          cause: 'AI อ่านที่อยู่ไม่สำเร็จ (โควตา Gemini หรือข้อความรูปแบบแปลก)',
+          fix: 'ตรวจโควตา Gemini และปรับตัวอ่านที่อยู่สำรอง (Regex) ให้รองรับรูปแบบนี้' },
+        { test: /kerry|excel|export/, severity: 'MEDIUM',
+          cause: 'ส่งออกไฟล์ Kerry ไม่สำเร็จ',
+          fix: 'ทดลองส่งออกด้วยข้อมูลรอบเดียวกันบนเครื่อง Dev เพื่อหาข้อมูลที่ทำให้พัง แล้วเพิ่มการจัดการข้อมูลแบบนั้น' },
+        { test: /disk|ดิสก์|พื้นที่/, severity: 'HIGH',
+          cause: 'พื้นที่เก็บข้อมูลในเครื่องร้านใกล้เต็ม',
+          fix: 'แนะนำร้านล้างไฟล์ที่ไม่ใช้ หรือย้ายรูป/ไฟล์สำรองเก่าออก ทบทวนนโยบายเก็บไฟล์' }
+    ];
+    const r = rules.find(x => x.test.test(t));
+    return r || { severity: 'MEDIUM', cause: 'ข้อผิดพลาดทั่วไปของระบบ', fix: 'ดูรายละเอียดใน "บันทึกระบบ" ของร้าน แล้วจำลองซ้ำบนเครื่อง Dev ก่อนแก้' };
+}
+const SEVERITY_STYLE = { CRITICAL: { icon: '🟥', color: 15158332, label: 'วิกฤต' }, HIGH: { icon: '🟧', color: 15105570, label: 'สูง' }, MEDIUM: { icon: '🟨', color: 16776960, label: 'ปานกลาง' }, LOW: { icon: '🟦', color: 3447003, label: 'ต่ำ' } };
+
+// ---- ช่อง 1: บันทึกกิจกรรม (รวมส่งทุก 60 วินาที) ----
+const activityBuffer = [];
+let activityDropped = 0;
+function queueActivity(type, message) {
+    if (!getActivityWebhook() || process.env.DISCORD_ALERTS_ENABLED === 'false') return;
+    const icon = { ERROR: '🔴', WARN: '🟠', SUCCESS: '🟢', INFO: '⚪', SELF_HEALING: '⚡' }[type] || '⚪';
+    const time = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Bangkok' });
+    activityBuffer.push(`\`${time}\` ${icon} ${redactPersonalInfo(message).slice(0, 300)}`);
+    if (activityBuffer.length > 600) { activityBuffer.shift(); activityDropped++; }
+}
+function flushActivity() {
+    const url = getActivityWebhook();
+    if (!url || activityBuffer.length === 0) return;
+    const lines = activityBuffer.splice(0, activityBuffer.length);
+    if (activityDropped > 0) { lines.unshift(`… ข้ามไป ${activityDropped} รายการเพราะมีกิจกรรมเยอะเกิน`); activityDropped = 0; }
+    const chunks = [];
+    let cur = '';
+    for (const l of lines) {
+        if ((cur + '\n' + l).length > 3800) { chunks.push(cur); cur = l; } else { cur = cur ? `${cur}\n${l}` : l; }
+    }
+    if (cur) chunks.push(cur);
+    chunks.slice(0, 5).forEach((desc, i) => {
+        discordAlertQueue.push({ url, payload: { embeds: [{
+            title: `📒 บันทึกการใช้งาน ${getShopLabel()}${chunks.length > 1 ? ` (${i + 1}/${Math.min(chunks.length, 5)})` : ''}`,
+            description: desc, color: 9807270,
+            footer: { text: `AutoQueueforLive v${getAppVersionSafe()} • สรุปทุก 1 นาที` }
+        }] } });
+    });
+    processDiscordQueue().catch(() => {});
+}
+setInterval(flushActivity, 60 * 1000).unref();
+
+// ---- ช่อง 2: รายงาน Error สำหรับแก้ในเวอร์ชันถัดไป (ส่งทันที, Error เดิมซ้ำใน 30 นาทีรวมเป็นตัวนับ) ----
+const devReportSeen = new Map();
+function queueDevReport({ kind = 'ERROR', category = '', message = '', details = null, actionDetails = '' } = {}) {
+    const url = getDevReportWebhook();
+    if (!url || process.env.DISCORD_ALERTS_ENABLED === 'false') return;
+    const clean = redactPersonalInfo(message);
+    const sig = `${kind}|${category}|${clean.replace(/\d+/g, '#').slice(0, 80)}`;
+    const now = Date.now();
+    const seen = devReportSeen.get(sig);
+    if (seen && now - seen.first < 30 * 60 * 1000) {
+        seen.count++;
+        if (!seen.timer) {
+            seen.timer = setTimeout(() => {
+                const s = devReportSeen.get(sig);
+                if (s && s.count > 0) {
+                    discordAlertQueue.push({ url, payload: { embeds: [{ title: `🔁 Error เดิมเกิดซ้ำอีก ${s.count} ครั้งใน 30 นาที`, description: clean.slice(0, 1500), color: 15105570, footer: { text: `${getShopLabel()} • v${getAppVersionSafe()}` } }] } });
+                    processDiscordQueue().catch(() => {});
+                }
+                devReportSeen.delete(sig);
+            }, Math.max(1000, 30 * 60 * 1000 - (now - seen.first)));
+            if (seen.timer.unref) seen.timer.unref();
+        }
+        return;
+    }
+    devReportSeen.set(sig, { first: now, count: 0, timer: null });
+    if (devReportSeen.size > 500) devReportSeen.delete(devReportSeen.keys().next().value);
+
+    let embed;
+    if (kind === 'SELF_HEALING') {
+        embed = {
+            title: `⚡ ระบบแก้ไขเองสำเร็จ: ${clean.slice(0, 200)}`, color: 1095809,
+            fields: [
+                { name: 'สิ่งที่ระบบทำ', value: redactPersonalInfo(actionDetails || '-').slice(0, 1000), inline: false },
+                { name: 'ควรทำในเวอร์ชันถัดไป', value: 'ตรวจว่าทำไมปัญหานี้เกิด และแก้ที่ต้นเหตุ ถ้าเกิดบ่อยแปลว่าระบบแก้ได้แค่ปลายเหตุ', inline: false }
+            ]
+        };
+    } else {
+        const a = assessErrorForDevReport(category, clean);
+        const st = SEVERITY_STYLE[a.severity] || SEVERITY_STYLE.MEDIUM;
+        const fields = [
+            { name: 'ความรุนแรง', value: `${st.icon} ${a.severity} (${st.label})`, inline: true },
+            { name: 'ร้าน / เวอร์ชัน', value: `${getShopLabel()} / v${getAppVersionSafe()}`, inline: true },
+            { name: 'สถานะไลฟ์', value: activeLiveSession ? '🔴 กำลังไลฟ์' : 'ไม่ได้ไลฟ์', inline: true },
+            { name: 'สาเหตุที่น่าจะเป็น', value: a.cause, inline: false },
+            { name: 'แนวทางแก้ไขในเวอร์ชันถัดไป', value: a.fix, inline: false }
+        ];
+        if (details) {
+            const d = redactPersonalInfo(typeof details === 'string' ? details : JSON.stringify(details)).slice(0, 900);
+            fields.push({ name: 'รายละเอียดทางเทคนิค', value: '```' + d.replace(/```/g, "'''") + '```', inline: false });
+        }
+        embed = { title: `${st.icon} พบ Error: ${clean.slice(0, 200)}`, color: st.color, fields };
+    }
+    embed.footer = { text: `AutoQueueforLive Dev Report • ${new Date().toLocaleString('en-GB', { timeZone: 'Asia/Bangkok' })}` };
+    discordAlertQueue.push({ url, payload: { embeds: [embed] } });
+    processDiscordQueue().catch(() => {});
 }
 
 // 📜 ระบบบันทึก System & Error Logs สำหรับหน้าตั้งค่าเชื่อมต่อ
@@ -237,6 +467,11 @@ function addLog(type, message, details = null) {
 
     // 🛡️ บันทึก System Logs ใน Dashboard เท่านั้น (ไม่ส่งสแปมเข้า Discord เพื่อป้องกันการแจ้งเตือนรบกวน)
     // การแจ้งเตือนเข้า Discord จะส่งเฉพาะกรณีวิกฤตระดับ Crash (uncaughtException) หรือสั่งส่งโดยตรงเท่านั้น
+    // 📡 ยกเว้นช่องของผู้พัฒนา (ถ้าตั้งค่าไว้): ทุกกิจกรรมเข้าช่อง 1 แบบรวมทุก 1 นาที และ Error เข้าช่อง 2 ทันที
+    try {
+        queueActivity(type, message);
+        if (type === 'ERROR') queueDevReport({ kind: 'ERROR', message, details });
+    } catch (e) { /* การส่ง Discord ต้องไม่ทำให้การบันทึกล้ม */ }
 }
 addLog('INFO', 'ระบบเริ่มต้นทำงานเรียบร้อย');
 
@@ -285,11 +520,27 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
+    // 🛡️ CORS: หน้า Dashboard เรียก API จากโดเมนเดียวกันอยู่แล้ว จึงอนุญาตข้ามโดเมนเฉพาะ localhost และลิงก์ Tunnel ของร้านนี้
+    // (เดิมเป็น "*" ทำให้เว็บไซต์อื่นใดก็เรียก API ของร้านได้)
+    const origin = req.headers.origin;
+    if (origin) {
+        const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+        const isOwnTunnel = typeof currentPublicUrl === 'string' && currentPublicUrl && origin === currentPublicUrl.replace(/\/$/, '');
+        if (isLocalOrigin || isOwnTunnel) {
+            res.header("Access-Control-Allow-Origin", origin);
+            res.header("Vary", "Origin");
+        }
+    }
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
+});
+
+// 🛡️ รูปสลิปที่ลูกค้าส่งมา (มีชื่อ/ยอดโอน) ดูได้เฉพาะผู้ที่เข้าสู่ระบบแล้ว หรือเปิดจากเครื่องร้านค้าโดยตรง
+app.use('/uploads', (req, res, next) => {
+    if (isDirectLocalRequest(req) || getSession(req)) return next();
+    return res.status(401).send('กรุณาเข้าสู่ระบบก่อนดูรูปสลิป');
 });
 
 // 📱 Sentinel Mobile Approval Action Endpoint
@@ -590,15 +841,44 @@ app.use(express.json({
 }));
 app.use(express.static(path.join(__dirname, 'public'))); 
 
+// 📒 บันทึกการกระทำของแม่ค้า/แอดมินทุกครั้ง (เข้าหน้าบันทึกระบบ และช่อง Discord บันทึกการใช้งาน ถ้าตั้งค่าไว้)
+const ACTION_LOG_LABELS = {
+    'POST /api/queue/action': (b) => ({ called: 'เรียกคิว', skipped: 'ข้ามคิว', completed: 'จบคิว', cancelled: 'ยกเลิกคิว' }[b && b.action] || `จัดการคิว (${(b && b.action) || '-'})`) + ` ${Array.isArray(b && b.slipIds) ? b.slipIds.length : 0} สลิป`,
+    'POST /api/queue/clear': () => 'ล้างคิว',
+    'POST /api/live_session/start': () => 'กดเริ่มไลฟ์',
+    'POST /api/live_session/end': () => 'กดจบไลฟ์',
+    'POST /api/queue/manual_amount': (b) => `ใส่ยอดสลิปเอง${b && b.amount !== undefined ? ` ${Number(b.amount) || 0} บาท` : ''}`,
+    'POST /api/queue/verify_abnormal': () => 'ยืนยันสลิปผิดปกติ',
+    'POST /api/queue/reject_slip': () => 'ปัดตกรูปที่ไม่ใช่สลิป',
+    'POST /api/system/shutdown': () => 'กดปิดโปรแกรม',
+    'POST /api/system/apply_update': () => 'กดติดตั้งอัปเดต',
+    'POST /api/admin/setup_keys': () => 'บันทึกหน้าตั้งค่าเชื่อมต่อ',
+    'GET /api/kerry/export_excel': (b, q) => `ดาวน์โหลดไฟล์ Kerry${q && q.sessionId ? ' (เลือกรอบไลฟ์)' : (q && q.date ? ` (วันที่ ${String(q.date).slice(0, 8)})` : '')}`
+};
+app.use((req, res, next) => {
+    const labelFn = ACTION_LOG_LABELS[`${req.method} ${req.path}`];
+    if (labelFn) {
+        res.on('finish', () => {
+            try {
+                const ip = req.ip || (req.socket && req.socket.remoteAddress) || '';
+                const where = /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(ip) && !req.headers['cf-connecting-ip'] && !req.headers['x-forwarded-for'] ? 'เครื่องร้าน' : 'ลิงก์ภายนอก';
+                const ok = res.statusCode < 400;
+                addLog(ok ? 'INFO' : 'WARN', `${labelFn(req.body, req.query)} - ${ok ? 'สำเร็จ' : `ไม่สำเร็จ (รหัส ${res.statusCode})`} [${where}]`);
+            } catch (e) {}
+        });
+    }
+    next();
+});
+
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
 if (!fs.existsSync(uploadsDir)) { fs.mkdirSync(uploadsDir, { recursive: true }); }
 
-// 🧹 ระบบลบรูปสลิปเก่าอัตโนมัติ (ลบรูปที่มีอายุเกิน 7 วัน เพื่อไม่ให้เปลืองพื้นที่คอม)
+// 🧹 ระบบลบรูปสลิปเก่าอัตโนมัติ (ลบรูปที่มีอายุเกิน 30 วัน เพื่อไม่ให้เปลืองพื้นที่คอม)
 function cleanupOldUploads() {
     try {
         const files = fs.readdirSync(uploadsDir);
         const now = Date.now();
-        const maxAgeMs = 7 * 24 * 60 * 60 * 1000; // 7 วัน
+        const maxAgeMs = 30 * 24 * 60 * 60 * 1000; // 30 วัน
         files.forEach(file => {
             const filePath = path.join(uploadsDir, file);
             const stats = fs.statSync(filePath);
@@ -636,6 +916,44 @@ function cleanupOldBackups(maxAgeDays = 30, keepLatest = 10) {
 setInterval(cleanupOldBackups, 24 * 60 * 60 * 1000); // ทำงานวันละ 1 ครั้ง
 cleanupOldBackups();
 
+// ⚡ Self-Healing: พื้นที่เครื่องใกล้เต็ม -> ลบไฟล์เก่าที่ไม่ใช่ข้อมูลร้านให้อัตโนมัติ (ไม่แตะฐานข้อมูลหลักเด็ดขาด)
+// ขั้นที่ 1 (เหลือน้อยกว่า 2 GB): ลบรูปสลิปเก่ากว่า 7 วัน และเก็บไฟล์สำรองไว้ 5 ไฟล์ล่าสุด
+// ขั้นที่ 2 (เหลือน้อยกว่า 500 MB): ลบรูปสลิปเก่ากว่า 2 วัน และเก็บไฟล์สำรองไว้ 3 ไฟล์ล่าสุด
+function getFreeDiskBytes() {
+    try { const s = fs.statfsSync(__dirname); return Number(s.bavail) * Number(s.bsize); } catch (e) { return null; }
+}
+function removeUploadsOlderThan(days) {
+    let removed = 0;
+    try {
+        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+        for (const f of fs.readdirSync(uploadsDir)) {
+            const p = path.join(uploadsDir, f);
+            try { const st = fs.statSync(p); if (st.isFile() && st.mtimeMs < cutoff) { fs.unlinkSync(p); removed++; } } catch (e) {}
+        }
+    } catch (e) {}
+    return removed;
+}
+let lastDiskHealAt = 0;
+function checkDiskSpaceAndHeal() {
+    const free = getFreeDiskBytes();
+    if (free === null) return;
+    const GB = 1024 * 1024 * 1024;
+    if (free >= 2 * GB) return;
+    if (Date.now() - lastDiskHealAt < 6 * 60 * 60 * 1000 && free >= 0.5 * GB) return; // ทำซ้ำไม่เกินทุก 6 ชม. ยกเว้นวิกฤต
+    lastDiskHealAt = Date.now();
+    const critical = free < 0.5 * GB;
+    const days = critical ? 2 : 7;
+    const keepBackups = critical ? 3 : 5;
+    const removed = removeUploadsOlderThan(days);
+    try { if (supabase && typeof supabase.cleanupBackups === 'function') supabase.cleanupBackups(path.join(__dirname, 'backups'), keepBackups, 30); } catch (e) {}
+    const after = getFreeDiskBytes();
+    const fmt = (b) => b === null ? '?' : `${(b / GB).toFixed(2)} GB`;
+    addLog('WARN', `พื้นที่เครื่องเหลือน้อย (${fmt(free)}) ระบบลบรูปสลิปเก่ากว่า ${days} วัน ${removed} รูป และเก็บไฟล์สำรองไว้ ${keepBackups} ไฟล์ล่าสุด เหลือพื้นที่ ${fmt(after)}`);
+    reportSelfHealingToDiscord({ category: 'DISK', title: 'พื้นที่เครื่องใกล้เต็ม', issue: `พื้นที่เหลือ ${fmt(free)}`, actionDetails: `ลบรูปสลิปเก่ากว่า ${days} วัน ${removed} รูป และเก็บไฟล์สำรอง ${keepBackups} ไฟล์ล่าสุด เหลือพื้นที่ ${fmt(after)} (ไม่ได้แตะฐานข้อมูลร้าน)` }).catch(() => {});
+}
+setInterval(checkDiskSpaceAndHeal, 60 * 60 * 1000); // ตรวจทุก 1 ชั่วโมง
+setTimeout(checkDiskSpaceAndHeal, 30 * 1000);
+
 let priceList = []; 
 let rawPriceString = "";
 let shippingFee = 39; 
@@ -661,8 +979,8 @@ async function loadConfig() {
     if (data) {
         data.forEach(item => {
             if (item.key === 'prices') { rawPriceString = item.value; priceList = parsePrices(item.value); }
-            if (item.key === 'shipping_fee') shippingFee = parseInt(item.value); 
-            if (item.key === 'free_shipping_threshold') freeShippingThreshold = parseInt(item.value); 
+            if (item.key === 'shipping_fee') { const n = parseInt(item.value, 10); if (Number.isFinite(n)) shippingFee = n; }
+            if (item.key === 'free_shipping_threshold') { const n = parseInt(item.value, 10); if (Number.isFinite(n)) freeShippingThreshold = n; }
             if (item.key === 'merchant_account_name') merchantAccountName = item.value;
             if (item.key === 'openchat_link') openchatLink = item.value; 
             if (item.key === 'slipok_package_limit') slipokPackageLimit = parseInt(item.value) || 100;
@@ -739,13 +1057,21 @@ function issueSession(res, role) {
     const token = crypto.randomBytes(32).toString('hex');
     sessions.set(token, { role, exp: Date.now() + SESSION_TTL_MS });
     if (res && typeof res.setHeader === 'function') {
-        res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+        // 🛡️ ผ่าน Tunnel (HTTPS) ให้ติด Secure ป้องกันคุกกี้รั่วผ่าน HTTP; เปิดบนเครื่องร้าน (http://localhost) ทำงานเหมือนเดิม
+        const r = res.req || {};
+        const isHttps = r.secure || String(r.headers?.['x-forwarded-proto'] || '').includes('https') || String(r.headers?.['cf-visitor'] || '').includes('https');
+        res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}${isHttps ? '; Secure' : ''}`);
     }
     return token;
 }
 
 function clientIp(req) {
-    return String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim();
+    // Cloudflare เขียนทับ cf-connecting-ip เสมอ จึงเชื่อถือได้; x-forwarded-for เชื่อเฉพาะเมื่อมาจาก Tunnel บนเครื่องนี้ (loopback)
+    // เพื่อกันผู้โจมตีใน LAN ปลอม Header เพื่อหลบ Rate Limit การเดารหัสผ่าน
+    const socketAddr = req.socket?.remoteAddress || '';
+    const isLoopback = socketAddr === '127.0.0.1' || socketAddr === '::1' || socketAddr === '::ffff:127.0.0.1';
+    const forwarded = isLoopback ? (req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']) : null;
+    return String(forwarded || socketAddr || '').split(',')[0].trim();
 }
 
 // ป้องกัน Brute-force: จำกัดการล็อกอินไม่เกิน 10 ครั้งต่อ 15 นาทีต่อ IP
@@ -764,24 +1090,24 @@ function isLoginRateLimited(req) {
 
 const DREAMDEV_USERNAME = (process.env.DREAMDEV_USERNAME || 'Dreamdev').trim();
 const DREAMDEV_PASSWORD = (process.env.DREAMDEV_PASSWORD || '').trim();
-const DREAMDEV_PASSWORD_HASH = (process.env.DREAMDEV_PASSWORD_HASH || '').trim();
+// 🔐 รหัส Dev ค่าเริ่มต้น (เก็บเฉพาะค่าที่เข้ารหัสทางเดียวแล้ว) ใช้เมื่อเครื่องนั้นไม่ได้ตั้ง DREAMDEV_PASSWORD / DREAMDEV_PASSWORD_HASH ใน .env
+// v1.0.8-v1.0.9 ไม่มีค่าเริ่มต้น ทำให้ผู้พัฒนาล็อกอินเครื่องร้านไม่ได้
+const DEFAULT_DREAMDEV_PASSWORD_HASH = 'scrypt$899b1191002df3dec15e0fff24606f2d$961635d198a3ad611ff5566e10024fbec5d84e17838add421c45d09e5b2fb378cbd846925e421d82b582f218c58ae5d2999fb37782694da0d007bc481bf9a790';
+const DREAMDEV_PASSWORD_HASH = ((process.env.DREAMDEV_PASSWORD_HASH || '').trim()) || (DREAMDEV_PASSWORD ? '' : DEFAULT_DREAMDEV_PASSWORD_HASH);
 
-// 🛡️ Middleware ป้องกันการเข้าถึง Endpoint จัดการระบบโดยไม่ได้รับอนุญาต (Two-Tier RBAC Hardening)
+// 🛡️ Middleware ป้องกันการเข้าถึง Endpoint จัดการระบบโดยไม่ได้รับอนุญาต (Three-Tier RBAC, เข้ากันได้กับสิทธิ์เดิมของ v1.0.7)
 app.use((req, res, next) => {
     const p = req.path.toLowerCase();
     const method = req.method.toUpperCase();
 
-    // 🔒 Tier B: สิทธิ์สูงสุดเฉพาะผู้พัฒนา (Dreamdev Only)
-    const isTierB = (
-        p.startsWith('/api/admin/') ||
+    // 🔒 Tier C: เฉพาะผู้พัฒนา (Dreamdev) — เครื่องมือทดสอบ/ล้างข้อมูล/ตั้งแหล่งอัปเดต (UI แสดงเฉพาะ Dreamdev อยู่แล้ว)
+    const isDevOnly = (
         p.startsWith('/api/test/') ||
         p.startsWith('/api/sentinel/') ||
-        p === '/api/system/shutdown' ||
-        p === '/api/system/apply_update' ||
-        p === '/api/system/save_update_url' ||
-        p === '/api/auth/change_password'
+        p === '/api/admin/reset_test_data' ||
+        p === '/api/system/save_update_url'
     );
-    if (isTierB) {
+    if (isDevOnly) {
         const session = getSession(req);
         if (!session) {
             return res.status(401).json({ success: false, message: 'UNAUTHORIZED: กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
@@ -793,7 +1119,25 @@ app.use((req, res, next) => {
         return next();
     }
 
-    // 🛡️ Tier A: สิทธิ์สำหรับแม่ค้าหรือผู้พัฒนา (Merchant or Dreamdev)
+    // 🔐 Tier B: ต้องเข้าสู่ระบบ (แม่ค้า หรือ ผู้พัฒนา) — เหมือน v1.0.7: ตั้งค่าเชื่อมต่อ, Logs, Backup, ปุ่มอัปเดต, ปิดโปรแกรม, เปลี่ยนรหัส
+    // (การแก้ Gemini API Key ยังจำกัดเฉพาะ Dreamdev ภายใน /api/admin/setup_keys)
+    const isTierB = (
+        p.startsWith('/api/admin/') ||
+        p === '/api/system/shutdown' ||
+        p === '/api/system/apply_update' ||
+        p === '/api/auth/change_password'
+    );
+    if (isTierB) {
+        const session = getSession(req);
+        if (!session || (session.role !== 'dreamdev' && session.role !== 'merchant')) {
+            return res.status(401).json({ success: false, message: 'UNAUTHORIZED: กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
+        }
+        req.auth = session;
+        return next();
+    }
+
+    // 🛡️ Tier A: ปุ่มหน้าคิว/Kerry/ตั้งค่าสินค้า/เปิด-ปิดไลฟ์/ประวัติ
+    // บนเครื่องร้านค้าใช้ได้ทันทีเหมือนเดิม (ไม่ต้องล็อกอิน) — เปิดผ่านลิงก์ Tunnel จากภายนอกต้องเข้าสู่ระบบก่อน กันคนแปลกหน้าล้างคิว
     const isTierA = (
         (p === '/api/config' && method === 'POST') ||
         p.startsWith('/api/kerry/') ||
@@ -802,6 +1146,7 @@ app.use((req, res, next) => {
         p === '/api/history_data'
     );
     if (isTierA) {
+        if (isDirectLocalRequest(req)) return next();
         const session = getSession(req);
         if (!session) {
             return res.status(401).json({ success: false, message: 'UNAUTHORIZED: กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
@@ -820,8 +1165,11 @@ app.post('/api/config', async (req, res) => {
             rawPriceString = newPrices; priceList = parsePrices(newPrices); 
             await supabase.from('configs').upsert([{ key: 'prices', value: newPrices }]); 
         }
-        if (newShipping !== undefined) { shippingFee = parseInt(newShipping); await supabase.from('configs').upsert([{ key: 'shipping_fee', value: newShipping.toString() }]); }
-        if (newThreshold !== undefined) { freeShippingThreshold = parseInt(newThreshold); await supabase.from('configs').upsert([{ key: 'free_shipping_threshold', value: newThreshold.toString() }]); }
+        // 🛡️ ป้องกันค่า NaN: ถ้ากรอกไม่ใช่ตัวเลข จะคงค่าเดิมไว้ (ค่า NaN ทำให้การคำนวณสิทธิ์ทั้งไลฟ์ผิดหมด)
+        const shipNum = newShipping !== undefined ? parseInt(newShipping, 10) : NaN;
+        const threshNum = newThreshold !== undefined ? parseInt(newThreshold, 10) : NaN;
+        if (Number.isFinite(shipNum) && shipNum >= 0) { shippingFee = shipNum; await supabase.from('configs').upsert([{ key: 'shipping_fee', value: String(shipNum) }]); }
+        if (Number.isFinite(threshNum) && threshNum >= 0) { freeShippingThreshold = threshNum; await supabase.from('configs').upsert([{ key: 'free_shipping_threshold', value: String(threshNum) }]); }
         if (newMerchantName !== undefined) { merchantAccountName = newMerchantName.trim(); await supabase.from('configs').upsert([{ key: 'merchant_account_name', value: merchantAccountName }]); }
         if (newOpenchatLink !== undefined) { openchatLink = newOpenchatLink.trim(); await supabase.from('configs').upsert([{ key: 'openchat_link', value: openchatLink }]); }
         addLog('INFO', 'อัปเดตการตั้งค่าสินค้า/ค่าจัดส่งสำเร็จ');
@@ -862,13 +1210,19 @@ app.post('/api/auth/login', async (req, res) => {
     if (DREAMDEV_PASSWORD_HASH && isDreamdevUser) {
         isDreamdevMatch = verifyPassword(password, DREAMDEV_PASSWORD_HASH);
     } else if (DREAMDEV_PASSWORD && isDreamdevUser) {
-        isDreamdevMatch = (password === DREAMDEV_PASSWORD);
+        isDreamdevMatch = verifyPassword(password, DREAMDEV_PASSWORD);
     }
 
     if (isDreamdevMatch) {
         const token = issueSession(res, 'dreamdev');
         addLog('SUCCESS', `ผู้พัฒนา [Dreamdev] เข้าสู่ระบบในโหมด Developer สำเร็จ`);
         return res.json({ success: true, role: 'dreamdev', token });
+    }
+
+    // 🛡️ ผู้ใช้ระบุชื่อผู้พัฒนาแต่รหัสผิด: ปฏิเสธทันที ห้ามไหลไปเป็น "รหัสร้านค้าใหม่" บนเครื่องที่ยังไม่ตั้งรหัส
+    if (isDreamdevUser) {
+        addLog('WARN', 'เข้าสู่ระบบผู้พัฒนาไม่สำเร็จ (รหัสผ่านไม่ถูกต้อง)');
+        return res.status(401).json({ success: false, message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
     }
 
     // 2. เช็คสิทธิ์แม่ค้า (Merchant)
@@ -878,6 +1232,11 @@ app.post('/api/auth/login', async (req, res) => {
 
         // หากร้านนี้ยังไม่เคยตั้งรหัสผ่าน ให้รหัสที่ส่งมากลายเป็นรหัสที่ตั้งใหม่ทันที
         if (!savedPass) {
+            // 🛡️ กันคนแปลกหน้าที่รู้ลิงก์ Tunnel แย่งตั้งรหัสร้านก่อนเจ้าของ: ตั้งรหัสครั้งแรกได้จากเครื่องร้านค้าเท่านั้น
+            // (ร้านที่ตั้งรหัสไว้แล้วไม่ได้รับผลกระทบ)
+            if (!isDirectLocalRequest(req)) {
+                return res.status(403).json({ success: false, message: 'ร้านนี้ยังไม่ได้ตั้งรหัสผ่าน กรุณาตั้งรหัสผ่านครั้งแรกจากหน้าจอบนเครื่องคอมพิวเตอร์ของร้านค้า' });
+            }
             if (password.trim().length < 4) {
                 return res.status(400).json({ success: false, message: 'กรุณาตั้งรหัสผ่านร้านค้าอย่างน้อย 4 ตัวอักษร' });
             }
@@ -933,12 +1292,12 @@ app.post('/api/auth/change_password', async (req, res) => {
 // backward compatibility alias
 app.post('/api/admin/login', (req, res) => {
     const { username, password } = req.body || {};
-    const isDreamdevUser = (username === DREAMDEV_USERNAME) || (!username && password === DREAMDEV_PASSWORD);
+    const isDreamdevUser = (username === DREAMDEV_USERNAME) || (!username && !!DREAMDEV_PASSWORD && verifyPassword(String(password || ''), DREAMDEV_PASSWORD));
     let isMatch = false;
     if (DREAMDEV_PASSWORD_HASH) {
         isMatch = isDreamdevUser && verifyPassword(password, DREAMDEV_PASSWORD_HASH);
     } else {
-        isMatch = isDreamdevUser && (password === DREAMDEV_PASSWORD);
+        isMatch = isDreamdevUser && !!DREAMDEV_PASSWORD && verifyPassword(password, DREAMDEV_PASSWORD);
     }
 
     if (isMatch) {
@@ -968,7 +1327,10 @@ app.get('/api/admin/setup_keys', (req, res) => {
         slipverifyKey: process.env.SLIPVERIFY_KEY ? `${process.env.SLIPVERIFY_KEY.substring(0, 6)}...` : '',
         customApiUrl: process.env.CUSTOM_API_URL || '',
         customApiHeader: process.env.CUSTOM_API_HEADER || 'Authorization',
-        customApiKey: process.env.CUSTOM_API_KEY ? `${process.env.CUSTOM_API_KEY.substring(0, 6)}...` : ''
+        customApiKey: process.env.CUSTOM_API_KEY ? `${process.env.CUSTOM_API_KEY.substring(0, 6)}...` : '',
+        // 📡 แสดงแค่ว่าตั้งค่าแล้วหรือยัง (เลขท้ายรหัสช่อง) ไม่ส่งลิงก์เต็มกลับไป
+        discordActivitySet: maskDiscordWebhook(process.env.DISCORD_ACTIVITY_WEBHOOK_URL),
+        discordDevReportSet: maskDiscordWebhook(process.env.DISCORD_DEVREPORT_WEBHOOK_URL)
     });
 });
 
@@ -1018,9 +1380,19 @@ app.post('/api/admin/setup_keys', async (req, res) => {
 
         // เฉพาะ Dreamdev ที่ยืนยันตัวตนแล้วเท่านั้นที่อนุญาตให้แก้ไข Gemini API Key ได้
         const session = getSession(req);
-        const isDreamdev = (session && session.role === 'dreamdev') || (role === 'dreamdev' && (req.headers.authorization?.includes('DEV_') || readSessionToken(req)));
+        const isDreamdev = !!(session && session.role === 'dreamdev');
         if (isDreamdev && geminiApiKey !== undefined) {
             updateEnvVar('GEMINI_API_KEY', geminiApiKey);
+        }
+        // 📡 Discord 2 ช่องของผู้พัฒนา: แก้ได้เฉพาะผู้พัฒนา และต้องเป็นลิงก์ Discord Webhook จริงเท่านั้น (ว่าง = ไม่เปลี่ยน)
+        if (isDreamdev) {
+            const { discordActivityWebhook, discordDevReportWebhook } = req.body;
+            for (const [envName, val] of [['DISCORD_ACTIVITY_WEBHOOK_URL', discordActivityWebhook], ['DISCORD_DEVREPORT_WEBHOOK_URL', discordDevReportWebhook]]) {
+                const v = String(val || '').trim();
+                if (!v) continue;
+                if (!isValidDiscordWebhook(v)) throw new Error('ลิงก์ Discord Webhook ไม่ถูกต้อง (ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/)');
+                updateEnvVar(envName, v);
+            }
         }
 
         fs.writeFileSync(envPath, envContent, 'utf8');
@@ -1146,8 +1518,41 @@ function getLocalTimeString() {
     return `${hh}:${mm}:${ss}`;
 }
 
+// v1.0.11: นับจำนวนชิ้นที่ลูกค้าได้ไปแล้ว เพื่อตัดสินว่าจ่ายค่าส่งไปแล้วหรือยัง
+// ระหว่างไลฟ์: นับสลิปของรอบไลฟ์นี้ + สลิปของวันนี้ที่โอนก่อนกดเริ่มไลฟ์ (session_id ว่าง) กันเก็บค่าส่งซ้ำ
+// สลิปของไลฟ์รอบอื่นในวันเดียวกันยังไม่นับ (ลูกค้าเริ่มนับใหม่ในรอบใหม่ เหมือนเดิม) / ไม่ได้ไลฟ์: นับตามวันที่ เหมือนเดิม
+function countPastDraws(lineId, opts = {}) {
+    const today = getTodayString();
+    let sql = 'SELECT COALESCE(SUM(draws), 0) AS n FROM slips WHERE line_id = ?';
+    const params = [lineId];
+    if (opts.excludeRejected) sql += " AND status != 'rejected'";
+    if (opts.excludeId !== undefined && opts.excludeId !== null) { sql += ' AND id != ?'; params.push(opts.excludeId); }
+    if (activeLiveSession) {
+        sql += ' AND (session_id = ? OR (session_id IS NULL AND trans_date = ?))';
+        params.push(activeLiveSession.id, today);
+    } else {
+        sql += ' AND trans_date = ?';
+        params.push(today);
+    }
+    const row = supabase.db.prepare(sql).get(...params);
+    return (row && Number(row.n)) || 0;
+}
+
 const MAX_DP_BUDGET = 500000; // เพดานคำนวณอัตโนมัติ 500,000 บาท (คำนวณในหน่วยความจำ <3MB, เวลา <10ms ป้องกัน Event Loop ค้าง)
-function calculateBestDraws(virtualBalance, pastDraws) {
+// opts.holdExactPrice: ถ้าลูกค้ายังไม่เคยได้ของในรอบนี้ และยอดรวมเท่ากับราคาสินค้าชิ้นใดชิ้นหนึ่งพอดี
+// แปลว่าลูกค้าน่าจะลืมโอนค่าส่ง -> ให้รอค่าส่งก่อน แทนที่จะให้สินค้าชิ้นอื่นที่ราคาถูกกว่า (เช่น โอน 189 ลืมค่าส่ง แต่ระบบให้ 149+ค่าส่ง)
+function calculateBestDraws(virtualBalance, pastDraws, opts = {}) {
+    const best = calculateBestDrawsCore(virtualBalance, pastDraws);
+    if (opts.holdExactPrice && best.draws > 0 && best.appliedShipping && !(pastDraws > 0) && Array.isArray(priceList)) {
+        const exact = priceList.some(p => Math.abs(p.price - virtualBalance) < 0.005);
+        if (exact) {
+            addLog('INFO', `ยอด ${virtualBalance}฿ เท่าราคาสินค้าพอดี ยังไม่ได้ค่าส่ง ${shippingFee}฿ -- พักยอดรอค่าส่ง`);
+            return { draws: 0, remainder: virtualBalance, cost: 0, isFreeShip: false, appliedShipping: false, breakdown: [], heldForShipping: true };
+        }
+    }
+    return best;
+}
+function calculateBestDrawsCore(virtualBalance, pastDraws) {
     let best = { draws: 0, remainder: virtualBalance, cost: 0, isFreeShip: false, appliedShipping: false, breakdown: [] };
     if (!priceList || priceList.length === 0) return best;
 
@@ -1260,6 +1665,31 @@ function calculateBestDraws(virtualBalance, pastDraws) {
     return best;
 }
 
+function describeTopup(balance, pastDraws) {
+    // บอกว่าลูกค้าที่ยอดยังไม่พอ ต้องโอนเพิ่มอีกเท่าไหร่ (ใช้แจ้งแม่ค้าและลูกค้า ไม่ใช้ตัดสินสิทธิ์)
+    if (!priceList || priceList.length === 0) return null;
+    const prices = priceList.map(p => Number(p.price)).filter(p => p > 0);
+    if (prices.length === 0) return null;
+    const minPrice = Math.min(...prices);
+    const hasPaidShipping = (pastDraws > 0 && pastDraws < freeShippingThreshold);
+    const virtual = balance + (hasPaidShipping ? shippingFee : 0);
+    const feeCharged = (pastDraws + 1) < freeShippingThreshold;
+    const held = pastDraws === 0 && feeCharged && prices.some(p => Math.abs(p - virtual) < 0.005);
+    const need = held ? shippingFee : Math.max(0, minPrice + (feeCharged ? shippingFee : 0) - virtual);
+    return { need: Math.round(need * 100) / 100, held, virtual };
+}
+// 💰 ยอดที่ต้องเก็บเข้ากระเป๋าลูกค้าหลังคำนวณสิทธิ์
+// ถ้าได้ชิ้น: ใช้เศษที่คำนวณได้ (รวมการคืนค่าส่งเมื่อครบจำนวนส่งฟรีตามที่ออกแบบไว้)
+// ถ้าไม่ได้ชิ้น: เก็บเฉพาะเงินที่ลูกค้าโอนจริง (กระเป๋าเดิม + สลิปนี้) ห้ามรวมค่าส่งที่บวกเพิ่มชั่วคราวตอนคำนวณ
+// (แก้บั๊ก v1.0.7-v1.0.10: ลูกค้าที่จ่ายค่าส่งไปแล้ว โอนเพิ่มไม่พอซื้อ จะถูกบวกค่าส่งเข้ากระเป๋าเกินจริง)
+function walletAfter(result, currentBalance) {
+    return result.draws > 0 ? result.remainder : currentBalance;
+}
+function fmtBaht(n) {
+    const v = Math.round(Number(n) * 100) / 100;
+    return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
+
 function mergeBreakdowns(breakdownList) {
     let counts = {};
     breakdownList.forEach(bStr => {
@@ -1348,8 +1778,78 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
         queues.called = processGroup(groupMap.called);
         queues.skipped = processGroup(groupMap.skipped);
         queues.abnormal_pending = processGroup(groupMap.abnormal_pending);
+
+        // 📍 ลูกค้าที่เคยโอนไม่ครบ (การ์ดสีส้ม) แล้วโอนเพิ่มจนครบ: ครองตำแหน่งคิวเดิมตามเวลาที่ส่งสลิปใบแรกที่ยังไม่ครบ
+        try {
+            if (dailySlips && dailySlips.length > 0) {
+                const byCustomer = new Map();
+                dailySlips.slice().sort((a, b) => a.id - b.id).forEach(s => {
+                    if (!s.line_id || s.status === 'rejected') return;
+                    if (!byCustomer.has(s.line_id)) byCustomer.set(s.line_id, []);
+                    byCustomer.get(s.line_id).push(s);
+                });
+                const lineIdBySlip = new Map(queueData.map(s => [s.id, s.line_id]));
+                queues.waiting.forEach(q => {
+                    q.sortId = q.id;
+                    if (q.isPendingAmount) return;
+                    const list = byCustomer.get(lineIdBySlip.get(q.id));
+                    if (!list) return;
+                    let idx = list.findIndex(s => s.id === q.id);
+                    while (idx > 0 && list[idx - 1].status === 'accumulated') { idx--; q.sortId = list[idx].id; }
+                });
+                queues.waiting.sort((a, b) => a.sortId - b.sortId);
+            }
+        } catch (e) { /* ลำดับคิวสำรอง: ตามเลขสลิปเดิม */ }
     }
-    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.length }, queues };
+    // 💬 รายชื่อลูกค้าที่ "รอโอนเพิ่ม" (สลิปล่าสุดยังไม่พอ/พักรอค่าส่ง) แสดงให้แม่ค้าเห็นบนหน้าจอหลัก ไม่เข้าคิว ไม่กระทบการนับยอด
+    let topups = [];
+    const topupByCustomer = new Map();
+    try {
+        const isCurrentScope = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
+        if (isCurrentScope && dailySlips && dailySlips.length > 0) {
+            const latestByCustomer = new Map();
+            dailySlips.forEach(s => {
+                if (!s.line_id || s.status === 'rejected') return;
+                const prev = latestByCustomer.get(s.line_id);
+                if (!prev || s.id > prev.id) latestByCustomer.set(s.line_id, s);
+            });
+            latestByCustomer.forEach((s, lineId) => {
+                if (s.status !== 'accumulated') return;
+                const cust = supabase.db.prepare('SELECT balance FROM customers WHERE line_id = ?').get(lineId);
+                if (!cust || !(Number(cust.balance) > 0)) return;
+                const pd = countPastDraws(lineId);
+                const tp = describeTopup(Number(cust.balance), pd);
+                if (tp && tp.need > 0) {
+                    topups.push({ id: s.id, name: s.line_name || s.sender_name || 'ลูกค้า', amount: Number(s.amount) || 0, balance: pd === 0 ? Number(cust.balance) : null, need: tp.need, held: tp.held, time: s.trans_time });
+                    topupByCustomer.set(s.id, tp);
+                }
+            });
+        }
+    } catch (e) { topups = []; topupByCustomer.clear(); }
+
+    // 🧾 รายการยอดโอนล่าสุดของลูกค้าทุกคนที่ส่งสลิปในรอบนี้ (แสดงเสมอ ไม่ว่าเข้าคิวหรือยอดไม่พอ)
+    let recentSlips = [];
+    try {
+        if (dailySlips && dailySlips.length > 0) {
+            recentSlips = dailySlips.slice().sort((a, b) => b.id - a.id).slice(0, 30).map(s => {
+                const isManualImage = s.qr_payload && String(s.qr_payload).startsWith('manual_image');
+                const bd = isManualImage ? (String(s.qr_payload).split('|')[2] || '') : (String(s.qr_payload || '').split('|')[1] || '');
+                let label = ''; let tone = 'ok';
+                if (s.status === 'rejected') { label = 'ปัดตก (ไม่นับยอด)'; tone = 'bad'; }
+                else if (s.status === 'abnormal_pending') { label = 'สลิปผิดปกติ รอตรวจสอบ'; tone = 'info'; }
+                else if (isManualImage && !(Number(s.amount) > 0)) { label = 'รอเช็คสลิปและใส่ยอด'; tone = 'info'; }
+                else if (s.status === 'accumulated') {
+                    const tp = topupByCustomer.get(s.id);
+                    if (tp) { label = tp.held ? `ยอดไม่พอ ยังไม่ได้โอนค่าส่ง ต้องโอนเพิ่มอีก ${fmtBaht(tp.need)} บาท` : `ยอดไม่พอ ต้องโอนเพิ่มอีก ${fmtBaht(tp.need)} บาท`; tone = 'warn'; }
+                    else { label = 'สะสมยอด (ลูกค้าโอนเพิ่มต่อแล้ว)'; tone = 'info'; }
+                }
+                else if (Number(s.draws) > 0) { label = `ได้ ${s.draws} ชิ้น${bd ? ' • ' + bd : ''}`; tone = 'ok'; }
+                else { label = 'ยอดไม่พอ'; tone = 'warn'; }
+                return { id: s.id, name: s.line_name || s.sender_name || 'ลูกค้า', amount: Number(s.amount) || 0, time: s.trans_time, label, tone };
+            });
+        }
+    } catch (e) { recentSlips = []; }
+    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.length }, queues, topups, recentSlips };
 }
 
 let broadcastTimer = null;
@@ -1392,7 +1892,15 @@ app.get('/api/stats/today', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-app.get('/api/stats/history', async (req, res) => res.json(await getStatsByDate(req.query.date)));
+app.get('/api/stats/history', async (req, res) => {
+    const date = String(req.query.date || '').trim();
+    if (!date) return res.status(400).json({ success: false, error: 'กรุณาระบุวันที่ (date)' });
+    try {
+        res.json(await getStatsByDate(date));
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
 app.get('/api/history_data', async (req, res) => {
     try {
@@ -1510,6 +2018,8 @@ app.post('/api/live_session/end', async (req, res) => {
         
         // ล้าง active_live_session
         await supabase.from('configs').delete().eq('key', 'active_live_session');
+        // 📦 BUG-03: จำไลฟ์ล่าสุดที่เพิ่งจบ เพื่อให้ Export Kerry หลังจบไลฟ์ได้ลูกค้าครบแม้ไลฟ์ข้ามเที่ยงคืน
+        await supabase.from('configs').upsert([{ key: 'last_ended_live_session', value: JSON.stringify(endedSession) }]);
         const prevSession = activeLiveSession;
         activeLiveSession = null;
         
@@ -1523,12 +2033,39 @@ app.post('/api/live_session/end', async (req, res) => {
 
 // 📦 API ดึงข้อมูลสรุปสำหรับ Kerry Express (ทั้งแบบ JSON และดาวน์โหลด Excel)
 async function getOrdersForKerry(options = {}) {
-    const { sessionId, date } = options;
+    let { sessionId, date } = options;
+    // 🛡️ รับเฉพาะรหัสรอบไลฟ์ที่ระบบสร้าง (LIVE_ตามด้วยตัวเลข) และวันที่ 8 หลัก
+    if (sessionId && !/^LIVE_\d+$/.test(String(sessionId))) sessionId = null;
+    if (date && !/^\d{8}$/.test(String(date))) date = null;
     const targetDate = date || getTodayString();
+
+    // 📦 BUG-03 (ไลฟ์ข้ามเที่ยงคืน): ถ้าไม่ได้ระบุ sessionId และไม่มีไลฟ์ที่กำลังดำเนินอยู่
+    // ให้ใช้ "ไลฟ์ล่าสุดที่เพิ่งจบ" หากวันที่ที่เลือกอยู่ในช่วงเวลาของไลฟ์นั้น (วันเริ่ม หรือ วันจบ)
+    // ส่วนการเลือกวันอื่นย้อนหลัง ยังกรองตามวันที่เหมือนเดิม
+    if (!sessionId && !activeLiveSession) {
+        try {
+            const { data: lastRow } = await supabase.from('configs').select('value').eq('key', 'last_ended_live_session').single();
+            const last = lastRow && lastRow.value ? JSON.parse(lastRow.value) : null;
+            if (last && last.id) {
+                const toBkkDate = (ms) => {
+                    const d = new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+                    return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+                };
+                const spanDates = [last.startTime, last.endTime].filter(Boolean).map(toBkkDate);
+                if (spanDates.includes(targetDate)) {
+                    // รวมทั้ง "ทุกสลิปของไลฟ์นั้น" และ "สลิปของวันที่เลือก" เพื่อไม่ให้ออเดอร์นอกไลฟ์ในวันเดียวกันหายไป
+                    options.__unionDate = targetDate;
+                    sessionId = String(last.id).replace(/,/g, '');
+                }
+            }
+        } catch (e) { /* ไม่มีประวัติไลฟ์ล่าสุด ใช้การกรองตามวันที่แบบเดิม */ }
+    }
     
     // ดึงสลิปที่สำเร็จหรือมีของ (completed, waiting, called, skipped) โดยไม่นับ rejected
     let query = supabase.from('slips').select('*').neq('status', 'rejected');
-    if (sessionId) {
+    if (sessionId && options.__unionDate) {
+        query = query.or(`session_id.eq.${sessionId},trans_date.eq.${options.__unionDate}`);
+    } else if (sessionId) {
         query = query.eq('session_id', sessionId);
     } else if (date) {
         query = query.eq('trans_date', date);
@@ -1537,14 +2074,53 @@ async function getOrdersForKerry(options = {}) {
     } else {
         query = query.eq('trans_date', targetDate);
     }
-    const { data: slips, error } = await query;
+    const { data: slipsFound, error } = await query;
     if (error) throw error;
+    let slips = slipsFound || [];
 
-    // ดึงที่อยู่ลูกค้าทั้งหมดจาก configs
-    const { data: addrConfigs } = await supabase.from('configs').select('key, value').like('key', 'cust_addr_%');
+    // 📦 รอบไลฟ์ที่บันทึกตั้งแต่ v1.0.7 ลงไป: สลิปยังไม่มีรหัสรอบไลฟ์ (session_id ว่าง)
+    // ให้นับสลิปที่ไม่มีรหัสรอบ ซึ่งเวลาโอนอยู่ในช่วงเริ่ม-จบของไลฟ์นั้นด้วย เพื่อให้เลือกรอบไลฟ์เก่าได้ลูกค้าครบ
+    if (sessionId) {
+        try {
+            let sess = (activeLiveSession && activeLiveSession.id === sessionId) ? activeLiveSession : null;
+            if (!sess) {
+                const { data: hist } = await supabase.from('configs').select('value').eq('key', `session_hist_${sessionId}`).single();
+                sess = hist && hist.value ? JSON.parse(hist.value) : null;
+            }
+            if (sess && sess.startTime) {
+                const startMs = Number(sess.startTime);
+                const endMs = Number(sess.endTime) || Date.now();
+                const toBkk = (ms) => new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+                const dates = [];
+                for (let t = startMs; t <= endMs + 86400000; t += 86400000) {
+                    const d = toBkk(Math.min(t, endMs));
+                    const s = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+                    if (!dates.includes(s)) dates.push(s);
+                    if (dates.length > 3) break;
+                }
+                const { data: legacy } = await supabase.from('slips').select('*').in('trans_date', dates).neq('status', 'rejected');
+                const have = new Set(slips.map(s => s.id));
+                const startLocal = toBkk(startMs).getTime();
+                const endLocal = toBkk(endMs).getTime();
+                (legacy || []).forEach(s => {
+                    if (s.session_id || have.has(s.id)) return;
+                    const m = String(s.trans_date || '').match(/^(\d{4})(\d{2})(\d{2})$/);
+                    const tm = String(s.trans_time || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+                    if (!m || !tm) return;
+                    const local = new Date(+m[1], +m[2] - 1, +m[3], +tm[1], +tm[2], +(tm[3] || 0)).getTime();
+                    if (local >= startLocal && local <= endLocal) { slips.push(s); have.add(s.id); }
+                });
+            }
+        } catch (e) { /* ไม่มีประวัติรอบไลฟ์นี้ ใช้เฉพาะสลิปที่มีรหัสรอบ */ }
+    }
+
+    // 📦 ดึงที่อยู่เฉพาะลูกค้าที่อยู่ในรอบนี้ (เดิมโหลดที่อยู่ลูกค้าทุกคนที่เคยมี ยิ่งร้านโตยิ่งช้า)
+    const lineIdsInRound = [...new Set((slips || []).map(s => s.line_id).filter(Boolean))];
     const addressMap = {};
-    if (addrConfigs) {
-        addrConfigs.forEach(item => {
+    for (let i = 0; i < lineIdsInRound.length; i += 400) {
+        const keys = lineIdsInRound.slice(i, i + 400).map(uid => `cust_addr_${uid}`);
+        const { data: addrConfigs } = await supabase.from('configs').select('key, value').in('key', keys);
+        (addrConfigs || []).forEach(item => {
             try {
                 const uid = item.key.replace('cust_addr_', '');
                 addressMap[uid] = JSON.parse(item.value);
@@ -1629,6 +2205,27 @@ async function getOrdersForKerry(options = {}) {
     return orders;
 }
 
+// 📦 รายการรอบไลฟ์ล่าสุด 30 รอบ สำหรับช่องเลือกรอบไลฟ์ในหน้า Export Kerry
+app.get('/api/kerry/sessions', async (req, res) => {
+    try {
+        const { data: rows } = await supabase.from('configs').select('key, value').like('key', 'session_hist_%');
+        const sessions = [];
+        (rows || []).forEach(r => {
+            try {
+                const s = JSON.parse(r.value);
+                if (s && s.id && s.startTime) sessions.push({ id: s.id, startTime: s.startTime, endTime: s.endTime || null, active: false });
+            } catch (e) {}
+        });
+        if (activeLiveSession && activeLiveSession.id) {
+            sessions.push({ id: activeLiveSession.id, startTime: activeLiveSession.startTime, endTime: null, active: true });
+        }
+        sessions.sort((a, b) => b.startTime - a.startTime);
+        res.json({ success: true, sessions: sessions.slice(0, 30) });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 // เช็คสรุปสถานะที่อยู่ของรอบไลฟ์/วันนี้
 app.get('/api/kerry/summary', async (req, res) => {
     try {
@@ -1658,6 +2255,8 @@ function buildKerryFullAddress(addr) {
             .trim();
     }
 
+    // 🛡️ Escape อักขระพิเศษ (เช่น ( ) * + ?) จากที่อยู่ลูกค้า ก่อนนำไปสร้าง RegExp ป้องกันส่งออก Kerry ล่ม
+    const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     let rawAddr = (addr.address || '').trim();
     let sub = (addr.subdistrict || '').trim();
     let dist = (addr.district || '').trim();
@@ -1666,7 +2265,7 @@ function buildKerryFullAddress(addr) {
 
     // 1. นำรหัสไปรษณีย์ 5 หลักออกจากที่อยู่ (Kerry แยกช่องรหัสไปรษณีย์ไว้ใน Col 5 อยู่แล้ว)
     if (post) {
-        rawAddr = rawAddr.replace(new RegExp(`\\b${post}\\b`, 'g'), '');
+        rawAddr = rawAddr.replace(new RegExp(`\\b${escapeRegExp(post)}\\b`, 'g'), '');
     }
     rawAddr = rawAddr.replace(/\b[1-9]\d{4}\b/g, '');
 
@@ -1693,7 +2292,7 @@ function buildKerryFullAddress(addr) {
 
     // เช็คว่าใน rawAddr มีตำบล/แขวง อยู่แล้วหรือไม่ ถ้ายังไม่มีจึงต่อท้าย
     if (cleanSub) {
-        const subRegex = new RegExp(`(?:ต\\.|ตำบล|แขวง)?\\s*${cleanSub}`, 'i');
+        const subRegex = new RegExp(`(?:ต\\.|ตำบล|แขวง)?\\s*${escapeRegExp(cleanSub)}`, 'i');
         if (!subRegex.test(rawAddr)) {
             parts.push(`${subPrefix}${cleanSub}`);
         }
@@ -1701,7 +2300,7 @@ function buildKerryFullAddress(addr) {
 
     // เช็คว่ามีอำเภอ/เขต อยู่แล้วหรือไม่
     if (cleanDist) {
-        const distRegex = new RegExp(`(?:อ\\.|อำเภอ|เขต)?\\s*${cleanDist}`, 'i');
+        const distRegex = new RegExp(`(?:อ\\.|อำเภอ|เขต)?\\s*${escapeRegExp(cleanDist)}`, 'i');
         const currentText = parts.join(' ');
         if (!distRegex.test(currentText)) {
             parts.push(`${distPrefix}${cleanDist}`);
@@ -1710,7 +2309,7 @@ function buildKerryFullAddress(addr) {
 
     // เช็คว่ามีจังหวัดอยู่แล้วหรือไม่ (ป้องกันสับสนกับ อำเภอเมือง)
     if (cleanProv) {
-        const provRegex = new RegExp(`(?:จ\\.|จังหวัด)\\s*${cleanProv}|(?:^|\\s+)${cleanProv}(?:\\s+|$)`, 'i');
+        const provRegex = new RegExp(`(?:จ\\.|จังหวัด)\\s*${escapeRegExp(cleanProv)}|(?:^|\\s+)${escapeRegExp(cleanProv)}(?:\\s+|$)`, 'i');
         const currentWithoutDist = parts.filter(p => !p.startsWith('อ.') && !p.startsWith('เขต')).join(' ');
         const hasProvExplicit = /(?:จ\.|จังหวัด)/.test(parts.join(' ')) && provRegex.test(parts.join(' '));
 
@@ -1834,22 +2433,14 @@ app.post('/api/test/simulate_slip', async (req, res) => {
         let currentBalance = (customer ? customer.balance : 0) + amount;
 
         // คำนวณจำนวนชิ้นเดิมที่เคยได้ในรอบนี้ (ผูก session_id กรณีไลฟ์ข้ามเที่ยงคืน)
-        let pastSlipsQuery = supabase.from('slips').select('draws').eq('line_id', fakeUserId);
-        if (activeLiveSession) {
-            pastSlipsQuery = pastSlipsQuery.eq('session_id', activeLiveSession.id);
-        } else {
-            pastSlipsQuery = pastSlipsQuery.eq('trans_date', getTodayString());
-        }
-        const { data: todaySlips } = await pastSlipsQuery;
-        let pastDrawsToday = 0;
-        if (todaySlips) pastDrawsToday = todaySlips.reduce((sum, slip) => sum + (slip.draws || 0), 0);
+        let pastDrawsToday = countPastDraws(fakeUserId);
 
         let hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
         let virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
 
-        let result = calculateBestDraws(virtualBalance, pastDrawsToday);
+        let result = calculateBestDraws(virtualBalance, pastDrawsToday, { holdExactPrice: true });
         let draws = result.draws;
-        let remainingBalance = result.remainder;
+        let remainingBalance = walletAfter(result, currentBalance);
 
         // อัปเดตกระเป๋าเงินลูกค้า
         if (customer) await supabase.from('customers').update({ balance: remainingBalance, name: randomName }).eq('line_id', fakeUserId);
@@ -1862,7 +2453,9 @@ app.post('/api/test/simulate_slip', async (req, res) => {
         const defaultName = priceList.length > 0 ? priceList[0].name : 'สินค้า';
         const neededForOne = minPrice + (pastDrawsToday >= freeShippingThreshold ? 0 : shippingFee);
 
-        if (!breakdownStr && draws === 0) {
+        if (!breakdownStr && draws === 0 && result.heldForShipping) {
+            breakdownStr = `สะสมยอด ${amount}฿ (รอค่าส่ง ${shippingFee}฿)`;
+        } else if (!breakdownStr && draws === 0) {
             const shortAmount = Math.max(0, neededForOne - virtualBalance);
             breakdownStr = `สะสมยอด ${amount}฿ (ขาดอีก ${shortAmount}฿ ถึงจะได้ ${defaultName})`;
         }
@@ -1968,24 +2561,11 @@ app.post('/api/queue/manual_amount', async (req, res) => {
         let { data: customer } = await supabase.from('customers').select('*').eq('line_id', slip.line_id).single();
         let currentBalance = (customer ? customer.balance : 0) + amount; 
 
-        let pastSlipsQuery = supabase.from('slips')
-            .select('draws')
-            .eq('line_id', slip.line_id)
-            .neq('status', 'rejected')
-            .neq('id', slipId);
-
-        if (activeLiveSession) {
-            pastSlipsQuery = pastSlipsQuery.eq('session_id', activeLiveSession.id);
-        } else {
-            pastSlipsQuery = pastSlipsQuery.eq('trans_date', getTodayString());
-        }
-        const { data: todaySlips } = await pastSlipsQuery;
-        
-        let pastDrawsToday = todaySlips ? todaySlips.reduce((sum, s) => sum + (s.draws || 0), 0) : 0;
+        let pastDrawsToday = countPastDraws(slip.line_id, { excludeId: slipId, excludeRejected: true });
         let hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
         let virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
         
-        let result = calculateBestDraws(virtualBalance, pastDrawsToday);
+        let result = calculateBestDraws(virtualBalance, pastDrawsToday, { holdExactPrice: true });
         let breakdownStr = result.breakdown.join(', ');
         
         const parts = (slip.qr_payload || '').split('|');
@@ -1995,23 +2575,29 @@ app.post('/api/queue/manual_amount', async (req, res) => {
             amount: amount, draws: result.draws, qr_payload: payloadRef
         }).eq('id', slipId);
 
+        const finalBalance = walletAfter(result, currentBalance);
         if (customer) {
-            await supabase.from('customers').update({ balance: result.remainder }).eq('line_id', slip.line_id);
+            await supabase.from('customers').update({ balance: finalBalance }).eq('line_id', slip.line_id);
         } else if (slip.line_id) {
-            await supabase.from('customers').insert([{ line_id: slip.line_id, name: slip.line_name || 'ลูกค้า LINE', balance: result.remainder }]);
+            await supabase.from('customers').insert([{ line_id: slip.line_id, name: slip.line_name || 'ลูกค้า LINE', balance: finalBalance }]);
         }
 
         broadcastTodayStats(); 
-        res.json({ success: true, draws: result.draws, remainder: result.remainder });
+        res.json({ success: true, draws: result.draws, remainder: finalBalance });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 
 // 📝 API อนุมัติหรือปัดตกสลิปผิดปกติหลังจบไลฟ์
 app.post('/api/queue/verify_abnormal', async (req, res) => {
-    const { slipIds, isApproved } = req.body;
+    const { slipIds, isApproved } = req.body || {};
+    // 🛡️ รับเฉพาะรายการเลข ID ที่ถูกต้อง (เหมือน /api/queue/action) ป้องกันการอัปเดตผิดแถว
+    const ids = Array.isArray(slipIds) ? slipIds.map(Number).filter(Number.isInteger) : [];
+    if (ids.length === 0) {
+        return res.status(400).json({ success: false, error: 'ไม่พบรายการสลิปที่ถูกต้อง' });
+    }
     try {
         const newStatus = isApproved ? 'completed' : 'rejected';
-        await supabase.from('slips').update({ status: newStatus }).in('id', slipIds);
+        await supabase.from('slips').update({ status: newStatus }).in('id', ids);
         await broadcastTodayStats();
         res.json({ success: true });
     } catch(err) {
@@ -2027,15 +2613,16 @@ app.post('/api/queue/reject_slip', async (req, res) => {
         if (slip) {
             await supabase.from('slips').update({ status: 'rejected' }).eq('id', slipId);
             
-            // ส่งข้อความแจ้งลูกค้าใน LINE หากมี line_id
-            if (slip.line_id) {
-                try {
-                    await axios.post('https://api.line.me/v2/bot/message/push', {
-                        to: slip.line_id,
-                        messages: [{ type: 'text', text: 'ขออภัยนะคะ 🥺 รูปภาพที่คุณลูกค้าส่งมาไม่ใช่สลิปการโอนเงิน รบกวนส่งรูปสลิปใหม่อีกครั้งนะคะ 🙏' }]
-                    }, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.LINE_ACCESS_TOKEN}` } });
-                } catch(e) {}
-            }
+            // 🔕 ปิดการส่งข้อความแจ้งลูกค้า "รูปนี้ไม่ใช่สลิป" ตามที่ร้านกำหนด (v1.0.8)
+            // คงไว้เฉพาะข้อความขอบคุณหลังลูกค้าได้สิทธิ์ (และไม่เสียโควตา Push Message ของ LINE OA)
+            // if (slip.line_id) {
+            //     try {
+            //         await axios.post('https://api.line.me/v2/bot/message/push', {
+            //             to: slip.line_id,
+            //             messages: [{ type: 'text', text: 'ขออภัยนะคะ 🥺 รูปภาพที่คุณลูกค้าส่งมาไม่ใช่สลิปการโอนเงิน รบกวนส่งรูปสลิปใหม่อีกครั้งนะคะ 🙏' }]
+            //         }, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.LINE_ACCESS_TOKEN}` } });
+            //     } catch(e) {}
+            // }
         }
         await broadcastTodayStats();
         res.json({ success: true });
@@ -2743,6 +3330,13 @@ app.post('/webhook', async (req, res) => {
     const channelSecret = (process.env.LINE_CHANNEL_SECRET || '').trim();
     const signature = req.headers['x-line-signature'];
 
+    // ⚠️ ร้านที่ยังไม่ได้ใส่ LINE Channel Secret: ยังรับ Webhook ต่อเหมือนเดิม (ไม่ให้ระบบหยุด) แต่เตือนในหน้าบันทึกระบบ
+    // ให้ใส่ค่าในหน้าตั้งค่าเชื่อมต่อ เพื่อเปิดการตรวจลายเซ็นกันข้อความปลอม (เตือนไม่เกิน 1 ครั้งต่อชั่วโมง)
+    if (!channelSecret && (!global.__lastNoSecretWarn || Date.now() - global.__lastNoSecretWarn > 60 * 60 * 1000)) {
+        global.__lastNoSecretWarn = Date.now();
+        addLog('WARN', '⚠️ ยังไม่ได้ตั้งค่า LINE Channel Secret ระบบจึงตรวจไม่ได้ว่าข้อความมาจาก LINE จริง กรุณาใส่ Channel Secret ในหน้าตั้งค่าเชื่อมต่อ');
+    }
+
     if (channelSecret) {
         if (!signature || typeof signature !== 'string') {
             addLog('WARN', '🚨 ปฏิเสธ Webhook: ไม่พบลายเซ็น x-line-signature (Security Guard)');
@@ -2830,6 +3424,17 @@ app.post('/webhook', async (req, res) => {
                         }
                         // บันทึกที่อยู่ลง configs ผูกกับ line_id ของลูกค้า
                         const addrConfigKey = `cust_addr_${userId}`;
+                        // 🛡️ ถ้าข้อความใหม่ให้ข้อมูลไม่ครบ (เช่น ส่งมาแค่เบอร์โทร) ให้คงช่องเดิมที่เคยบันทึกไว้ ไม่ลบที่อยู่ดีๆ ทิ้ง
+                        try {
+                            const { data: prevRow } = await supabase.from('configs').select('value').eq('key', addrConfigKey).single();
+                            if (prevRow && prevRow.value) {
+                                const prev = JSON.parse(prevRow.value);
+                                for (const f of ['phone', 'address', 'subdistrict', 'district', 'province', 'postcode']) {
+                                    const nv = parsedAddress[f];
+                                    if ((nv === undefined || nv === null || String(nv).trim() === '') && prev[f]) parsedAddress[f] = prev[f];
+                                }
+                            }
+                        } catch (mergeErr) { /* ไม่มีที่อยู่เดิม หรืออ่านไม่ได้ ใช้ข้อมูลใหม่ตามปกติ */ }
                         await supabase.from('configs').upsert([{
                             key: addrConfigKey,
                             value: JSON.stringify(parsedAddress)
@@ -2853,11 +3458,34 @@ app.post('/webhook', async (req, res) => {
         else if (event.type === 'message' && event.message.type === 'image') {
             const messageId = event.message.id;
             const imageBuffer = await downloadImageFromLine(messageId);
-            if (!imageBuffer) continue;
+            if (!imageBuffer) {
+                // 🛡️ อย่าทิ้งเงียบ: บันทึก Log ให้แม่ค้า/แอดมินรู้ว่ามีลูกค้าส่งรูปมาแต่ดาวน์โหลดจาก LINE ไม่สำเร็จ
+                const failName = await getLineProfile(userId).catch(() => '') || userId;
+                addLog('WARN', `ดาวน์โหลดรูปจาก LINE ไม่สำเร็จ (ลูกค้า "${failName}") กรุณาตรวจสอบสลิปในแชท LINE OA ด้วยตนเอง`);
+                continue;
+            }
 
-            const slipResult = await verifySlipWithProvider(imageBuffer);
+            let slipResult = await verifySlipWithProvider(imageBuffer);
             // ✅ ดึงชื่อ LINE จากโปรไฟล์ผู้ใช้อย่างถูกต้อง 100%
             const lineName = await getLineProfile(userId);
+
+            // 🛡️ ตรวจความถูกต้องของยอดเงินและรหัสอ้างอิงก่อนให้สิทธิ์อัตโนมัติ
+            // - ยอดต้องเป็นตัวเลขบวก ไม่เกิน 1,000,000 (เหมือนการใส่ยอดเอง)
+            // - ต้องมีรหัสอ้างอิงสลิปจริง (รหัสที่ระบบสร้างจากเวลาเอง ตรวจสลิปซ้ำไม่ได้)
+            // ถ้าไม่ผ่าน ให้ส่งเข้าคิว "ตรวจสลิปเอง" แทน ไม่ปล่อยให้ยอดในกระเป๋าลูกค้าเพี้ยน
+            if (slipResult && slipResult.success) {
+                const d = slipResult.data || {};
+                const amt = Number(d.amount);
+                const ref = String(d.transRef || '').trim();
+                const isSyntheticRef = /^(EASY|THUNDER|SLIPVERIFY)_\d{13}$/.test(ref);
+                if (!Number.isFinite(amt) || amt <= 0 || amt > 1000000 || !ref || isSyntheticRef) {
+                    addLog('WARN', `สลิปจากลูกค้า "${lineName}" อ่านได้แต่ข้อมูลไม่ครบ (ยอด: ${d.amount}, รหัสอ้างอิง: ${ref || '-'}) ส่งเข้าคิวให้แอดมินตรวจเอง`);
+                    slipResult = null;
+                } else {
+                    d.amount = amt;
+                    d.transRef = ref;
+                }
+            }
             
             if (slipResult && slipResult.success) {
                 const slipData = slipResult.data;
@@ -2878,7 +3506,7 @@ app.post('/webhook', async (req, res) => {
                 const amount = slipData.amount;
 
                 // 🛡️ ป้องกันสลิปซ้ำระดับ B-Tree Index: เช็กว่ารหัสสลิปนี้เคยส่งเข้ามาในระบบแล้วหรือยัง
-                const existingSlip = supabase.db.prepare('SELECT id, trans_date FROM slips WHERE trans_ref = ? LIMIT 1').get(transRef);
+                const existingSlip = supabase.db.prepare("SELECT id, trans_date FROM slips WHERE trans_ref = ? AND trans_ref IS NOT NULL AND trans_ref != '' LIMIT 1").get(transRef);
                 if (existingSlip) {
                     addLog('WARN', `ตรวจพบสลิปซ้ำ: ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ที่เคยบันทึกไปแล้ว`);
                     console.log(`⚠️ ตรวจพบสลิปซ้ำ: ${transRef}`);
@@ -2889,21 +3517,14 @@ app.post('/webhook', async (req, res) => {
                 let customer = supabase.db.prepare('SELECT * FROM customers WHERE line_id = ?').get(userId);
                 let currentBalance = (customer ? customer.balance : 0) + amount; 
 
-                let pastSlipsRows = [];
-                if (activeLiveSession) {
-                    pastSlipsRows = supabase.db.prepare('SELECT draws FROM slips WHERE line_id = ? AND session_id = ?').all(userId, activeLiveSession.id);
-                } else {
-                    pastSlipsRows = supabase.db.prepare('SELECT draws FROM slips WHERE line_id = ? AND trans_date = ?').all(userId, getTodayString());
-                }
-
-                let pastDrawsToday = pastSlipsRows.reduce((sum, slip) => sum + (slip.draws || 0), 0);
+                let pastDrawsToday = countPastDraws(userId);
 
                 let hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
                 let virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
                 
-                let result = calculateBestDraws(virtualBalance, pastDrawsToday);
+                let result = calculateBestDraws(virtualBalance, pastDrawsToday, { holdExactPrice: true });
                 let draws = result.draws;
-                let remainingBalance = result.remainder;
+                let remainingBalance = walletAfter(result, currentBalance);
 
                 const status = draws > 0 ? 'waiting' : 'accumulated';
                 let breakdownStr = result.breakdown.join(', ');
@@ -2912,9 +3533,12 @@ app.post('/webhook', async (req, res) => {
                 // 🔒 Atomic Transaction: รวมการบันทึกยอดเงินลูกค้าและสลิปเป็น Atomic Unit เพื่อป้องกัน Race Condition 100%
                 let inserted = null;
                 try {
+                    // ⚡ Self-Healing: ถ้าฐานข้อมูลไม่ว่างชั่วคราว (database is locked) ลองบันทึกใหม่สูงสุด 3 ครั้ง ก่อนส่งเข้าคิวตรวจเอง
+                    for (let txAttempt = 1; ; txAttempt++) {
+                    try {
                     inserted = supabase.runTransaction(() => {
                         // Double check ป้องกัน race condition ในระดับ transaction
-                        const dup = supabase.db.prepare('SELECT id FROM slips WHERE trans_ref = ? LIMIT 1').get(transRef);
+                        const dup = supabase.db.prepare("SELECT id FROM slips WHERE trans_ref = ? AND trans_ref IS NOT NULL AND trans_ref != '' LIMIT 1").get(transRef);
                         if (dup) throw new Error('DUPLICATE_SLIP');
 
                         if (customer) {
@@ -2935,6 +3559,19 @@ app.post('/webhook', async (req, res) => {
                         );
                         return { id: info.lastInsertRowid };
                     });
+                    if (txAttempt > 1) {
+                        reportSelfHealingToDiscord({ category: 'DATABASE', title: 'ฐานข้อมูลไม่ว่างชั่วคราว', issue: `บันทึกสลิปของ "${lineName}" ครั้งแรกไม่สำเร็จเพราะฐานข้อมูลไม่ว่าง`, actionDetails: `ลองบันทึกใหม่อัตโนมัติ สำเร็จในครั้งที่ ${txAttempt}` }).catch(() => {});
+                    }
+                    break;
+                    } catch (busyErr) {
+                        if (txAttempt < 3 && /SQLITE_BUSY|database is locked/i.test(String(busyErr && busyErr.message))) {
+                            addLog('WARN', `ฐานข้อมูลไม่ว่างชั่วคราว กำลังลองบันทึกสลิปของ "${lineName}" ใหม่ (ครั้งที่ ${txAttempt + 1})`);
+                            await new Promise(r => setTimeout(r, 1500));
+                            continue;
+                        }
+                        throw busyErr;
+                    }
+                    }
                 } catch (txErr) {
                     if (txErr.message === 'DUPLICATE_SLIP' || (txErr.message && txErr.message.includes('UNIQUE constraint failed'))) {
                         addLog('WARN', `ตรวจพบสลิปซ้ำ (Atomic Unique Lock): ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ซ้ำ`);
@@ -2942,7 +3579,24 @@ app.post('/webhook', async (req, res) => {
                         // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                         continue;
                     }
-                    throw txErr;
+                    // 🛡️ ฐานข้อมูลขัดข้องชั่วคราว: อย่าทำสลิปที่ลูกค้าจ่ายแล้วหาย ให้เก็บรูปเข้าคิว "ตรวจสลิปเอง" แทน
+                    // (ยอดกระเป๋าลูกค้าใน transaction ถูกยกเลิกทั้งชุดแล้ว จึงไม่มียอดซ้ำ)
+                    addLog('ERROR', `บันทึกสลิปอัตโนมัติของ "${lineName}" ไม่สำเร็จ (${txErr.message}) ส่งเข้าคิวให้แอดมินตรวจเอง`);
+                    try {
+                        const fbName = `manual_${Date.now()}_${userId}.jpg`;
+                        await fs.promises.writeFile(path.join(uploadsDir, fbName), Buffer.from(imageBuffer));
+                        await supabase.from('slips').insert([{
+                            amount: 0, draws: 0, line_id: userId, sender_name: lineName, line_name: lineName,
+                            session_id: activeLiveSession ? activeLiveSession.id : null,
+                            trans_date: getTodayString(), trans_time: getLocalTimeString(),
+                            qr_payload: `manual_image|/uploads/${fbName}`, status: 'waiting'
+                        }]).select().single();
+                        io.emit('play_sound');
+                        broadcastTodayStats();
+                    } catch (fbErr) {
+                        addLog('ERROR', `เก็บสลิปสำรองไม่สำเร็จ: ${fbErr.message} (กรุณาตรวจสลิปของ "${lineName}" ในแชท LINE)`);
+                    }
+                    continue;
                 }
 
                 if (inserted) {
@@ -2971,7 +3625,20 @@ app.post('/webhook', async (req, res) => {
                         await replyLineMessage(replyToken, replyMsg, userId);
                     } else {
                         broadcastTodayStats(); 
-                        // await replyLineMessage(replyToken, `ผักกาดได้รับยอดแล้วน้าา\n(แต่ยอดรวมตอนนี้ยังไม่พอสำหรับสินค้านะคะ รบกวนโอนเพิ่มอีกนิดนึงน้าา 😉)`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด (ข้อ 4)
+                        // 💬 ยอดยังไม่พอ/พักรอค่าส่ง: แจ้งแม่ค้าบนหน้าจอ (เสียงเตือน + กล่อง "รอโอนเพิ่ม") และตอบลูกค้าให้โอนเพิ่ม (v1.0.11)
+                        try {
+                            const tp = describeTopup(remainingBalance, pastDrawsToday);
+                            if (tp && tp.need > 0) {
+                                io.emit('topup_needed', { name: lineName, need: tp.need, held: tp.held });
+                                addLog('INFO', `ลูกค้า "${lineName}" ยอดยังไม่พอ ต้องโอนเพิ่มอีก ${fmtBaht(tp.need)}฿${tp.held ? ' (ค่าส่ง)' : ''}`);
+                                const topupMsg = tp.held
+                                    ? `ผักกาดได้รับยอด ${fmtBaht(remainingBalance)} บาทแล้วน้าา 💖\nยอดนี้เท่ากับราคาสินค้าพอดี แต่ยังไม่รวมค่าส่ง ${fmtBaht(shippingFee)} บาทนะคะ\nรบกวนโอนค่าส่งเพิ่มอีก ${fmtBaht(tp.need)} บาท ผักกาดจะรีบเข้าคิวให้ค่า 🙏\n(ถ้าต้องการสินค้าชิ้นอื่น พิมพ์บอกผักกาดในแชทนี้ได้เลยน้า)`
+                                    : `ผักกาดได้รับยอดแล้วน้าา 💖\nแต่ตอนนี้ยอดรวม (รวมค่าส่งแล้ว) ยังไม่พอสำหรับสินค้านะคะ\nรบกวนโอนเพิ่มอีก ${fmtBaht(tp.need)} บาท ผักกาดจะรีบเข้าคิวให้ค่า 🙏`;
+                                await replyLineMessage(replyToken, topupMsg, userId);
+                            }
+                        } catch (topupErr) {
+                            addLog('WARN', `แจ้งเตือนรอโอนเพิ่มของ "${lineName}" ไม่สำเร็จ: ${topupErr.message}`);
+                        }
                     }
                 }
             } else {
@@ -3142,6 +3809,46 @@ async function updateLineWebhookEndpoint(publicUrl, retries = 3) {
 }
 
 // 🚇 ระบบท่อเชื่อมต่อสัญญาณอัจฉริยะแบบ Dual-Engine (Cloudflare + LocalTunnel Fallback)
+// 🔁 P1-7 Cloudflare Tunnel Watchdog
+// - ถ้าโปรแกรม Tunnel ปิดตัวกลางทาง: เปิดใหม่อัตโนมัติ หน่วง 5 → 15 → 30 → 60 วินาที
+// - ทุก 60 วินาที ทดสอบเรียกลิงก์สาธารณะของร้าน ถ้าล้มเหลว 3 ครั้งติด (≈3 นาที) ถือว่าค้าง สั่งปิดเพื่อให้ Watchdog เปิดใหม่
+let tunnelRestartAttempt = 0;
+let tunnelRestartTimer = null;
+let tunnelProbeTimer = null;
+let tunnelProbeFailures = 0;
+function scheduleTunnelRestart(port, reason) {
+    if (tunnelRestartTimer) return; // มีการนัดเปิดใหม่อยู่แล้ว
+    const delays = [5, 15, 30, 60];
+    const delaySec = delays[Math.min(tunnelRestartAttempt, delays.length - 1)];
+    tunnelRestartAttempt += 1;
+    if (tunnelProbeTimer) { clearInterval(tunnelProbeTimer); tunnelProbeTimer = null; }
+    addLog('WARN', `🔁 ${reason} — จะเชื่อมต่อ Tunnel ใหม่อัตโนมัติใน ${delaySec} วินาที (ครั้งที่ ${tunnelRestartAttempt})`);
+    io.emit('tunnel_status', { active: false, url: null, type: 'Cloudflare', reconnecting: true });
+    tunnelRestartTimer = setTimeout(() => {
+        tunnelRestartTimer = null;
+        if (typeof shuttingDown !== 'undefined' && shuttingDown) return;
+        startAutoTunnel(port);
+    }, delaySec * 1000);
+}
+function startTunnelHealthProbe(port) {
+    if (tunnelProbeTimer) clearInterval(tunnelProbeTimer);
+    tunnelProbeFailures = 0;
+    tunnelProbeTimer = setInterval(async () => {
+        if (!currentPublicUrl || !cloudflareProcess) return;
+        try {
+            await axios.get(`${currentPublicUrl}/api/health`, { timeout: 10000 });
+            tunnelProbeFailures = 0;
+        } catch (e) {
+            tunnelProbeFailures += 1;
+            if (tunnelProbeFailures >= 3) {
+                tunnelProbeFailures = 0;
+                addLog('WARN', '🔁 ตรวจพบ Tunnel ค้าง (เรียกลิงก์สาธารณะไม่ได้ 3 ครั้งติด) กำลังเริ่มการเชื่อมต่อใหม่');
+                try { cloudflareProcess.kill(); } catch (killErr) { scheduleTunnelRestart(port, 'Tunnel ค้าง'); }
+            }
+        }
+    }, 60 * 1000);
+}
+
 function startAutoTunnel(port) {
     const cloudflaredPath = path.join(__dirname, 'cloudflared.exe');
     
@@ -3179,6 +3886,8 @@ function startAutoTunnel(port) {
                         synced: false 
                     });
                     updateLineWebhookEndpoint(currentPublicUrl);
+                    tunnelRestartAttempt = 0;
+                    startTunnelHealthProbe(port);
                     sendDiscordAlert({
                         type: 'SUCCESS',
                         category: 'STARTUP',
@@ -3197,7 +3906,12 @@ function startAutoTunnel(port) {
                 console.log(`🚇 Cloudflare Tunnel ปิดการทำงาน (code: ${code})`);
                 if (!urlFound) {
                     startLocalTunnelFallback(port);
+                    return;
                 }
+                // 🔁 P1-7 Watchdog: Tunnel เคยเชื่อมต่อแล้วแต่หลุดกลางทาง → เปิดใหม่อัตโนมัติแบบหน่วงเวลา 5/15/30/60 วินาที
+                // (startAutoTunnel จะได้ลิงก์ใหม่และซิงก์ Webhook URL ไปที่ LINE ให้อัตโนมัติ)
+                if (typeof shuttingDown !== 'undefined' && shuttingDown) return;
+                scheduleTunnelRestart(port, `Tunnel หลุด (code: ${code})`);
             });
 
             cloudflareProcess.on('error', (err) => {
@@ -3429,7 +4143,9 @@ function isUpdateUrlAllowed(url) {
         const isOfficialGitHub = (
             (hostname === 'github.com' && pathname.startsWith('/Napat-Newbie/AutoQueueforLive/')) ||
             (hostname === 'raw.githubusercontent.com' && pathname.startsWith('/Napat-Newbie/AutoQueueforLive/')) ||
-            (hostname === 'objects.githubusercontent.com' && pathname.includes('AutoQueueforLive'))
+            (hostname === 'objects.githubusercontent.com' && pathname.includes('AutoQueueforLive')) ||
+            // GitHub ย้ายไฟล์ release ไปโดเมนนี้ (ต.ค. 2026) อนุญาตเฉพาะไฟล์ของ repo นี้ (repo id 1419733580)
+            (hostname === 'release-assets.githubusercontent.com' && pathname.startsWith('/github-production-release-asset/1419733580/'))
         );
 
         return isOfficialGitHub;
@@ -3614,7 +4330,12 @@ function startServerGracefully(portToTry, retriesLeft = 4) {
         addLog('SUCCESS', `เปิดเซิร์ฟเวอร์สำเร็จที่พอร์ต ${portToTry}`);
         
         // 🌐 เปิดหน้าต่างเบราว์เซอร์เข้าสู่ Dashboard ทันทีที่เซิร์ฟเวอร์พร้อม (พร้อมหน้าโหลด 3 วินาที)
-        try {
+        // ⚡ ถ้าเป็นการเปิดใหม่อัตโนมัติหลังโปรแกรมหยุดผิดปกติ ไม่ต้องเปิดเบราว์เซอร์ซ้ำ (หน้าเดิมจะเชื่อมต่อใหม่เอง)
+        const autoRestartCount = Number(process.env.AQ_RESTART_COUNT || 0);
+        if (autoRestartCount > 0) {
+            addLog('WARN', `โปรแกรมหยุดทำงานผิดปกติ ระบบเปิดใหม่ให้อัตโนมัติแล้ว (ครั้งที่ ${autoRestartCount})`);
+            reportSelfHealingToDiscord({ category: 'SYSTEM_RESTART', title: 'เปิดโปรแกรมใหม่อัตโนมัติ', issue: 'โปรแกรมหลักหยุดทำงานผิดปกติ', actionDetails: `ตัวเฝ้าโปรแกรมเปิดใหม่ให้ภายใน 5 วินาที (ครั้งที่ ${autoRestartCount}) ดูสาเหตุใน supervisor.log` }).catch(() => {});
+        } else try {
             const { exec } = require('child_process');
             exec(`start http://localhost:${portToTry}`);
         } catch(e) {}
