@@ -42,6 +42,15 @@ class TelemetryWatcher {
                 badge: 'Self-Healer'
             },
             {
+                id: 'gemini-coder',
+                convId: this.parentConvId,
+                name: 'น้องเจมินี่ (Gemini 3.8 Flash)',
+                type: 'gemini_coder',
+                role: 'Lead Coder & Performance Optimizer',
+                icon: '💻',
+                badge: 'Lead Coder'
+            },
+            {
                 id: 'kiro-conductor',
                 convId: 'f831f216-6a32-4073-b115-9caeb0977f57',
                 name: 'หัวหน้าคิโร่ (Kiro Conductor)',
@@ -178,6 +187,11 @@ class TelemetryWatcher {
                 badge = 'Self-Healer (Ready)';
                 targetFile = 'data.sqlite & runtime';
                 operation = 'Hot Mitigation Ready';
+            } else if (agent.id === 'gemini-coder') {
+                currentAction = '💻 วิศวกรผู้พัฒนาโค้ด (Gemini 3.8 Flash) สแตนด์บายพร้อมรับสเปกและลงมือพัฒนา';
+                badge = 'Lead Coder (Ready)';
+                targetFile = 'Codebase & Engine';
+                operation = 'Coder Standby';
             } else if (agent.id === 'kiro-conductor') {
                 currentAction = '🛡️ หัวหน้าฝ่ายสถาปัตยกรรม (Opus Tier) ควบคุมการวิเคราะห์และตรวจสอบความปลอดภัย';
                 badge = 'Chief Auditor (Opus)';
