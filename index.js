@@ -2130,15 +2130,16 @@ app.post('/api/queue/reject_slip', async (req, res) => {
         if (slip) {
             await supabase.from('slips').update({ status: 'rejected' }).eq('id', slipId);
             
-            // ส่งข้อความแจ้งลูกค้าใน LINE หากมี line_id
-            if (slip.line_id) {
-                try {
-                    await axios.post('https://api.line.me/v2/bot/message/push', {
-                        to: slip.line_id,
-                        messages: [{ type: 'text', text: 'ขออภัยนะคะ 🥺 รูปภาพที่คุณลูกค้าส่งมาไม่ใช่สลิปการโอนเงิน รบกวนส่งรูปสลิปใหม่อีกครั้งนะคะ 🙏' }]
-                    }, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.LINE_ACCESS_TOKEN}` } });
-                } catch(e) {}
-            }
+            // 🔕 ปิดการส่งข้อความแจ้งลูกค้า "รูปนี้ไม่ใช่สลิป" ตามที่ร้านกำหนด (v1.0.8)
+            // คงไว้เฉพาะข้อความขอบคุณหลังลูกค้าได้สิทธิ์ (และไม่เสียโควตา Push Message ของ LINE OA)
+            // if (slip.line_id) {
+            //     try {
+            //         await axios.post('https://api.line.me/v2/bot/message/push', {
+            //             to: slip.line_id,
+            //             messages: [{ type: 'text', text: 'ขออภัยนะคะ 🥺 รูปภาพที่คุณลูกค้าส่งมาไม่ใช่สลิปการโอนเงิน รบกวนส่งรูปสลิปใหม่อีกครั้งนะคะ 🙏' }]
+            //         }, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.LINE_ACCESS_TOKEN}` } });
+            //     } catch(e) {}
+            // }
         }
         await broadcastTodayStats();
         res.json({ success: true });
