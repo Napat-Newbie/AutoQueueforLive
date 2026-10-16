@@ -23,3 +23,11 @@ install_mingit.ps1
 scratch/
 scratch_*.js
 *.tmp
+
+# Generated at runtime / build time (not source)
+keep_awake.ps1
+releases/staging/
+*.bak_*
+sentinel/proposals.json
+updates/
+backups/

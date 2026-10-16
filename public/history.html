@@ -136,6 +136,17 @@
     </div>
 
     <script>
+        // 🛡️ กัน XSS: ชื่อ LINE ของลูกค้าตั้งเองได้ ต้อง escape ก่อนแสดงผลด้วย innerHTML
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
         function formatDisplayDate(rawDate) {
             if (!rawDate || rawDate.length !== 8) return rawDate;
             const year = rawDate.substring(0, 4);
@@ -183,8 +194,8 @@
                 else if(item.status === 'rejected') { badgeClass = 'status-skipped'; statusText = 'ปัดตก/ยกเลิก'; }
 
                 const payloadParts = (item.ref || '').split('|');
-                const safeRef = payloadParts[0] ? payloadParts[0].replace('-test-', '***').substring(0, 18) : '-';
-                const breakdownHtml = payloadParts[1] ? `<br><span style="color:#1a73e8; font-size: 0.9em; font-weight:500;">📦 ${payloadParts[1]}</span>` : '';
+                const safeRef = escapeHtml(payloadParts[0] ? payloadParts[0].replace('-test-', '***').substring(0, 18) : '-');
+                const breakdownHtml = payloadParts[1] ? `<br><span style="color:#1a73e8; font-size: 0.9em; font-weight:500;">📦 ${escapeHtml(payloadParts[1])}</span>` : '';
 
                 // 🆕 ลอจิกทำ Report แยกสินค้า
                 if (item.draws > 0 && item.status !== 'skipped') { // นับเฉพาะบิลที่มีการจ่ายของออกไป
@@ -211,9 +222,9 @@
                 // สร้างตารางประวัติสลิปปกติ
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td style="color: #444; font-weight: 500;">${formatDisplayDate(item.date)}</td>
-                    <td style="color: #666;">${item.time || '-'}</td>
-                    <td><strong>${item.name}</strong> <br><span style="font-size:0.85em; color:#00b900;">${item.lineName ? '📱 '+item.lineName : ''}</span></td>
+                    <td style="color: #444; font-weight: 500;">${escapeHtml(formatDisplayDate(item.date))}</td>
+                    <td style="color: #666;">${escapeHtml(item.time || '-')}</td>
+                    <td><strong>${escapeHtml(item.name)}</strong> <br><span style="font-size:0.85em; color:#00b900;">${item.lineName ? '📱 '+escapeHtml(item.lineName) : ''}</span></td>
                     <td style="font-weight: 500; color:#111;">฿${item.amount.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
                     <td style="color:#4caf50; font-weight:500;">🎟️ ${item.draws} ชิ้น ${breakdownHtml}</td>
                     <td><span class="badge ${badgeClass}">${statusText}</span></td>
@@ -235,7 +246,7 @@
             const sortedProducts = Object.entries(productCounts).sort((a, b) => b[1] - a[1]);
             for (let [name, qty] of sortedProducts) {
                 hasProduct = true;
-                productListUI.innerHTML += `<li><span>${name}</span> <strong>${qty} ชิ้น</strong></li>`;
+                productListUI.innerHTML += `<li><span>${escapeHtml(name)}</span> <strong>${qty} ชิ้น</strong></li>`;
             }
             if (!hasProduct) productListUI.innerHTML = '<li style="color: #999; justify-content: center;">ไม่มียอดการแพ็คสินค้า</li>';
 
@@ -248,7 +259,7 @@
             for (let dateStr of sortedDates) {
                 hasCustomer = true;
                 let customersArray = Array.from(dailyCustomers[dateStr]);
-                let customersText = customersArray.join(', ');
+                let customersText = customersArray.map(escapeHtml).join(', ');
                 
                 customerListUI.innerHTML += `
                     <div class="customer-date-group">

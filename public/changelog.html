@@ -21,7 +21,7 @@
                 <div>
                     <div class="flex items-center space-x-2.5">
                         <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">Version History & Changelog</h1>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.7 (CURRENT)</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.8 (CURRENT)</span>
                     </div>
                     <p class="text-xs text-zinc-400 mt-0.5">บันทึกประวัติการปรับปรุง แก้ไขบั๊ก และฟีเจอร์ใหม่ของ AutoQueue for Live ทั้งหมด</p>
                 </div>
@@ -34,12 +34,42 @@
         <!-- Timeline Container -->
         <div class="space-y-6">
 
-            <!-- v1.0.7 -->
+            <!-- v1.0.8 -->
             <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
                     <div class="flex items-center space-x-3">
-                        <span class="text-lg font-bold text-white">🚀 Version 1.0.7</span>
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.8</span>
                         <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">16 ตุลาคม 2026</span>
+                </div>
+
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">⚡ ความถูกต้องของยอดเงินและคิว:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>สลิปที่ยอดเงินผิดปกติหรือไม่มีรหัสอ้างอิง จะเข้าคิว "ตรวจสลิปเอง" แทนการให้สิทธิ์อัตโนมัติ (กันยอดกระเป๋าลูกค้าเพี้ยน/สลิปนับซ้ำ)</li>
+                            <li>ฐานข้อมูลขัดข้องชั่วคราวระหว่างบันทึกสลิป รูปสลิปจะเข้าคิวตรวจเองแทนการหายไป</li>
+                            <li>ส่งออก Kerry ไม่ล่มอีกเมื่อที่อยู่ลูกค้ามีเครื่องหมายพิเศษ และที่อยู่เดิมไม่ถูกลบเมื่อลูกค้าส่งข้อมูลมาไม่ครบ</li>
+                            <li>กดปุ่มคิวแล้วทำรายการไม่สำเร็จ จะมีข้อความแจ้ง และมีแถบแจ้งเตือนเมื่อการเชื่อมต่อหลุด</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 class="text-xs font-bold text-blue-400 uppercase tracking-wider mb-1.5">🛡️ ความปลอดภัย:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>เปิดหน้าร้านผ่านลิงก์ภายนอก ต้องเข้าสู่ระบบก่อนกดปุ่มจัดการคิวหรือดูรูปสลิป (บนเครื่องร้านใช้งานได้ทันทีเหมือนเดิม)</li>
+                            <li>ตั้งรหัสผ่านร้านครั้งแรกได้จากเครื่องร้านค้าเท่านั้น และปิดช่องโหว่ชื่อ LINE ที่ฝังคำสั่งอันตราย</li>
+                            <li>ระบบ Sentinel และหน้าข้อมูลภายใน ใช้ได้เฉพาะเครื่องผู้พัฒนา ลิงก์อนุมัติจากมือถือหมดอายุใน 72 ชั่วโมง</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- v1.0.7 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.7</span>
                         <span class="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/40 font-bold">Kiro & Claude Opus Certified</span>
                     </div>
                     <span class="text-xs text-zinc-400 font-mono">16 ตุลาคม 2026</span>

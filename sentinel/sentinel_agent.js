@@ -472,10 +472,21 @@ class SentinelAgent {
             };
         }
 
-        if (proposal.token !== token) {
+        // 🛡️ เทียบ Token แบบ constant-time และกำหนดอายุลิงก์ 72 ชั่วโมง (ลิงก์ที่หลุดไปจะใช้ไม่ได้ตลอดไป)
+        const expectedTok = Buffer.from(String(proposal.token || ''));
+        const givenTok = Buffer.from(String(token || ''));
+        if (!expectedTok.length || expectedTok.length !== givenTok.length || !crypto.timingSafeEqual(expectedTok, givenTok)) {
             return {
                 success: false,
                 html: this.renderResponsePage('การเข้าถึงไม่ถูกต้อง', 'Security Token ไม่ถูกต้องหรือหมดอายุ', 'error')
+            };
+        }
+
+        const createdMs = Date.parse(proposal.createdAt || '');
+        if (proposal.status === 'PENDING' && Number.isFinite(createdMs) && Date.now() - createdMs > 72 * 60 * 60 * 1000) {
+            return {
+                success: false,
+                html: this.renderResponsePage('ลิงก์หมดอายุแล้ว', 'ลิงก์อนุมัตินี้เกิน 72 ชั่วโมงแล้ว เพื่อความปลอดภัยกรุณาตรวจสอบปัญหาใหม่อีกครั้ง', 'error')
             };
         }
 

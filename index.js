@@ -21,6 +21,40 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+// 🛡️ DEV-ONLY GUARD: เส้นทางของ Sentinel / Pixel Office / Telemetry ถูกประกาศก่อน RBAC middleware หลัก
+// จึงต้องป้องกันแยก: อนุญาตเฉพาะ (1) คำขอจากเครื่องนี้โดยตรง (ไม่ผ่าน Tunnel) หรือ (2) Session ของ Dreamdev
+// ยกเว้น /api/sentinel/action ซึ่งมี Token รายข้อเสนอของตัวเองสำหรับปุ่มอนุมัติจากมือถือ
+function isDirectLocalRequest(req) {
+    const addr = req.socket?.remoteAddress || '';
+    const isLoopback = addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+    // คำขอที่วิ่งผ่าน Cloudflare Tunnel / LocalTunnel จะมี Header เหล่านี้ติดมาเสมอ (มาจาก loopback เช่นกัน)
+    const viaProxy = req.headers['cf-connecting-ip'] || req.headers['cf-ray'] || req.headers['x-forwarded-for'];
+    return isLoopback && !viaProxy;
+}
+function isSentinelIngestSecretValid(req) {
+    const secret = (process.env.SENTINEL_INGEST_SECRET || '').trim();
+    const provided = String(req.headers['x-sentinel-secret'] || '');
+    if (!secret || !provided) return false;
+    const a = Buffer.from(provided); const b = Buffer.from(secret);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+app.use((req, res, next) => {
+    const p = req.path.toLowerCase();
+    const isDevSurface = (
+        (p.startsWith('/api/sentinel/') && p !== '/api/sentinel/action') ||
+        p.startsWith('/api/subagents/') ||
+        p === '/sentinel/office' ||
+        p === '/observer.html' ||
+        p === '/agent_telemetry.json'
+    );
+    if (!isDevSurface) return next();
+    if (isDirectLocalRequest(req)) return next();
+    if (p === '/api/sentinel/telemetry_ingest' && isSentinelIngestSecretValid(req)) return next();
+    const session = getSession(req);
+    if (session && session.role === 'dreamdev') return next();
+    return res.status(403).json({ success: false, message: 'FORBIDDEN: ส่วนนี้ใช้ได้เฉพาะเครื่องผู้พัฒนาเท่านั้น' });
+});
+
 // 🛰️ Realtime SubAgents Telemetry Watcher (Method 1)
 const telemetryWatcher = new TelemetryWatcher({ io });
 telemetryWatcher.start();
@@ -171,7 +205,7 @@ async function sendDiscordAlert(options = {}) {
     const fields = [
         { name: '🏢 ร้านค้า', value: shopName, inline: true },
         { name: '🕒 เวลา', value: new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }), inline: true },
-        { name: '📦 เวอร์ชัน', value: 'v1.0.6', inline: true }
+        { name: '📦 เวอร์ชัน', value: `v${require('./package.json').version}`, inline: true }
     ];
 
     if (publicUrl) {
@@ -285,11 +319,27 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
+    // 🛡️ CORS: หน้า Dashboard เรียก API จากโดเมนเดียวกันอยู่แล้ว จึงอนุญาตข้ามโดเมนเฉพาะ localhost และลิงก์ Tunnel ของร้านนี้
+    // (เดิมเป็น "*" ทำให้เว็บไซต์อื่นใดก็เรียก API ของร้านได้)
+    const origin = req.headers.origin;
+    if (origin) {
+        const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+        const isOwnTunnel = typeof currentPublicUrl === 'string' && currentPublicUrl && origin === currentPublicUrl.replace(/\/$/, '');
+        if (isLocalOrigin || isOwnTunnel) {
+            res.header("Access-Control-Allow-Origin", origin);
+            res.header("Vary", "Origin");
+        }
+    }
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
+});
+
+// 🛡️ รูปสลิปที่ลูกค้าส่งมา (มีชื่อ/ยอดโอน) ดูได้เฉพาะผู้ที่เข้าสู่ระบบแล้ว หรือเปิดจากเครื่องร้านค้าโดยตรง
+app.use('/uploads', (req, res, next) => {
+    if (isDirectLocalRequest(req) || getSession(req)) return next();
+    return res.status(401).send('กรุณาเข้าสู่ระบบก่อนดูรูปสลิป');
 });
 
 // 📱 Sentinel Mobile Approval Action Endpoint
@@ -661,8 +711,8 @@ async function loadConfig() {
     if (data) {
         data.forEach(item => {
             if (item.key === 'prices') { rawPriceString = item.value; priceList = parsePrices(item.value); }
-            if (item.key === 'shipping_fee') shippingFee = parseInt(item.value); 
-            if (item.key === 'free_shipping_threshold') freeShippingThreshold = parseInt(item.value); 
+            if (item.key === 'shipping_fee') { const n = parseInt(item.value, 10); if (Number.isFinite(n)) shippingFee = n; }
+            if (item.key === 'free_shipping_threshold') { const n = parseInt(item.value, 10); if (Number.isFinite(n)) freeShippingThreshold = n; }
             if (item.key === 'merchant_account_name') merchantAccountName = item.value;
             if (item.key === 'openchat_link') openchatLink = item.value; 
             if (item.key === 'slipok_package_limit') slipokPackageLimit = parseInt(item.value) || 100;
@@ -739,13 +789,21 @@ function issueSession(res, role) {
     const token = crypto.randomBytes(32).toString('hex');
     sessions.set(token, { role, exp: Date.now() + SESSION_TTL_MS });
     if (res && typeof res.setHeader === 'function') {
-        res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+        // 🛡️ ผ่าน Tunnel (HTTPS) ให้ติด Secure ป้องกันคุกกี้รั่วผ่าน HTTP; เปิดบนเครื่องร้าน (http://localhost) ทำงานเหมือนเดิม
+        const r = res.req || {};
+        const isHttps = r.secure || String(r.headers?.['x-forwarded-proto'] || '').includes('https') || String(r.headers?.['cf-visitor'] || '').includes('https');
+        res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}${isHttps ? '; Secure' : ''}`);
     }
     return token;
 }
 
 function clientIp(req) {
-    return String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim();
+    // Cloudflare เขียนทับ cf-connecting-ip เสมอ จึงเชื่อถือได้; x-forwarded-for เชื่อเฉพาะเมื่อมาจาก Tunnel บนเครื่องนี้ (loopback)
+    // เพื่อกันผู้โจมตีใน LAN ปลอม Header เพื่อหลบ Rate Limit การเดารหัสผ่าน
+    const socketAddr = req.socket?.remoteAddress || '';
+    const isLoopback = socketAddr === '127.0.0.1' || socketAddr === '::1' || socketAddr === '::ffff:127.0.0.1';
+    const forwarded = isLoopback ? (req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']) : null;
+    return String(forwarded || socketAddr || '').split(',')[0].trim();
 }
 
 // ป้องกัน Brute-force: จำกัดการล็อกอินไม่เกิน 10 ครั้งต่อ 15 นาทีต่อ IP
@@ -766,22 +824,19 @@ const DREAMDEV_USERNAME = (process.env.DREAMDEV_USERNAME || 'Dreamdev').trim();
 const DREAMDEV_PASSWORD = (process.env.DREAMDEV_PASSWORD || '').trim();
 const DREAMDEV_PASSWORD_HASH = (process.env.DREAMDEV_PASSWORD_HASH || '').trim();
 
-// 🛡️ Middleware ป้องกันการเข้าถึง Endpoint จัดการระบบโดยไม่ได้รับอนุญาต (Two-Tier RBAC Hardening)
+// 🛡️ Middleware ป้องกันการเข้าถึง Endpoint จัดการระบบโดยไม่ได้รับอนุญาต (Three-Tier RBAC, เข้ากันได้กับสิทธิ์เดิมของ v1.0.7)
 app.use((req, res, next) => {
     const p = req.path.toLowerCase();
     const method = req.method.toUpperCase();
 
-    // 🔒 Tier B: สิทธิ์สูงสุดเฉพาะผู้พัฒนา (Dreamdev Only)
-    const isTierB = (
-        p.startsWith('/api/admin/') ||
+    // 🔒 Tier C: เฉพาะผู้พัฒนา (Dreamdev) — เครื่องมือทดสอบ/ล้างข้อมูล/ตั้งแหล่งอัปเดต (UI แสดงเฉพาะ Dreamdev อยู่แล้ว)
+    const isDevOnly = (
         p.startsWith('/api/test/') ||
         p.startsWith('/api/sentinel/') ||
-        p === '/api/system/shutdown' ||
-        p === '/api/system/apply_update' ||
-        p === '/api/system/save_update_url' ||
-        p === '/api/auth/change_password'
+        p === '/api/admin/reset_test_data' ||
+        p === '/api/system/save_update_url'
     );
-    if (isTierB) {
+    if (isDevOnly) {
         const session = getSession(req);
         if (!session) {
             return res.status(401).json({ success: false, message: 'UNAUTHORIZED: กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
@@ -793,7 +848,25 @@ app.use((req, res, next) => {
         return next();
     }
 
-    // 🛡️ Tier A: สิทธิ์สำหรับแม่ค้าหรือผู้พัฒนา (Merchant or Dreamdev)
+    // 🔐 Tier B: ต้องเข้าสู่ระบบ (แม่ค้า หรือ ผู้พัฒนา) — เหมือน v1.0.7: ตั้งค่าเชื่อมต่อ, Logs, Backup, ปุ่มอัปเดต, ปิดโปรแกรม, เปลี่ยนรหัส
+    // (การแก้ Gemini API Key ยังจำกัดเฉพาะ Dreamdev ภายใน /api/admin/setup_keys)
+    const isTierB = (
+        p.startsWith('/api/admin/') ||
+        p === '/api/system/shutdown' ||
+        p === '/api/system/apply_update' ||
+        p === '/api/auth/change_password'
+    );
+    if (isTierB) {
+        const session = getSession(req);
+        if (!session || (session.role !== 'dreamdev' && session.role !== 'merchant')) {
+            return res.status(401).json({ success: false, message: 'UNAUTHORIZED: กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
+        }
+        req.auth = session;
+        return next();
+    }
+
+    // 🛡️ Tier A: ปุ่มหน้าคิว/Kerry/ตั้งค่าสินค้า/เปิด-ปิดไลฟ์/ประวัติ
+    // บนเครื่องร้านค้าใช้ได้ทันทีเหมือนเดิม (ไม่ต้องล็อกอิน) — เปิดผ่านลิงก์ Tunnel จากภายนอกต้องเข้าสู่ระบบก่อน กันคนแปลกหน้าล้างคิว
     const isTierA = (
         (p === '/api/config' && method === 'POST') ||
         p.startsWith('/api/kerry/') ||
@@ -802,6 +875,7 @@ app.use((req, res, next) => {
         p === '/api/history_data'
     );
     if (isTierA) {
+        if (isDirectLocalRequest(req)) return next();
         const session = getSession(req);
         if (!session) {
             return res.status(401).json({ success: false, message: 'UNAUTHORIZED: กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
@@ -820,8 +894,11 @@ app.post('/api/config', async (req, res) => {
             rawPriceString = newPrices; priceList = parsePrices(newPrices); 
             await supabase.from('configs').upsert([{ key: 'prices', value: newPrices }]); 
         }
-        if (newShipping !== undefined) { shippingFee = parseInt(newShipping); await supabase.from('configs').upsert([{ key: 'shipping_fee', value: newShipping.toString() }]); }
-        if (newThreshold !== undefined) { freeShippingThreshold = parseInt(newThreshold); await supabase.from('configs').upsert([{ key: 'free_shipping_threshold', value: newThreshold.toString() }]); }
+        // 🛡️ ป้องกันค่า NaN: ถ้ากรอกไม่ใช่ตัวเลข จะคงค่าเดิมไว้ (ค่า NaN ทำให้การคำนวณสิทธิ์ทั้งไลฟ์ผิดหมด)
+        const shipNum = newShipping !== undefined ? parseInt(newShipping, 10) : NaN;
+        const threshNum = newThreshold !== undefined ? parseInt(newThreshold, 10) : NaN;
+        if (Number.isFinite(shipNum) && shipNum >= 0) { shippingFee = shipNum; await supabase.from('configs').upsert([{ key: 'shipping_fee', value: String(shipNum) }]); }
+        if (Number.isFinite(threshNum) && threshNum >= 0) { freeShippingThreshold = threshNum; await supabase.from('configs').upsert([{ key: 'free_shipping_threshold', value: String(threshNum) }]); }
         if (newMerchantName !== undefined) { merchantAccountName = newMerchantName.trim(); await supabase.from('configs').upsert([{ key: 'merchant_account_name', value: merchantAccountName }]); }
         if (newOpenchatLink !== undefined) { openchatLink = newOpenchatLink.trim(); await supabase.from('configs').upsert([{ key: 'openchat_link', value: openchatLink }]); }
         addLog('INFO', 'อัปเดตการตั้งค่าสินค้า/ค่าจัดส่งสำเร็จ');
@@ -862,13 +939,19 @@ app.post('/api/auth/login', async (req, res) => {
     if (DREAMDEV_PASSWORD_HASH && isDreamdevUser) {
         isDreamdevMatch = verifyPassword(password, DREAMDEV_PASSWORD_HASH);
     } else if (DREAMDEV_PASSWORD && isDreamdevUser) {
-        isDreamdevMatch = (password === DREAMDEV_PASSWORD);
+        isDreamdevMatch = verifyPassword(password, DREAMDEV_PASSWORD);
     }
 
     if (isDreamdevMatch) {
         const token = issueSession(res, 'dreamdev');
         addLog('SUCCESS', `ผู้พัฒนา [Dreamdev] เข้าสู่ระบบในโหมด Developer สำเร็จ`);
         return res.json({ success: true, role: 'dreamdev', token });
+    }
+
+    // 🛡️ ผู้ใช้ระบุชื่อผู้พัฒนาแต่รหัสผิด: ปฏิเสธทันที ห้ามไหลไปเป็น "รหัสร้านค้าใหม่" บนเครื่องที่ยังไม่ตั้งรหัส
+    if (isDreamdevUser) {
+        addLog('WARN', 'เข้าสู่ระบบผู้พัฒนาไม่สำเร็จ (รหัสผ่านไม่ถูกต้อง)');
+        return res.status(401).json({ success: false, message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
     }
 
     // 2. เช็คสิทธิ์แม่ค้า (Merchant)
@@ -878,6 +961,11 @@ app.post('/api/auth/login', async (req, res) => {
 
         // หากร้านนี้ยังไม่เคยตั้งรหัสผ่าน ให้รหัสที่ส่งมากลายเป็นรหัสที่ตั้งใหม่ทันที
         if (!savedPass) {
+            // 🛡️ กันคนแปลกหน้าที่รู้ลิงก์ Tunnel แย่งตั้งรหัสร้านก่อนเจ้าของ: ตั้งรหัสครั้งแรกได้จากเครื่องร้านค้าเท่านั้น
+            // (ร้านที่ตั้งรหัสไว้แล้วไม่ได้รับผลกระทบ)
+            if (!isDirectLocalRequest(req)) {
+                return res.status(403).json({ success: false, message: 'ร้านนี้ยังไม่ได้ตั้งรหัสผ่าน กรุณาตั้งรหัสผ่านครั้งแรกจากหน้าจอบนเครื่องคอมพิวเตอร์ของร้านค้า' });
+            }
             if (password.trim().length < 4) {
                 return res.status(400).json({ success: false, message: 'กรุณาตั้งรหัสผ่านร้านค้าอย่างน้อย 4 ตัวอักษร' });
             }
@@ -933,12 +1021,12 @@ app.post('/api/auth/change_password', async (req, res) => {
 // backward compatibility alias
 app.post('/api/admin/login', (req, res) => {
     const { username, password } = req.body || {};
-    const isDreamdevUser = (username === DREAMDEV_USERNAME) || (!username && password === DREAMDEV_PASSWORD);
+    const isDreamdevUser = (username === DREAMDEV_USERNAME) || (!username && !!DREAMDEV_PASSWORD && verifyPassword(String(password || ''), DREAMDEV_PASSWORD));
     let isMatch = false;
     if (DREAMDEV_PASSWORD_HASH) {
         isMatch = isDreamdevUser && verifyPassword(password, DREAMDEV_PASSWORD_HASH);
     } else {
-        isMatch = isDreamdevUser && (password === DREAMDEV_PASSWORD);
+        isMatch = isDreamdevUser && !!DREAMDEV_PASSWORD && verifyPassword(password, DREAMDEV_PASSWORD);
     }
 
     if (isMatch) {
@@ -1018,7 +1106,7 @@ app.post('/api/admin/setup_keys', async (req, res) => {
 
         // เฉพาะ Dreamdev ที่ยืนยันตัวตนแล้วเท่านั้นที่อนุญาตให้แก้ไข Gemini API Key ได้
         const session = getSession(req);
-        const isDreamdev = (session && session.role === 'dreamdev') || (role === 'dreamdev' && (req.headers.authorization?.includes('DEV_') || readSessionToken(req)));
+        const isDreamdev = !!(session && session.role === 'dreamdev');
         if (isDreamdev && geminiApiKey !== undefined) {
             updateEnvVar('GEMINI_API_KEY', geminiApiKey);
         }
@@ -1392,7 +1480,15 @@ app.get('/api/stats/today', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-app.get('/api/stats/history', async (req, res) => res.json(await getStatsByDate(req.query.date)));
+app.get('/api/stats/history', async (req, res) => {
+    const date = String(req.query.date || '').trim();
+    if (!date) return res.status(400).json({ success: false, error: 'กรุณาระบุวันที่ (date)' });
+    try {
+        res.json(await getStatsByDate(date));
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
 app.get('/api/history_data', async (req, res) => {
     try {
@@ -1658,6 +1754,8 @@ function buildKerryFullAddress(addr) {
             .trim();
     }
 
+    // 🛡️ Escape อักขระพิเศษ (เช่น ( ) * + ?) จากที่อยู่ลูกค้า ก่อนนำไปสร้าง RegExp ป้องกันส่งออก Kerry ล่ม
+    const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     let rawAddr = (addr.address || '').trim();
     let sub = (addr.subdistrict || '').trim();
     let dist = (addr.district || '').trim();
@@ -1666,7 +1764,7 @@ function buildKerryFullAddress(addr) {
 
     // 1. นำรหัสไปรษณีย์ 5 หลักออกจากที่อยู่ (Kerry แยกช่องรหัสไปรษณีย์ไว้ใน Col 5 อยู่แล้ว)
     if (post) {
-        rawAddr = rawAddr.replace(new RegExp(`\\b${post}\\b`, 'g'), '');
+        rawAddr = rawAddr.replace(new RegExp(`\\b${escapeRegExp(post)}\\b`, 'g'), '');
     }
     rawAddr = rawAddr.replace(/\b[1-9]\d{4}\b/g, '');
 
@@ -1693,7 +1791,7 @@ function buildKerryFullAddress(addr) {
 
     // เช็คว่าใน rawAddr มีตำบล/แขวง อยู่แล้วหรือไม่ ถ้ายังไม่มีจึงต่อท้าย
     if (cleanSub) {
-        const subRegex = new RegExp(`(?:ต\\.|ตำบล|แขวง)?\\s*${cleanSub}`, 'i');
+        const subRegex = new RegExp(`(?:ต\\.|ตำบล|แขวง)?\\s*${escapeRegExp(cleanSub)}`, 'i');
         if (!subRegex.test(rawAddr)) {
             parts.push(`${subPrefix}${cleanSub}`);
         }
@@ -1701,7 +1799,7 @@ function buildKerryFullAddress(addr) {
 
     // เช็คว่ามีอำเภอ/เขต อยู่แล้วหรือไม่
     if (cleanDist) {
-        const distRegex = new RegExp(`(?:อ\\.|อำเภอ|เขต)?\\s*${cleanDist}`, 'i');
+        const distRegex = new RegExp(`(?:อ\\.|อำเภอ|เขต)?\\s*${escapeRegExp(cleanDist)}`, 'i');
         const currentText = parts.join(' ');
         if (!distRegex.test(currentText)) {
             parts.push(`${distPrefix}${cleanDist}`);
@@ -1710,7 +1808,7 @@ function buildKerryFullAddress(addr) {
 
     // เช็คว่ามีจังหวัดอยู่แล้วหรือไม่ (ป้องกันสับสนกับ อำเภอเมือง)
     if (cleanProv) {
-        const provRegex = new RegExp(`(?:จ\\.|จังหวัด)\\s*${cleanProv}|(?:^|\\s+)${cleanProv}(?:\\s+|$)`, 'i');
+        const provRegex = new RegExp(`(?:จ\\.|จังหวัด)\\s*${escapeRegExp(cleanProv)}|(?:^|\\s+)${escapeRegExp(cleanProv)}(?:\\s+|$)`, 'i');
         const currentWithoutDist = parts.filter(p => !p.startsWith('อ.') && !p.startsWith('เขต')).join(' ');
         const hasProvExplicit = /(?:จ\.|จังหวัด)/.test(parts.join(' ')) && provRegex.test(parts.join(' '));
 
@@ -2008,10 +2106,15 @@ app.post('/api/queue/manual_amount', async (req, res) => {
 
 // 📝 API อนุมัติหรือปัดตกสลิปผิดปกติหลังจบไลฟ์
 app.post('/api/queue/verify_abnormal', async (req, res) => {
-    const { slipIds, isApproved } = req.body;
+    const { slipIds, isApproved } = req.body || {};
+    // 🛡️ รับเฉพาะรายการเลข ID ที่ถูกต้อง (เหมือน /api/queue/action) ป้องกันการอัปเดตผิดแถว
+    const ids = Array.isArray(slipIds) ? slipIds.map(Number).filter(Number.isInteger) : [];
+    if (ids.length === 0) {
+        return res.status(400).json({ success: false, error: 'ไม่พบรายการสลิปที่ถูกต้อง' });
+    }
     try {
         const newStatus = isApproved ? 'completed' : 'rejected';
-        await supabase.from('slips').update({ status: newStatus }).in('id', slipIds);
+        await supabase.from('slips').update({ status: newStatus }).in('id', ids);
         await broadcastTodayStats();
         res.json({ success: true });
     } catch(err) {
@@ -2743,6 +2846,13 @@ app.post('/webhook', async (req, res) => {
     const channelSecret = (process.env.LINE_CHANNEL_SECRET || '').trim();
     const signature = req.headers['x-line-signature'];
 
+    // ⚠️ ร้านที่ยังไม่ได้ใส่ LINE Channel Secret: ยังรับ Webhook ต่อเหมือนเดิม (ไม่ให้ระบบหยุด) แต่เตือนในหน้าบันทึกระบบ
+    // ให้ใส่ค่าในหน้าตั้งค่าเชื่อมต่อ เพื่อเปิดการตรวจลายเซ็นกันข้อความปลอม (เตือนไม่เกิน 1 ครั้งต่อชั่วโมง)
+    if (!channelSecret && (!global.__lastNoSecretWarn || Date.now() - global.__lastNoSecretWarn > 60 * 60 * 1000)) {
+        global.__lastNoSecretWarn = Date.now();
+        addLog('WARN', '⚠️ ยังไม่ได้ตั้งค่า LINE Channel Secret ระบบจึงตรวจไม่ได้ว่าข้อความมาจาก LINE จริง กรุณาใส่ Channel Secret ในหน้าตั้งค่าเชื่อมต่อ');
+    }
+
     if (channelSecret) {
         if (!signature || typeof signature !== 'string') {
             addLog('WARN', '🚨 ปฏิเสธ Webhook: ไม่พบลายเซ็น x-line-signature (Security Guard)');
@@ -2830,6 +2940,17 @@ app.post('/webhook', async (req, res) => {
                         }
                         // บันทึกที่อยู่ลง configs ผูกกับ line_id ของลูกค้า
                         const addrConfigKey = `cust_addr_${userId}`;
+                        // 🛡️ ถ้าข้อความใหม่ให้ข้อมูลไม่ครบ (เช่น ส่งมาแค่เบอร์โทร) ให้คงช่องเดิมที่เคยบันทึกไว้ ไม่ลบที่อยู่ดีๆ ทิ้ง
+                        try {
+                            const { data: prevRow } = await supabase.from('configs').select('value').eq('key', addrConfigKey).single();
+                            if (prevRow && prevRow.value) {
+                                const prev = JSON.parse(prevRow.value);
+                                for (const f of ['phone', 'address', 'subdistrict', 'district', 'province', 'postcode']) {
+                                    const nv = parsedAddress[f];
+                                    if ((nv === undefined || nv === null || String(nv).trim() === '') && prev[f]) parsedAddress[f] = prev[f];
+                                }
+                            }
+                        } catch (mergeErr) { /* ไม่มีที่อยู่เดิม หรืออ่านไม่ได้ ใช้ข้อมูลใหม่ตามปกติ */ }
                         await supabase.from('configs').upsert([{
                             key: addrConfigKey,
                             value: JSON.stringify(parsedAddress)
@@ -2853,11 +2974,34 @@ app.post('/webhook', async (req, res) => {
         else if (event.type === 'message' && event.message.type === 'image') {
             const messageId = event.message.id;
             const imageBuffer = await downloadImageFromLine(messageId);
-            if (!imageBuffer) continue;
+            if (!imageBuffer) {
+                // 🛡️ อย่าทิ้งเงียบ: บันทึก Log ให้แม่ค้า/แอดมินรู้ว่ามีลูกค้าส่งรูปมาแต่ดาวน์โหลดจาก LINE ไม่สำเร็จ
+                const failName = await getLineProfile(userId).catch(() => '') || userId;
+                addLog('WARN', `ดาวน์โหลดรูปจาก LINE ไม่สำเร็จ (ลูกค้า "${failName}") กรุณาตรวจสอบสลิปในแชท LINE OA ด้วยตนเอง`);
+                continue;
+            }
 
-            const slipResult = await verifySlipWithProvider(imageBuffer);
+            let slipResult = await verifySlipWithProvider(imageBuffer);
             // ✅ ดึงชื่อ LINE จากโปรไฟล์ผู้ใช้อย่างถูกต้อง 100%
             const lineName = await getLineProfile(userId);
+
+            // 🛡️ ตรวจความถูกต้องของยอดเงินและรหัสอ้างอิงก่อนให้สิทธิ์อัตโนมัติ
+            // - ยอดต้องเป็นตัวเลขบวก ไม่เกิน 1,000,000 (เหมือนการใส่ยอดเอง)
+            // - ต้องมีรหัสอ้างอิงสลิปจริง (รหัสที่ระบบสร้างจากเวลาเอง ตรวจสลิปซ้ำไม่ได้)
+            // ถ้าไม่ผ่าน ให้ส่งเข้าคิว "ตรวจสลิปเอง" แทน ไม่ปล่อยให้ยอดในกระเป๋าลูกค้าเพี้ยน
+            if (slipResult && slipResult.success) {
+                const d = slipResult.data || {};
+                const amt = Number(d.amount);
+                const ref = String(d.transRef || '').trim();
+                const isSyntheticRef = /^(EASY|THUNDER|SLIPVERIFY)_\d{13}$/.test(ref);
+                if (!Number.isFinite(amt) || amt <= 0 || amt > 1000000 || !ref || isSyntheticRef) {
+                    addLog('WARN', `สลิปจากลูกค้า "${lineName}" อ่านได้แต่ข้อมูลไม่ครบ (ยอด: ${d.amount}, รหัสอ้างอิง: ${ref || '-'}) ส่งเข้าคิวให้แอดมินตรวจเอง`);
+                    slipResult = null;
+                } else {
+                    d.amount = amt;
+                    d.transRef = ref;
+                }
+            }
             
             if (slipResult && slipResult.success) {
                 const slipData = slipResult.data;
@@ -2942,7 +3086,24 @@ app.post('/webhook', async (req, res) => {
                         // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                         continue;
                     }
-                    throw txErr;
+                    // 🛡️ ฐานข้อมูลขัดข้องชั่วคราว: อย่าทำสลิปที่ลูกค้าจ่ายแล้วหาย ให้เก็บรูปเข้าคิว "ตรวจสลิปเอง" แทน
+                    // (ยอดกระเป๋าลูกค้าใน transaction ถูกยกเลิกทั้งชุดแล้ว จึงไม่มียอดซ้ำ)
+                    addLog('ERROR', `บันทึกสลิปอัตโนมัติของ "${lineName}" ไม่สำเร็จ (${txErr.message}) ส่งเข้าคิวให้แอดมินตรวจเอง`);
+                    try {
+                        const fbName = `manual_${Date.now()}_${userId}.jpg`;
+                        await fs.promises.writeFile(path.join(uploadsDir, fbName), Buffer.from(imageBuffer));
+                        await supabase.from('slips').insert([{
+                            amount: 0, draws: 0, line_id: userId, sender_name: lineName, line_name: lineName,
+                            session_id: activeLiveSession ? activeLiveSession.id : null,
+                            trans_date: getTodayString(), trans_time: getLocalTimeString(),
+                            qr_payload: `manual_image|/uploads/${fbName}`, status: 'waiting'
+                        }]).select().single();
+                        io.emit('play_sound');
+                        broadcastTodayStats();
+                    } catch (fbErr) {
+                        addLog('ERROR', `เก็บสลิปสำรองไม่สำเร็จ: ${fbErr.message} (กรุณาตรวจสลิปของ "${lineName}" ในแชท LINE)`);
+                    }
+                    continue;
                 }
 
                 if (inserted) {
