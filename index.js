@@ -1,3 +1,44 @@
+// ⚡ Self-Healing: ตัวเฝ้าโปรแกรม (Supervisor)
+// ถ้าโปรแกรมหลักปิดตัวเองผิดปกติ ระบบจะเปิดใหม่ให้อัตโนมัติภายใน 5 วินาที (สูงสุด 5 ครั้งใน 10 นาที กันวนไม่จบ)
+// ปิดปกติ (ปุ่มปิดโปรแกรม / ติดตั้งอัปเดต / เปิดซ้ำ) = รหัส 0 -> ตัวเฝ้าปิดตามทันที ไม่เปิดใหม่
+// ตั้ง AQ_NO_SUPERVISOR=1 เพื่อปิดตัวเฝ้า
+if (!process.env.AQ_SUPERVISED && process.env.AQ_NO_SUPERVISOR !== '1') {
+    const { spawn } = require('child_process');
+    const fsSup = require('fs');
+    const pathSup = require('path');
+    const supLog = (msg) => { try { fsSup.appendFileSync(pathSup.join(__dirname, 'supervisor.log'), `[${new Date().toISOString()}] ${msg}\n`); } catch (e) {} };
+    let restartTimes = [];
+    let totalRestarts = 0;
+    let child = null;
+    let stopping = false;
+    const launch = () => {
+        child = spawn(process.execPath, [__filename, ...process.argv.slice(2)], {
+            cwd: __dirname, stdio: 'inherit', windowsHide: true,
+            env: { ...process.env, AQ_SUPERVISED: '1', AQ_RESTART_COUNT: String(totalRestarts) }
+        });
+        child.on('exit', (code, signal) => {
+            if (stopping || code === 0) process.exit(code || 0);
+            const now = Date.now();
+            restartTimes = restartTimes.filter(t => now - t < 10 * 60 * 1000);
+            if (restartTimes.length >= 5) {
+                supLog(`โปรแกรมหยุดทำงานซ้ำ ${restartTimes.length} ครั้งใน 10 นาที (code=${code}, signal=${signal}) หยุดเปิดใหม่อัตโนมัติ`);
+                process.exit(code || 1);
+            }
+            restartTimes.push(now);
+            totalRestarts++;
+            supLog(`โปรแกรมหยุดทำงานผิดปกติ (code=${code}, signal=${signal}) กำลังเปิดใหม่ครั้งที่ ${totalRestarts}`);
+            setTimeout(launch, 5000);
+        });
+    };
+    ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'].forEach(sig => process.on(sig, () => {
+        stopping = true;
+        try { if (child) child.kill(sig); } catch (e) {}
+        setTimeout(() => process.exit(0), 3000).unref();
+    }));
+    launch();
+    return; // ตัวเฝ้าไม่รันโค้ดโปรแกรมหลักเอง
+}
+
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -100,7 +141,7 @@ async function processDiscordQueue() {
 
             const item = discordAlertQueue.shift();
             try {
-                await axios.post(DISCORD_WEBHOOK_URL, item.payload, { timeout: 8000 });
+                await axios.post(item.url || DISCORD_WEBHOOK_URL, item.payload, { timeout: 8000 });
                 // เว้นระยะห่างอย่างน้อย 1,500ms ระหว่างการส่งข้อความแต่ละครั้งตามมาตรฐาน Discord Webhook
                 await new Promise(r => setTimeout(r, 1500));
             } catch (err) {
@@ -254,6 +295,161 @@ async function reportSelfHealingToDiscord(options = {}) {
         details: details,
         force: true
     });
+    // 📡 รายงานเข้าช่องผู้พัฒนา (ช่อง 2) ด้วย ว่าระบบแก้ไขอะไรเองไปบ้าง
+    queueDevReport({ kind: 'SELF_HEALING', category, message: `${title}: ${issue}`, actionDetails });
+}
+
+// =====================================================================================
+// 📡 Discord 2 ช่องของผู้พัฒนา (ตั้งค่าใน .env ผ่านหน้าตั้งค่า เฉพาะผู้พัฒนา)
+//   ช่อง 1 DISCORD_ACTIVITY_WEBHOOK_URL : บันทึกการใช้งานทุกกิจกรรม รวมเป็นสรุปทุก 1 นาที (กันชนขีดจำกัด Discord)
+//   ช่อง 2 DISCORD_DEVREPORT_WEBHOOK_URL: เมื่อพบ Error ส่งทันที พร้อมประเมินความรุนแรงและแนวทางแก้ไขในเวอร์ชันถัดไป
+//   ไม่ส่งเบอร์โทร/ที่อยู่ลูกค้า: ปิดบังเบอร์โทรและเลขบัตรก่อนส่งทุกครั้ง และไม่ส่งรายละเอียดทางเทคนิคของกิจกรรมทั่วไป
+// =====================================================================================
+const DISCORD_WEBHOOK_RE = /^https:\/\/(?:discord|discordapp)\.com\/api\/webhooks\/\d{5,30}\/[A-Za-z0-9_-]{20,120}$/;
+function isValidDiscordWebhook(u) { return DISCORD_WEBHOOK_RE.test(String(u || '').trim()); }
+function maskDiscordWebhook(u) {
+    const m = String(u || '').trim().match(/webhooks\/(\d+)\//);
+    return m ? `...${m[1].slice(-4)}` : '';
+}
+function getActivityWebhook() { const u = (process.env.DISCORD_ACTIVITY_WEBHOOK_URL || '').trim(); return isValidDiscordWebhook(u) ? u : ''; }
+function getDevReportWebhook() { const u = (process.env.DISCORD_DEVREPORT_WEBHOOK_URL || '').trim(); return isValidDiscordWebhook(u) ? u : ''; }
+function getAppVersionSafe() { try { return require('./package.json').version; } catch (e) { return '?'; } }
+function getShopLabel() {
+    const n = (merchantAccountName || process.env.MERCHANT_ACCOUNT_NAME || '').trim();
+    return n ? `ร้าน${n}` : 'ร้านค้า (AutoQueue)';
+}
+
+// 🛡️ ปิดบังข้อมูลส่วนตัวลูกค้าก่อนส่งออกนอกเครื่อง
+function redactPersonalInfo(text) {
+    return String(text === undefined || text === null ? '' : text)
+        .replace(/(?<!\d)\d{13}(?!\d)/g, '[เลขบัตร]')
+        .replace(/(?<!\d)0\d[\d\- ]{7,11}\d(?!\d)/g, (m) => {
+            const digits = m.replace(/\D/g, '');
+            return (digits.length === 9 || digits.length === 10) ? `0xx-xxx-${digits.slice(-4, -2)}xx` : m;
+        });
+}
+
+// 🎯 ประเมินความรุนแรงและแนวทางแก้ไข (กฎตายตัว ไม่ใช้ AI จึงไม่เสียโควตา)
+function assessErrorForDevReport(category, text) {
+    const t = `${category || ''} ${text || ''}`.toLowerCase();
+    const rules = [
+        { test: /system_crash|uncaught|unhandled|เก็บสลิปสำรองไม่สำเร็จ/, severity: 'CRITICAL',
+          cause: 'โค้ดเกิดข้อผิดพลาดที่ไม่มีการดักไว้ หรือสลิปของลูกค้าอาจตกหล่น',
+          fix: 'ดู Stack ใน "บันทึกระบบ" ของร้าน หาบรรทัดที่พัง เพิ่มการตรวจค่าว่าง/try-catch ตรงจุดนั้น แล้วเขียนทดสอบกรณีนี้ก่อนออกเวอร์ชันถัดไป' },
+        { test: /บันทึกสลิปอัตโนมัติ|sqlite|database|ฐานข้อมูล/, severity: 'HIGH',
+          cause: 'ฐานข้อมูลบันทึกไม่สำเร็จ (ไฟล์ถูกล็อก ดิสก์เต็ม หรือข้อมูลผิดรูปแบบ)',
+          fix: 'ตรวจพื้นที่ดิสก์และขนาดไฟล์ WAL ของร้าน ถ้าเกิดซ้ำให้ลดงานเขียนพร้อมกัน หรือย้ายงานเขียนเข้าคิวเดียว' },
+        { test: /slipok|easyslip|thunder|quota|เครดิต|ตรวจสลิป|1009|402|401/, severity: 'HIGH',
+          cause: 'บริการตรวจสลิปตอบกลับผิดพลาด (เครดิตหมด รหัสผิด หรือบริการล่ม)',
+          fix: 'ตรวจเครดิตและรหัสของผู้ให้บริการ พิจารณาเพิ่มการสลับผู้ให้บริการอัตโนมัติ/แจ้งเตือนเครดิตต่ำให้เร็วขึ้น' },
+        { test: /line|webhook|reply|push/, severity: 'HIGH',
+          cause: 'เชื่อมต่อ LINE ไม่สำเร็จ (Token หมดอายุ Webhook ไม่ตรง หรือโควตาข้อความเต็ม)',
+          fix: 'ตรวจ LINE Access Token และ Webhook URL ใน LINE Developers ถ้าเกี่ยวกับโควตา ลดข้อความ Push' },
+        { test: /tunnel|cloudflare|localtunnel/, severity: 'MEDIUM',
+          cause: 'ท่อเชื่อมต่ออินเทอร์เน็ตหลุด หรือเน็ตร้านไม่เสถียร',
+          fix: 'ดูว่าระบบเชื่อมต่อใหม่ได้เองหรือไม่ ถ้าหลุดบ่อย พิจารณาใช้ Cloudflare Tunnel แบบมีบัญชี (ลิงก์ถาวร)' },
+        { test: /gemini|ai|ที่อยู่/, severity: 'MEDIUM',
+          cause: 'AI อ่านที่อยู่ไม่สำเร็จ (โควตา Gemini หรือข้อความรูปแบบแปลก)',
+          fix: 'ตรวจโควตา Gemini และปรับตัวอ่านที่อยู่สำรอง (Regex) ให้รองรับรูปแบบนี้' },
+        { test: /kerry|excel|export/, severity: 'MEDIUM',
+          cause: 'ส่งออกไฟล์ Kerry ไม่สำเร็จ',
+          fix: 'ทดลองส่งออกด้วยข้อมูลรอบเดียวกันบนเครื่อง Dev เพื่อหาข้อมูลที่ทำให้พัง แล้วเพิ่มการจัดการข้อมูลแบบนั้น' },
+        { test: /disk|ดิสก์|พื้นที่/, severity: 'HIGH',
+          cause: 'พื้นที่เก็บข้อมูลในเครื่องร้านใกล้เต็ม',
+          fix: 'แนะนำร้านล้างไฟล์ที่ไม่ใช้ หรือย้ายรูป/ไฟล์สำรองเก่าออก ทบทวนนโยบายเก็บไฟล์' }
+    ];
+    const r = rules.find(x => x.test.test(t));
+    return r || { severity: 'MEDIUM', cause: 'ข้อผิดพลาดทั่วไปของระบบ', fix: 'ดูรายละเอียดใน "บันทึกระบบ" ของร้าน แล้วจำลองซ้ำบนเครื่อง Dev ก่อนแก้' };
+}
+const SEVERITY_STYLE = { CRITICAL: { icon: '🟥', color: 15158332, label: 'วิกฤต' }, HIGH: { icon: '🟧', color: 15105570, label: 'สูง' }, MEDIUM: { icon: '🟨', color: 16776960, label: 'ปานกลาง' }, LOW: { icon: '🟦', color: 3447003, label: 'ต่ำ' } };
+
+// ---- ช่อง 1: บันทึกกิจกรรม (รวมส่งทุก 60 วินาที) ----
+const activityBuffer = [];
+let activityDropped = 0;
+function queueActivity(type, message) {
+    if (!getActivityWebhook() || process.env.DISCORD_ALERTS_ENABLED === 'false') return;
+    const icon = { ERROR: '🔴', WARN: '🟠', SUCCESS: '🟢', INFO: '⚪', SELF_HEALING: '⚡' }[type] || '⚪';
+    const time = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Bangkok' });
+    activityBuffer.push(`\`${time}\` ${icon} ${redactPersonalInfo(message).slice(0, 300)}`);
+    if (activityBuffer.length > 600) { activityBuffer.shift(); activityDropped++; }
+}
+function flushActivity() {
+    const url = getActivityWebhook();
+    if (!url || activityBuffer.length === 0) return;
+    const lines = activityBuffer.splice(0, activityBuffer.length);
+    if (activityDropped > 0) { lines.unshift(`… ข้ามไป ${activityDropped} รายการเพราะมีกิจกรรมเยอะเกิน`); activityDropped = 0; }
+    const chunks = [];
+    let cur = '';
+    for (const l of lines) {
+        if ((cur + '\n' + l).length > 3800) { chunks.push(cur); cur = l; } else { cur = cur ? `${cur}\n${l}` : l; }
+    }
+    if (cur) chunks.push(cur);
+    chunks.slice(0, 5).forEach((desc, i) => {
+        discordAlertQueue.push({ url, payload: { embeds: [{
+            title: `📒 บันทึกการใช้งาน ${getShopLabel()}${chunks.length > 1 ? ` (${i + 1}/${Math.min(chunks.length, 5)})` : ''}`,
+            description: desc, color: 9807270,
+            footer: { text: `AutoQueueforLive v${getAppVersionSafe()} • สรุปทุก 1 นาที` }
+        }] } });
+    });
+    processDiscordQueue().catch(() => {});
+}
+setInterval(flushActivity, 60 * 1000).unref();
+
+// ---- ช่อง 2: รายงาน Error สำหรับแก้ในเวอร์ชันถัดไป (ส่งทันที, Error เดิมซ้ำใน 30 นาทีรวมเป็นตัวนับ) ----
+const devReportSeen = new Map();
+function queueDevReport({ kind = 'ERROR', category = '', message = '', details = null, actionDetails = '' } = {}) {
+    const url = getDevReportWebhook();
+    if (!url || process.env.DISCORD_ALERTS_ENABLED === 'false') return;
+    const clean = redactPersonalInfo(message);
+    const sig = `${kind}|${category}|${clean.replace(/\d+/g, '#').slice(0, 80)}`;
+    const now = Date.now();
+    const seen = devReportSeen.get(sig);
+    if (seen && now - seen.first < 30 * 60 * 1000) {
+        seen.count++;
+        if (!seen.timer) {
+            seen.timer = setTimeout(() => {
+                const s = devReportSeen.get(sig);
+                if (s && s.count > 0) {
+                    discordAlertQueue.push({ url, payload: { embeds: [{ title: `🔁 Error เดิมเกิดซ้ำอีก ${s.count} ครั้งใน 30 นาที`, description: clean.slice(0, 1500), color: 15105570, footer: { text: `${getShopLabel()} • v${getAppVersionSafe()}` } }] } });
+                    processDiscordQueue().catch(() => {});
+                }
+                devReportSeen.delete(sig);
+            }, Math.max(1000, 30 * 60 * 1000 - (now - seen.first)));
+            if (seen.timer.unref) seen.timer.unref();
+        }
+        return;
+    }
+    devReportSeen.set(sig, { first: now, count: 0, timer: null });
+    if (devReportSeen.size > 500) devReportSeen.delete(devReportSeen.keys().next().value);
+
+    let embed;
+    if (kind === 'SELF_HEALING') {
+        embed = {
+            title: `⚡ ระบบแก้ไขเองสำเร็จ: ${clean.slice(0, 200)}`, color: 1095809,
+            fields: [
+                { name: 'สิ่งที่ระบบทำ', value: redactPersonalInfo(actionDetails || '-').slice(0, 1000), inline: false },
+                { name: 'ควรทำในเวอร์ชันถัดไป', value: 'ตรวจว่าทำไมปัญหานี้เกิด และแก้ที่ต้นเหตุ ถ้าเกิดบ่อยแปลว่าระบบแก้ได้แค่ปลายเหตุ', inline: false }
+            ]
+        };
+    } else {
+        const a = assessErrorForDevReport(category, clean);
+        const st = SEVERITY_STYLE[a.severity] || SEVERITY_STYLE.MEDIUM;
+        const fields = [
+            { name: 'ความรุนแรง', value: `${st.icon} ${a.severity} (${st.label})`, inline: true },
+            { name: 'ร้าน / เวอร์ชัน', value: `${getShopLabel()} / v${getAppVersionSafe()}`, inline: true },
+            { name: 'สถานะไลฟ์', value: activeLiveSession ? '🔴 กำลังไลฟ์' : 'ไม่ได้ไลฟ์', inline: true },
+            { name: 'สาเหตุที่น่าจะเป็น', value: a.cause, inline: false },
+            { name: 'แนวทางแก้ไขในเวอร์ชันถัดไป', value: a.fix, inline: false }
+        ];
+        if (details) {
+            const d = redactPersonalInfo(typeof details === 'string' ? details : JSON.stringify(details)).slice(0, 900);
+            fields.push({ name: 'รายละเอียดทางเทคนิค', value: '```' + d.replace(/```/g, "'''") + '```', inline: false });
+        }
+        embed = { title: `${st.icon} พบ Error: ${clean.slice(0, 200)}`, color: st.color, fields };
+    }
+    embed.footer = { text: `AutoQueueforLive Dev Report • ${new Date().toLocaleString('en-GB', { timeZone: 'Asia/Bangkok' })}` };
+    discordAlertQueue.push({ url, payload: { embeds: [embed] } });
+    processDiscordQueue().catch(() => {});
 }
 
 // 📜 ระบบบันทึก System & Error Logs สำหรับหน้าตั้งค่าเชื่อมต่อ
@@ -271,6 +467,11 @@ function addLog(type, message, details = null) {
 
     // 🛡️ บันทึก System Logs ใน Dashboard เท่านั้น (ไม่ส่งสแปมเข้า Discord เพื่อป้องกันการแจ้งเตือนรบกวน)
     // การแจ้งเตือนเข้า Discord จะส่งเฉพาะกรณีวิกฤตระดับ Crash (uncaughtException) หรือสั่งส่งโดยตรงเท่านั้น
+    // 📡 ยกเว้นช่องของผู้พัฒนา (ถ้าตั้งค่าไว้): ทุกกิจกรรมเข้าช่อง 1 แบบรวมทุก 1 นาที และ Error เข้าช่อง 2 ทันที
+    try {
+        queueActivity(type, message);
+        if (type === 'ERROR') queueDevReport({ kind: 'ERROR', message, details });
+    } catch (e) { /* การส่ง Discord ต้องไม่ทำให้การบันทึกล้ม */ }
 }
 addLog('INFO', 'ระบบเริ่มต้นทำงานเรียบร้อย');
 
@@ -640,15 +841,44 @@ app.use(express.json({
 }));
 app.use(express.static(path.join(__dirname, 'public'))); 
 
+// 📒 บันทึกการกระทำของแม่ค้า/แอดมินทุกครั้ง (เข้าหน้าบันทึกระบบ และช่อง Discord บันทึกการใช้งาน ถ้าตั้งค่าไว้)
+const ACTION_LOG_LABELS = {
+    'POST /api/queue/action': (b) => ({ called: 'เรียกคิว', skipped: 'ข้ามคิว', completed: 'จบคิว', cancelled: 'ยกเลิกคิว' }[b && b.action] || `จัดการคิว (${(b && b.action) || '-'})`) + ` ${Array.isArray(b && b.slipIds) ? b.slipIds.length : 0} สลิป`,
+    'POST /api/queue/clear': () => 'ล้างคิว',
+    'POST /api/live_session/start': () => 'กดเริ่มไลฟ์',
+    'POST /api/live_session/end': () => 'กดจบไลฟ์',
+    'POST /api/queue/manual_amount': (b) => `ใส่ยอดสลิปเอง${b && b.amount !== undefined ? ` ${Number(b.amount) || 0} บาท` : ''}`,
+    'POST /api/queue/verify_abnormal': () => 'ยืนยันสลิปผิดปกติ',
+    'POST /api/queue/reject_slip': () => 'ปัดตกรูปที่ไม่ใช่สลิป',
+    'POST /api/system/shutdown': () => 'กดปิดโปรแกรม',
+    'POST /api/system/apply_update': () => 'กดติดตั้งอัปเดต',
+    'POST /api/admin/setup_keys': () => 'บันทึกหน้าตั้งค่าเชื่อมต่อ',
+    'GET /api/kerry/export_excel': (b, q) => `ดาวน์โหลดไฟล์ Kerry${q && q.sessionId ? ' (เลือกรอบไลฟ์)' : (q && q.date ? ` (วันที่ ${String(q.date).slice(0, 8)})` : '')}`
+};
+app.use((req, res, next) => {
+    const labelFn = ACTION_LOG_LABELS[`${req.method} ${req.path}`];
+    if (labelFn) {
+        res.on('finish', () => {
+            try {
+                const ip = req.ip || (req.socket && req.socket.remoteAddress) || '';
+                const where = /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(ip) && !req.headers['cf-connecting-ip'] && !req.headers['x-forwarded-for'] ? 'เครื่องร้าน' : 'ลิงก์ภายนอก';
+                const ok = res.statusCode < 400;
+                addLog(ok ? 'INFO' : 'WARN', `${labelFn(req.body, req.query)} - ${ok ? 'สำเร็จ' : `ไม่สำเร็จ (รหัส ${res.statusCode})`} [${where}]`);
+            } catch (e) {}
+        });
+    }
+    next();
+});
+
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
 if (!fs.existsSync(uploadsDir)) { fs.mkdirSync(uploadsDir, { recursive: true }); }
 
-// 🧹 ระบบลบรูปสลิปเก่าอัตโนมัติ (ลบรูปที่มีอายุเกิน 7 วัน เพื่อไม่ให้เปลืองพื้นที่คอม)
+// 🧹 ระบบลบรูปสลิปเก่าอัตโนมัติ (ลบรูปที่มีอายุเกิน 30 วัน เพื่อไม่ให้เปลืองพื้นที่คอม)
 function cleanupOldUploads() {
     try {
         const files = fs.readdirSync(uploadsDir);
         const now = Date.now();
-        const maxAgeMs = 7 * 24 * 60 * 60 * 1000; // 7 วัน
+        const maxAgeMs = 30 * 24 * 60 * 60 * 1000; // 30 วัน
         files.forEach(file => {
             const filePath = path.join(uploadsDir, file);
             const stats = fs.statSync(filePath);
@@ -685,6 +915,44 @@ function cleanupOldBackups(maxAgeDays = 30, keepLatest = 10) {
 }
 setInterval(cleanupOldBackups, 24 * 60 * 60 * 1000); // ทำงานวันละ 1 ครั้ง
 cleanupOldBackups();
+
+// ⚡ Self-Healing: พื้นที่เครื่องใกล้เต็ม -> ลบไฟล์เก่าที่ไม่ใช่ข้อมูลร้านให้อัตโนมัติ (ไม่แตะฐานข้อมูลหลักเด็ดขาด)
+// ขั้นที่ 1 (เหลือน้อยกว่า 2 GB): ลบรูปสลิปเก่ากว่า 7 วัน และเก็บไฟล์สำรองไว้ 5 ไฟล์ล่าสุด
+// ขั้นที่ 2 (เหลือน้อยกว่า 500 MB): ลบรูปสลิปเก่ากว่า 2 วัน และเก็บไฟล์สำรองไว้ 3 ไฟล์ล่าสุด
+function getFreeDiskBytes() {
+    try { const s = fs.statfsSync(__dirname); return Number(s.bavail) * Number(s.bsize); } catch (e) { return null; }
+}
+function removeUploadsOlderThan(days) {
+    let removed = 0;
+    try {
+        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+        for (const f of fs.readdirSync(uploadsDir)) {
+            const p = path.join(uploadsDir, f);
+            try { const st = fs.statSync(p); if (st.isFile() && st.mtimeMs < cutoff) { fs.unlinkSync(p); removed++; } } catch (e) {}
+        }
+    } catch (e) {}
+    return removed;
+}
+let lastDiskHealAt = 0;
+function checkDiskSpaceAndHeal() {
+    const free = getFreeDiskBytes();
+    if (free === null) return;
+    const GB = 1024 * 1024 * 1024;
+    if (free >= 2 * GB) return;
+    if (Date.now() - lastDiskHealAt < 6 * 60 * 60 * 1000 && free >= 0.5 * GB) return; // ทำซ้ำไม่เกินทุก 6 ชม. ยกเว้นวิกฤต
+    lastDiskHealAt = Date.now();
+    const critical = free < 0.5 * GB;
+    const days = critical ? 2 : 7;
+    const keepBackups = critical ? 3 : 5;
+    const removed = removeUploadsOlderThan(days);
+    try { if (supabase && typeof supabase.cleanupBackups === 'function') supabase.cleanupBackups(path.join(__dirname, 'backups'), keepBackups, 30); } catch (e) {}
+    const after = getFreeDiskBytes();
+    const fmt = (b) => b === null ? '?' : `${(b / GB).toFixed(2)} GB`;
+    addLog('WARN', `พื้นที่เครื่องเหลือน้อย (${fmt(free)}) ระบบลบรูปสลิปเก่ากว่า ${days} วัน ${removed} รูป และเก็บไฟล์สำรองไว้ ${keepBackups} ไฟล์ล่าสุด เหลือพื้นที่ ${fmt(after)}`);
+    reportSelfHealingToDiscord({ category: 'DISK', title: 'พื้นที่เครื่องใกล้เต็ม', issue: `พื้นที่เหลือ ${fmt(free)}`, actionDetails: `ลบรูปสลิปเก่ากว่า ${days} วัน ${removed} รูป และเก็บไฟล์สำรอง ${keepBackups} ไฟล์ล่าสุด เหลือพื้นที่ ${fmt(after)} (ไม่ได้แตะฐานข้อมูลร้าน)` }).catch(() => {});
+}
+setInterval(checkDiskSpaceAndHeal, 60 * 60 * 1000); // ตรวจทุก 1 ชั่วโมง
+setTimeout(checkDiskSpaceAndHeal, 30 * 1000);
 
 let priceList = []; 
 let rawPriceString = "";
@@ -1056,7 +1324,10 @@ app.get('/api/admin/setup_keys', (req, res) => {
         slipverifyKey: process.env.SLIPVERIFY_KEY ? `${process.env.SLIPVERIFY_KEY.substring(0, 6)}...` : '',
         customApiUrl: process.env.CUSTOM_API_URL || '',
         customApiHeader: process.env.CUSTOM_API_HEADER || 'Authorization',
-        customApiKey: process.env.CUSTOM_API_KEY ? `${process.env.CUSTOM_API_KEY.substring(0, 6)}...` : ''
+        customApiKey: process.env.CUSTOM_API_KEY ? `${process.env.CUSTOM_API_KEY.substring(0, 6)}...` : '',
+        // 📡 แสดงแค่ว่าตั้งค่าแล้วหรือยัง (เลขท้ายรหัสช่อง) ไม่ส่งลิงก์เต็มกลับไป
+        discordActivitySet: maskDiscordWebhook(process.env.DISCORD_ACTIVITY_WEBHOOK_URL),
+        discordDevReportSet: maskDiscordWebhook(process.env.DISCORD_DEVREPORT_WEBHOOK_URL)
     });
 });
 
@@ -1109,6 +1380,16 @@ app.post('/api/admin/setup_keys', async (req, res) => {
         const isDreamdev = !!(session && session.role === 'dreamdev');
         if (isDreamdev && geminiApiKey !== undefined) {
             updateEnvVar('GEMINI_API_KEY', geminiApiKey);
+        }
+        // 📡 Discord 2 ช่องของผู้พัฒนา: แก้ได้เฉพาะผู้พัฒนา และต้องเป็นลิงก์ Discord Webhook จริงเท่านั้น (ว่าง = ไม่เปลี่ยน)
+        if (isDreamdev) {
+            const { discordActivityWebhook, discordDevReportWebhook } = req.body;
+            for (const [envName, val] of [['DISCORD_ACTIVITY_WEBHOOK_URL', discordActivityWebhook], ['DISCORD_DEVREPORT_WEBHOOK_URL', discordDevReportWebhook]]) {
+                const v = String(val || '').trim();
+                if (!v) continue;
+                if (!isValidDiscordWebhook(v)) throw new Error('ลิงก์ Discord Webhook ไม่ถูกต้อง (ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/)');
+                updateEnvVar(envName, v);
+            }
         }
 
         fs.writeFileSync(envPath, envContent, 'utf8');
@@ -1622,6 +1903,9 @@ app.post('/api/live_session/end', async (req, res) => {
 // 📦 API ดึงข้อมูลสรุปสำหรับ Kerry Express (ทั้งแบบ JSON และดาวน์โหลด Excel)
 async function getOrdersForKerry(options = {}) {
     let { sessionId, date } = options;
+    // 🛡️ รับเฉพาะรหัสรอบไลฟ์ที่ระบบสร้าง (LIVE_ตามด้วยตัวเลข) และวันที่ 8 หลัก
+    if (sessionId && !/^LIVE_\d+$/.test(String(sessionId))) sessionId = null;
+    if (date && !/^\d{8}$/.test(String(date))) date = null;
     const targetDate = date || getTodayString();
 
     // 📦 BUG-03 (ไลฟ์ข้ามเที่ยงคืน): ถ้าไม่ได้ระบุ sessionId และไม่มีไลฟ์ที่กำลังดำเนินอยู่
@@ -1662,11 +1946,13 @@ async function getOrdersForKerry(options = {}) {
     const { data: slips, error } = await query;
     if (error) throw error;
 
-    // ดึงที่อยู่ลูกค้าทั้งหมดจาก configs
-    const { data: addrConfigs } = await supabase.from('configs').select('key, value').like('key', 'cust_addr_%');
+    // 📦 ดึงที่อยู่เฉพาะลูกค้าที่อยู่ในรอบนี้ (เดิมโหลดที่อยู่ลูกค้าทุกคนที่เคยมี ยิ่งร้านโตยิ่งช้า)
+    const lineIdsInRound = [...new Set((slips || []).map(s => s.line_id).filter(Boolean))];
     const addressMap = {};
-    if (addrConfigs) {
-        addrConfigs.forEach(item => {
+    for (let i = 0; i < lineIdsInRound.length; i += 400) {
+        const keys = lineIdsInRound.slice(i, i + 400).map(uid => `cust_addr_${uid}`);
+        const { data: addrConfigs } = await supabase.from('configs').select('key, value').in('key', keys);
+        (addrConfigs || []).forEach(item => {
             try {
                 const uid = item.key.replace('cust_addr_', '');
                 addressMap[uid] = JSON.parse(item.value);
@@ -1750,6 +2036,27 @@ async function getOrdersForKerry(options = {}) {
 
     return orders;
 }
+
+// 📦 รายการรอบไลฟ์ล่าสุด 30 รอบ สำหรับช่องเลือกรอบไลฟ์ในหน้า Export Kerry
+app.get('/api/kerry/sessions', async (req, res) => {
+    try {
+        const { data: rows } = await supabase.from('configs').select('key, value').like('key', 'session_hist_%');
+        const sessions = [];
+        (rows || []).forEach(r => {
+            try {
+                const s = JSON.parse(r.value);
+                if (s && s.id && s.startTime) sessions.push({ id: s.id, startTime: s.startTime, endTime: s.endTime || null, active: false });
+            } catch (e) {}
+        });
+        if (activeLiveSession && activeLiveSession.id) {
+            sessions.push({ id: activeLiveSession.id, startTime: activeLiveSession.startTime, endTime: null, active: true });
+        }
+        sessions.sort((a, b) => b.startTime - a.startTime);
+        res.json({ success: true, sessions: sessions.slice(0, 30) });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 
 // เช็คสรุปสถานะที่อยู่ของรอบไลฟ์/วันนี้
 app.get('/api/kerry/summary', async (req, res) => {
@@ -3083,6 +3390,9 @@ app.post('/webhook', async (req, res) => {
                 // 🔒 Atomic Transaction: รวมการบันทึกยอดเงินลูกค้าและสลิปเป็น Atomic Unit เพื่อป้องกัน Race Condition 100%
                 let inserted = null;
                 try {
+                    // ⚡ Self-Healing: ถ้าฐานข้อมูลไม่ว่างชั่วคราว (database is locked) ลองบันทึกใหม่สูงสุด 3 ครั้ง ก่อนส่งเข้าคิวตรวจเอง
+                    for (let txAttempt = 1; ; txAttempt++) {
+                    try {
                     inserted = supabase.runTransaction(() => {
                         // Double check ป้องกัน race condition ในระดับ transaction
                         const dup = supabase.db.prepare("SELECT id FROM slips WHERE trans_ref = ? AND trans_ref IS NOT NULL AND trans_ref != '' LIMIT 1").get(transRef);
@@ -3106,6 +3416,19 @@ app.post('/webhook', async (req, res) => {
                         );
                         return { id: info.lastInsertRowid };
                     });
+                    if (txAttempt > 1) {
+                        reportSelfHealingToDiscord({ category: 'DATABASE', title: 'ฐานข้อมูลไม่ว่างชั่วคราว', issue: `บันทึกสลิปของ "${lineName}" ครั้งแรกไม่สำเร็จเพราะฐานข้อมูลไม่ว่าง`, actionDetails: `ลองบันทึกใหม่อัตโนมัติ สำเร็จในครั้งที่ ${txAttempt}` }).catch(() => {});
+                    }
+                    break;
+                    } catch (busyErr) {
+                        if (txAttempt < 3 && /SQLITE_BUSY|database is locked/i.test(String(busyErr && busyErr.message))) {
+                            addLog('WARN', `ฐานข้อมูลไม่ว่างชั่วคราว กำลังลองบันทึกสลิปของ "${lineName}" ใหม่ (ครั้งที่ ${txAttempt + 1})`);
+                            await new Promise(r => setTimeout(r, 1500));
+                            continue;
+                        }
+                        throw busyErr;
+                    }
+                    }
                 } catch (txErr) {
                     if (txErr.message === 'DUPLICATE_SLIP' || (txErr.message && txErr.message.includes('UNIQUE constraint failed'))) {
                         addLog('WARN', `ตรวจพบสลิปซ้ำ (Atomic Unique Lock): ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ซ้ำ`);
@@ -3849,7 +4172,12 @@ function startServerGracefully(portToTry, retriesLeft = 4) {
         addLog('SUCCESS', `เปิดเซิร์ฟเวอร์สำเร็จที่พอร์ต ${portToTry}`);
         
         // 🌐 เปิดหน้าต่างเบราว์เซอร์เข้าสู่ Dashboard ทันทีที่เซิร์ฟเวอร์พร้อม (พร้อมหน้าโหลด 3 วินาที)
-        try {
+        // ⚡ ถ้าเป็นการเปิดใหม่อัตโนมัติหลังโปรแกรมหยุดผิดปกติ ไม่ต้องเปิดเบราว์เซอร์ซ้ำ (หน้าเดิมจะเชื่อมต่อใหม่เอง)
+        const autoRestartCount = Number(process.env.AQ_RESTART_COUNT || 0);
+        if (autoRestartCount > 0) {
+            addLog('WARN', `โปรแกรมหยุดทำงานผิดปกติ ระบบเปิดใหม่ให้อัตโนมัติแล้ว (ครั้งที่ ${autoRestartCount})`);
+            reportSelfHealingToDiscord({ category: 'SYSTEM_RESTART', title: 'เปิดโปรแกรมใหม่อัตโนมัติ', issue: 'โปรแกรมหลักหยุดทำงานผิดปกติ', actionDetails: `ตัวเฝ้าโปรแกรมเปิดใหม่ให้ภายใน 5 วินาที (ครั้งที่ ${autoRestartCount}) ดูสาเหตุใน supervisor.log` }).catch(() => {});
+        } else try {
             const { exec } = require('child_process');
             exec(`start http://localhost:${portToTry}`);
         } catch(e) {}

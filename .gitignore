@@ -31,3 +31,4 @@ releases/staging/
 sentinel/proposals.json
 updates/
 backups/
+supervisor.log
