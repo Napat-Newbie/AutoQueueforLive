@@ -2547,7 +2547,10 @@ app.post('/webhook', async (req, res) => {
                     const amount = parseFloat(parts[1]); const customerName = parts.slice(2).join(' ');
                     
                     let result = calculateBestDraws(amount, 0); 
-                    if (result.draws === 0) { await replyLineMessage(replyToken, `ผักกาดขอโทษน้าา 🥺 ยอดเงินที่โอนมายังไม่พอสำหรับค่าสินค้าเลยค่ะ รบกวนเช็คยอดอีกทีน้า`, userId); continue; }
+                    if (result.draws === 0) { 
+                        // await replyLineMessage(replyToken, `ผักกาดขอโทษน้าา 🥺 ยอดเงินที่โอนมายังไม่พอสำหรับค่าสินค้าเลยค่ะ รบกวนเช็คยอดอีกทีน้า`, userId); 
+                        continue; 
+                    }
                     
                     let breakdownStr = result.breakdown.join(', ');
                     const fakeTransRef = `manual-${Date.now()}|${breakdownStr}`;
@@ -2565,7 +2568,7 @@ app.post('/webhook', async (req, res) => {
                         const currentQ = await getCurrentQueueNumber();
                         let replyMsg = `✨ แทรกคิวให้ "${customerName}" เรียบร้อยแล้วค่า!\nคิวที่: ${currentQ} นะคะ`;
                         if (openchatLink && openchatLink.trim() !== "") replyMsg += `\n\n💬 อย่าลืมเข้ากลุ่มเพื่อติดตามเลขพัสดุนะคะ👇\n${openchatLink}`;
-                        await replyLineMessage(replyToken, replyMsg, userId);
+                        // await replyLineMessage(replyToken, replyMsg, userId); // ปิดการตอบกลับตามความต้องการของผู้ใช้
                     }
                 }
             } else {
@@ -2599,7 +2602,7 @@ app.post('/webhook', async (req, res) => {
                         }
                         confirmMsg += `\n\n🚚 พร้อมส่งผ่าน Kerry Express หลังจบไลฟ์นะคะ (หากต้องการแก้ไข สามารถพิมพ์ส่งมาใหม่ได้ตลอดน้า)`;
 
-                        await replyLineMessage(replyToken, confirmMsg, userId);
+                        // await replyLineMessage(replyToken, confirmMsg, userId); // ปิดการตอบกลับที่อยู่จัดส่งตามที่ผู้ใช้กำหนด
                     }
                 }
             }
@@ -2623,7 +2626,7 @@ app.post('/webhook', async (req, res) => {
                     const actualName = receiverName.toLowerCase();
                     if (!actualName.includes(searchName)) {
                         addLog('WARN', `ตรวจพบสลิปโอนผิดบัญชี: ลูกค้า "${lineName}" โอนเข้าบัญชี "${receiverName}" (ไม่ใช่ "${merchantAccountName}")`);
-                        await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้โอนไปที่บัญชี "${receiverName || 'ไม่ทราบชื่อ'}" นะคะ ซึ่งไม่ใช่บัญชีของผักกาดน้า รบกวนคุณลูกค้าเช็คบัญชีผู้รับอีกทีนะคะ 🙏`, userId);
+                        // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้โอนไปที่บัญชี "${receiverName || 'ไม่ทราบชื่อ'}" นะคะ ซึ่งไม่ใช่บัญชีของผักกาดน้า รบกวนคุณลูกค้าเช็คบัญชีผู้รับอีกทีนะคะ 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                         continue;
                     }
                 }
@@ -2636,7 +2639,7 @@ app.post('/webhook', async (req, res) => {
                 if (existingSlip) {
                     addLog('WARN', `ตรวจพบสลิปซ้ำ: ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ที่เคยบันทึกไปแล้ว`);
                     console.log(`⚠️ ตรวจพบสลิปซ้ำ: ${transRef}`);
-                    await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId);
+                    // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                     continue;
                 }
 
@@ -2693,7 +2696,7 @@ app.post('/webhook', async (req, res) => {
                     if (txErr.message === 'DUPLICATE_SLIP' || (txErr.message && txErr.message.includes('UNIQUE constraint failed'))) {
                         addLog('WARN', `ตรวจพบสลิปซ้ำ (Atomic Unique Lock): ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ซ้ำ`);
                         console.log(`⚠️ ตรวจพบสลิปซ้ำ (Atomic Block): ${transRef}`);
-                        await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId);
+                        // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                         continue;
                     }
                     throw txErr;
@@ -2715,6 +2718,7 @@ app.post('/webhook', async (req, res) => {
                             }
                         }
                         
+                        // ✅ ข้อ 1: ตอบกลับเฉพาะกรณีลูกค้าส่งสลิปสำเร็จและได้สิทธิ์ลุ้น (คงไว้ข้อเดียวตามคำสั่งผู้ใช้)
                         let replyMsg = `ผักกาดขอบคุณสำหรับคำสั่งซื้อมากๆ เลยน้าา 🙏💖\nอย่าลืมพิมพ์ชื่อ ที่อยู่ เบอร์โทรส่งมาให้ผักกาดในแชทนี้ด้วยนะคะ จะได้รีบแพ็คของส่งให้ค่า 📦✨`;
                         if (openchatLink && openchatLink.trim() !== "") {
                             replyMsg += `\n\n💬 ผักกาดแจ้งเลขพัสดุในโอเพ่นแชทนี้น้า จิ้มเข้ากลุ่มไว้ได้เลยค่า👇\n${openchatLink}`;
@@ -2724,7 +2728,7 @@ app.post('/webhook', async (req, res) => {
                         await replyLineMessage(replyToken, replyMsg, userId);
                     } else {
                         broadcastTodayStats(); 
-                        await replyLineMessage(replyToken, `ผักกาดได้รับยอดแล้วน้าา\n(แต่ยอดรวมตอนนี้ยังไม่พอสำหรับสินค้านะคะ รบกวนโอนเพิ่มอีกนิดนึงน้าา 😉)`, userId);
+                        // await replyLineMessage(replyToken, `ผักกาดได้รับยอดแล้วน้าา\n(แต่ยอดรวมตอนนี้ยังไม่พอสำหรับสินค้านะคะ รบกวนโอนเพิ่มอีกนิดนึงน้าา 😉)`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด (ข้อ 4)
                     }
                 }
             } else {
@@ -2758,7 +2762,7 @@ app.post('/webhook', async (req, res) => {
                     } else {
                         replyMsg += `\n\n💬 ผักกาดจะแจ้งเลขพัสดุใน LINE OpenChat นะคะ`;
                     }
-                    await replyLineMessage(replyToken, replyMsg, userId);
+                    // await replyLineMessage(replyToken, replyMsg, userId); // ปิดการตอบกลับภาพที่สแกนไม่ติดตามที่ผู้ใช้กำหนด (ข้อ 3)
                 }
             }
         }
