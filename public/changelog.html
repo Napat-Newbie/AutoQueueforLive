@@ -21,7 +21,7 @@
                 <div>
                     <div class="flex items-center space-x-2.5">
                         <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">Version History & Changelog</h1>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.8 (CURRENT)</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.9 (CURRENT)</span>
                     </div>
                     <p class="text-xs text-zinc-400 mt-0.5">บันทึกประวัติการปรับปรุง แก้ไขบั๊ก และฟีเจอร์ใหม่ของ AutoQueue for Live ทั้งหมด</p>
                 </div>
@@ -34,12 +34,43 @@
         <!-- Timeline Container -->
         <div class="space-y-6">
 
-            <!-- v1.0.8 -->
+            <!-- v1.0.9 -->
             <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
                     <div class="flex items-center space-x-3">
-                        <span class="text-lg font-bold text-white">🚀 Version 1.0.8</span>
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.9</span>
                         <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">17 ตุลาคม 2026</span>
+                </div>
+
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">📦 ไลฟ์และ Kerry:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>หน้า Export Kerry เลือกรอบไลฟ์ย้อนหลังได้ 30 รอบล่าสุด ได้ลูกค้าครบทั้งรอบแม้ไลฟ์ข้ามเที่ยงคืนหรือกำลังไลฟ์รอบใหม่อยู่</li>
+                            <li>ส่งออก Kerry ดึงเฉพาะที่อยู่ของลูกค้าในรอบนั้น (เร็วขึ้นเมื่อมีลูกค้าสะสมเยอะ)</li>
+                            <li>กดจบไลฟ์ตอนยังมีคิวค้าง จะมีข้อความเตือนจำนวนคิวที่ค้างก่อนยืนยัน</li>
+                            <li>เก็บรูปสลิปไว้ 30 วัน (เดิม 7 วัน)</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 class="text-xs font-bold text-blue-400 uppercase tracking-wider mb-1.5">⚡ ระบบดูแลตัวเอง:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>โปรแกรมหยุดทำงานผิดปกติ ระบบเปิดใหม่ให้อัตโนมัติภายใน 5 วินาที</li>
+                            <li>ฐานข้อมูลไม่ว่างชั่วคราว ระบบลองบันทึกสลิปใหม่ให้เอง</li>
+                            <li>พื้นที่เครื่องใกล้เต็ม ระบบลบรูปสลิปและไฟล์สำรองเก่าให้เอง (ไม่แตะข้อมูลร้าน)</li>
+                            <li>บันทึกการใช้งานและรายงานข้อผิดพลาดส่งถึงผู้พัฒนา (ปิดบังเบอร์โทรลูกค้า)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- v1.0.8 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.8</span>
                     </div>
                     <span class="text-xs text-zinc-400 font-mono">16 ตุลาคม 2026</span>
                 </div>

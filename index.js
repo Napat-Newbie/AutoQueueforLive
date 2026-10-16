@@ -1943,8 +1943,45 @@ async function getOrdersForKerry(options = {}) {
     } else {
         query = query.eq('trans_date', targetDate);
     }
-    const { data: slips, error } = await query;
+    const { data: slipsFound, error } = await query;
     if (error) throw error;
+    let slips = slipsFound || [];
+
+    // 📦 รอบไลฟ์ที่บันทึกตั้งแต่ v1.0.7 ลงไป: สลิปยังไม่มีรหัสรอบไลฟ์ (session_id ว่าง)
+    // ให้นับสลิปที่ไม่มีรหัสรอบ ซึ่งเวลาโอนอยู่ในช่วงเริ่ม-จบของไลฟ์นั้นด้วย เพื่อให้เลือกรอบไลฟ์เก่าได้ลูกค้าครบ
+    if (sessionId) {
+        try {
+            let sess = (activeLiveSession && activeLiveSession.id === sessionId) ? activeLiveSession : null;
+            if (!sess) {
+                const { data: hist } = await supabase.from('configs').select('value').eq('key', `session_hist_${sessionId}`).single();
+                sess = hist && hist.value ? JSON.parse(hist.value) : null;
+            }
+            if (sess && sess.startTime) {
+                const startMs = Number(sess.startTime);
+                const endMs = Number(sess.endTime) || Date.now();
+                const toBkk = (ms) => new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+                const dates = [];
+                for (let t = startMs; t <= endMs + 86400000; t += 86400000) {
+                    const d = toBkk(Math.min(t, endMs));
+                    const s = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+                    if (!dates.includes(s)) dates.push(s);
+                    if (dates.length > 3) break;
+                }
+                const { data: legacy } = await supabase.from('slips').select('*').in('trans_date', dates).neq('status', 'rejected');
+                const have = new Set(slips.map(s => s.id));
+                const startLocal = toBkk(startMs).getTime();
+                const endLocal = toBkk(endMs).getTime();
+                (legacy || []).forEach(s => {
+                    if (s.session_id || have.has(s.id)) return;
+                    const m = String(s.trans_date || '').match(/^(\d{4})(\d{2})(\d{2})$/);
+                    const tm = String(s.trans_time || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+                    if (!m || !tm) return;
+                    const local = new Date(+m[1], +m[2] - 1, +m[3], +tm[1], +tm[2], +(tm[3] || 0)).getTime();
+                    if (local >= startLocal && local <= endLocal) { slips.push(s); have.add(s.id); }
+                });
+            }
+        } catch (e) { /* ไม่มีประวัติรอบไลฟ์นี้ ใช้เฉพาะสลิปที่มีรหัสรอบ */ }
+    }
 
     // 📦 ดึงที่อยู่เฉพาะลูกค้าที่อยู่ในรอบนี้ (เดิมโหลดที่อยู่ลูกค้าทุกคนที่เคยมี ยิ่งร้านโตยิ่งช้า)
     const lineIdsInRound = [...new Set((slips || []).map(s => s.line_id).filter(Boolean))];
