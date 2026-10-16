@@ -1,12 +1,17 @@
 {
-  "version": "1.0.10",
-  "releaseDate": "2026-10-16",
-  "title": "AutoQueueforLive v1.0.10",
-  "changelog": [
-    "ผู้พัฒนาเข้าสู่ระบบเครื่องร้านได้อีกครั้ง",
-    "ปุ่มอัปเดตดาวน์โหลดไฟล์จาก GitHub ได้หลัง GitHub เปลี่ยนที่เก็บไฟล์"
-  ],
-  "downloadUrl": "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/dac0e818afbb39d25aec0a516bd3921c215802c6/releases/update_v1.0.10.zip",
-  "fileSizeKB": 373.6,
-  "sha256": "b77b9f1c489f5195774d2356f0b4458b3a4837d6165ac5f261b8a21dd1cc215e"
+    "version":  "1.0.11",
+    "releaseDate":  "2026-10-17",
+    "title":  "AutoQueueforLive v1.0.11",
+    "changelog":  [
+                      "ลูกค้าโอนยอดไม่พอ ขึ้นการ์ดสีส้มในคิวรอ บอกว่าลืมค่าส่งหรือโอนไม่ครบ และยอดที่ต้องโอนเพิ่ม",
+                      "ลูกค้าโอนเพิ่มจนครบ การ์ดเปลี่ยนเป็นคิวปกติในตำแหน่งเดิม",
+                      "บอทแจ้งลูกค้าใน LINE เมื่อยอดยังไม่พอ",
+                      "หน้าหลักแสดงยอดโอนล่าสุด 30 รายการ",
+                      "ลูกค้าที่โอนก่อนกดเริ่มไลฟ์ไม่ถูกเก็บค่าส่งซ้ำ",
+                      "โอนเท่าราคาสินค้าพอดีแต่ลืมค่าส่ง ระบบรอค่าส่ง",
+                      "ยอดในกระเป๋าลูกค้าไม่ถูกบวกค่าส่งเกินจริง"
+                  ],
+    "downloadUrl":  "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/b8654be7b57f9669db49480be317f270be469478/releases/update_v1.0.11.zip",
+    "fileSizeKB":  378.2,
+    "sha256":  "7b3717736df1f6e8755ad2f8e67d03c6d68056f3522074d4c23a9166e6307ce5"
 }
