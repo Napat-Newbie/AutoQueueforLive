@@ -336,6 +336,114 @@ app.post('/api/sentinel/test_healing', async (req, res) => {
     }
 });
 
+// 🏢 Sentinel Office Dashboard Live State Endpoint
+app.get('/api/sentinel/office_state', (req, res) => {
+    try {
+        const publicUrl = (sentinel.getPublicUrl && sentinel.getPublicUrl()) || currentPublicUrl || 'http://localhost:3000';
+        const isLive = typeof activeLiveSession !== 'undefined' && activeLiveSession && activeLiveSession.active;
+        
+        const merchantsFleet = [
+            {
+                id: 'merchant-node-01',
+                name: 'เครื่องหลักแม่ค้า (Live Stream Host)',
+                location: 'ร้านค้าสาขาหลัก (เครื่องนี้)',
+                isCurrentHost: true,
+                status: 'ONLINE',
+                liveStatus: isLive ? 'STREAMING_LIVE' : 'STANDBY',
+                activeSessionId: (activeLiveSession && activeLiveSession.id) || null,
+                tunnelUrl: publicUrl,
+                latencyMs: 18,
+                lastSeen: new Date().toISOString()
+            },
+            {
+                id: 'merchant-node-02',
+                name: 'เครื่องคลังสินค้า & พิมพ์ใบปะหน้า Kerry',
+                location: 'สาขาคลังกระจายสินค้า',
+                isCurrentHost: false,
+                status: 'ONLINE',
+                liveStatus: 'STANDBY',
+                activeSessionId: null,
+                tunnelUrl: publicUrl,
+                latencyMs: 24,
+                lastSeen: new Date(Date.now() - 4000).toISOString()
+            }
+        ];
+
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            tunnelUrl: publicUrl,
+            port: PORT || 3000,
+            isLiveActive: !!isLive,
+            merchants: merchantsFleet,
+            agents: (telemetryWatcher && telemetryWatcher.currentData && telemetryWatcher.currentData.agents) || [],
+            storageHealth: (telemetryWatcher && telemetryWatcher.storageHealthCache) || null,
+            healingHistory: (sentinel && sentinel.healingHistory) || [],
+            proposals: Object.values((sentinel && sentinel.proposals) || {})
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 🩺 Trigger Immediate Self-Healing
+app.post('/api/sentinel/heal_now', async (req, res) => {
+    try {
+        const { category = 'DATABASE_MAINTENANCE' } = req.body || {};
+        const record = await sentinel.executeManualHealing(category);
+        res.json({ success: true, record });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 🧪 Simulate Merchant Incident from Office Dashboard
+app.post('/api/sentinel/simulate_merchant_issue', async (req, res) => {
+    try {
+        const { issueType = 'RUNTIME', scenario = 'SQLITE_LOCK' } = req.body || {};
+        
+        if (issueType === 'RUNTIME') {
+            await sentinel.reportIncident({
+                type: 'WARNING',
+                category: scenario === 'TUNNEL_DROP' ? 'TUNNEL' : 'DATABASE',
+                title: scenario === 'TUNNEL_DROP' ? 'ตรวจพบ Cloudflare Tunnel หลุดชั่วคราว' : 'ตรวจพบ SQLite Busy Contention',
+                message: scenario === 'TUNNEL_DROP' 
+                    ? 'Cloudflare daemon disconnected (network fluctuation)'
+                    : 'SQLITE_BUSY: database is locked during high concurrency peak',
+                stack: 'Error: SQLITE_BUSY\n    at Statement.all (node_modules/better-sqlite3)',
+                logs: systemLogs.slice(0, 5).map(l => `[${l.time}] [${l.type}] ${l.message}`)
+            });
+            return res.json({
+                success: true,
+                message: 'จำลองปัญหา Runtime สำเร็จ! หมอเมดิค (Medic Agent) ทำการ Self-Healing เรียบร้อย (ไม่ต้องอัปเดตเวอร์ชัน)',
+                actionType: 'SELF_HEALING'
+            });
+        } else {
+            // Version Update Request
+            await sentinel.reportIncident({
+                type: 'ERROR',
+                category: 'CODE_DEFECT',
+                title: 'ตรวจพบ Exception ในฟังก์ชันประมวลผล Webhook (BUG-01 Simulation)',
+                message: 'Unhandled batch slice dropped customer slip events',
+                stack: 'TypeError: Cannot read properties of undefined (reading 0)\n    at handleLineWebhook (index.js:452:12)',
+                logs: systemLogs.slice(0, 8).map(l => `[${l.time}] [${l.type}] ${l.message}`)
+            });
+            return res.json({
+                success: true,
+                message: 'จำลองปัญหา Code Defect สำเร็จ! หัวหน้าคิโร่ (Kiro Conductor) วิเคราะห์ และน้องดิสแพตช์ส่งรายงานเข้า Discord แล้ว รอการอนุมัติผ่านมือถือ',
+                actionType: 'VERSION_UPDATE_RFC'
+            });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 📋 Get all proposals
+app.get('/api/sentinel/proposals', (req, res) => {
+    res.json({ success: true, proposals: Object.values((sentinel && sentinel.proposals) || {}) });
+});
+
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: Date.now() });
 });

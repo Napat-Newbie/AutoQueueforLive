@@ -11,7 +11,7 @@ const StorageMonitor = require('./storage_monitor.js');
 class TelemetryWatcher {
     constructor(options = {}) {
         this.brainBase = options.brainBase || path.join(process.env.USERPROFILE || 'C:/Users/Napat.R', '.gemini/antigravity/brain');
-        this.parentConvId = options.parentConvId || '2bcd5645-4a31-4ff5-9b46-e83490c82571';
+        this.parentConvId = options.parentConvId || process.env.CONVERSATION_ID || '82c1fccc-253f-4df2-a685-20e6068f9a40';
         this.telemetryPath = options.telemetryPath || path.join(__dirname, '..', 'public', 'agent_telemetry.json');
         this.io = options.io || null;
         this.intervalMs = options.intervalMs || 1000;
@@ -24,49 +24,40 @@ class TelemetryWatcher {
 
         this.agentsConfig = [
             {
-                id: 'gemini-vibe',
+                id: 'sentinel-scanner',
                 convId: this.parentConvId,
-                name: 'Gemini 3.8 Flash',
-                type: 'vibe-coder',
-                role: 'Pair Programmer & Rapid Executor',
-                icon: '⚡',
-                badge: 'Vibe Coder'
+                name: 'น้องสแกน (Scanner Agent)',
+                type: 'sentinel_scanner',
+                role: 'Telemetry & Fleet Watchdog',
+                icon: '🕵️',
+                badge: 'Fleet Sentry'
             },
             {
-                id: 'claude-code',
-                convId: 'e1e5a366-d662-46f4-a9ee-6963c3c0d175',
-                name: 'Claude Code Agent (Opus 4.6)',
-                type: 'claude-code-agent',
-                role: 'Lead Architect, Inspector & Mentor',
-                icon: '🧠',
-                badge: 'Certified Inspector (A+)'
+                id: 'sentinel-medic',
+                convId: this.parentConvId,
+                name: 'หมอเมดิค (Medic Agent)',
+                type: 'sentinel_medic',
+                role: 'Priority 1 Autonomous Self-Healing',
+                icon: '🩺',
+                badge: 'Self-Healer'
             },
             {
-                id: 'c9c384d0',
-                convId: 'c9c384d0-23b0-44be-a444-15c3f12c7749',
-                name: 'Agent Fleet Observer',
-                type: 'agent-observer',
-                role: 'Supervisor & Telemetry Tracker',
-                icon: '👁️',
-                badge: 'Fleet Observer'
+                id: 'kiro-conductor',
+                convId: 'f831f216-6a32-4073-b115-9caeb0977f57',
+                name: 'หัวหน้าคิโร่ (Kiro Conductor)',
+                type: 'kiro_conductor',
+                role: 'Chief Auditor & Safety Officer (Opus Tier)',
+                icon: '🛡️',
+                badge: 'Chief Auditor'
             },
             {
-                id: 'fc89b6b8',
-                convId: 'fc89b6b8-1cf1-4c6f-ac10-c8a3670348a9',
-                name: 'Concurrency Stress Tester',
-                type: 'webhook-simulator-tester',
-                role: 'Concurrency Stress QA',
-                icon: '🧪',
-                badge: 'Load Simulator'
-            },
-            {
-                id: '07786c46',
-                convId: '07786c46-7da8-4ed5-a3f9-7dcf89232e93',
-                name: 'Storage & DB Health Monitor',
-                type: 'storage-health-monitor',
-                role: 'Disk, Uploads & SQLite Health Watcher',
-                icon: '💾',
-                badge: 'Storage Healthy'
+                id: 'sentinel-dispatcher',
+                convId: this.parentConvId,
+                name: 'น้องดิสแพตช์ (Dispatcher Agent)',
+                type: 'sentinel_dispatcher',
+                role: 'Release Officer & Discord Bridge',
+                icon: '📦',
+                badge: 'Discord Officer'
             }
         ];
     }
@@ -177,34 +168,26 @@ class TelemetryWatcher {
         } else {
             // Idle / Finished
             state = 'idle';
-            if (agent.id === 'claude-code') {
-                currentAction = '🌟 ตรวจสอบและออกใบรับรอง Grade A+ เรียบร้อย (Standby)';
-                badge = 'Certified Inspector (A+)';
-                targetFile = 'index.js & db.js';
-                operation = 'Certified (100% Parity)';
-            } else if (agent.id === 'gemini-vibe') {
-                currentAction = '⚡ เสร็จสิ้นการอัปเกรดระบบ (Standby รอรับคำสั่งจากผู้ใช้)';
-                badge = 'Vibe Coder (A+)';
-                targetFile = 'index.js & db.js';
-                operation = 'Optimized & Running';
-            } else if (agent.id === 'c9c384d0') {
-                currentAction = '👁️ มอนิเตอร์สุขภาพของระบบและประสิทธิภาพเซิร์ฟเวอร์';
-                badge = 'Fleet Observer';
-                targetFile = 'agent_telemetry.json';
-                operation = 'Monitoring';
-            } else if (agent.id === 'fc89b6b8') {
-                currentAction = '🧪 จำลองโหลด Concurrency ผ่าน 100% (Zero-Drop certified)';
-                badge = 'Load Simulator';
-                targetFile = 'test_simulator.js';
-                operation = 'Stress QA Passed';
-            } else if (agent.id === '07786c46') {
-                const walMb = this.storageHealthCache ? this.storageHealthCache.database.walSizeMB : '0.00';
-                const diskFree = this.storageHealthCache ? this.storageHealthCache.disk.freePercent : '27.9';
-                const slipCount = this.storageHealthCache ? this.storageHealthCache.uploads.count : 0;
-                currentAction = `💾 เฝ้าระวังพื้นที่ฮาร์ดดิสก์ (${diskFree}% ว่าง) รูปสลิป ${slipCount} รูป และ SQLite WAL (${walMb} MB)`;
-                badge = 'Storage Healthy';
-                targetFile = 'data.sqlite & uploads/';
-                operation = 'Storage Watch Active';
+            if (agent.id === 'sentinel-scanner') {
+                currentAction = '🕵️ สแกนสถานะเครื่องแม่ค้า, ท่อ Cloudflare, Webhook และ Quota ต่อเนื่อง';
+                badge = 'Fleet Sentry (Active)';
+                targetFile = 'Fleet Telemetry Stream';
+                operation = 'Continuous Watch';
+            } else if (agent.id === 'sentinel-medic') {
+                currentAction = '🩺 สแตนด์บายหน่วยกู้ภัย Self-Healing พร้อมสั่ง PRAGMA checkpoint ทันที';
+                badge = 'Self-Healer (Ready)';
+                targetFile = 'data.sqlite & runtime';
+                operation = 'Hot Mitigation Ready';
+            } else if (agent.id === 'kiro-conductor') {
+                currentAction = '🛡️ หัวหน้าฝ่ายสถาปัตยกรรม (Opus Tier) ควบคุมการวิเคราะห์และตรวจสอบความปลอดภัย';
+                badge = 'Chief Auditor (Opus)';
+                targetFile = 'Architectural Guard';
+                operation = 'Auditor Standby';
+            } else if (agent.id === 'sentinel-dispatcher') {
+                currentAction = '📦 แสตนด์บายส่งรายงานขออนุมัติอัปเดตเวอร์ชันใหม่เข้า Discord พร้อม Mobile Action';
+                badge = 'Discord Officer (Ready)';
+                targetFile = 'Discord Webhook & Releases';
+                operation = 'Dispatcher Standby';
             }
         }
 

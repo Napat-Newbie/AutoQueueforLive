@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="th" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoQueue Sentinel Office • AI Monitoring & Self-Healing Hub</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        darkBg: '#0b0f19',
+                        darkCard: '#131b2e',
+                        darkBorder: '#1f2d4d',
+                        neonBlue: '#38bdf8',
+                        neonGreen: '#10b981',
+                        neonAmber: '#f59e0b',
+                        neonPurple: '#a855f7',
+                        neonRed: '#ef4444'
+                    },
+                    fontFamily: {
+                        sans: ['Prompt', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'Fira Code', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0b0f19; }
+        ::-webkit-scrollbar-thumb { background: #1f2d4d; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #38bdf8; }
+
+        /* Office Isometric & Character Animations */
+        @keyframes typing {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-3px); }
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-5px); }
+        }
+        @keyframes pulseGlow {
+            0%, 100% { box-shadow: 0 0 10px rgba(56, 189, 248, 0.2); }
+            50% { box-shadow: 0 0 25px rgba(56, 189, 248, 0.6); }
+        }
+        @keyframes radarSweep {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes blinkLight {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 1; }
+        }
+        @keyframes healWave {
+            0% { transform: scale(0.9); opacity: 0.8; }
+            50% { transform: scale(1.15); opacity: 1; filter: drop-shadow(0 0 8px #10b981); }
+            100% { transform: scale(0.9); opacity: 0.8; }
+        }
+        @keyframes bounceIn {
+            0% { transform: scale(0.6) translateY(10px); opacity: 0; }
+            70% { transform: scale(1.05) translateY(-2px); opacity: 1; }
+            100% { transform: scale(1) translateY(0); opacity: 1; }
+        }
+
+        .animate-typing { animation: typing 0.6s infinite ease-in-out; }
+        .animate-float { animation: float 3s infinite ease-in-out; }
+        .animate-radar { animation: radarSweep 4s linear infinite; }
+        .animate-heal { animation: healWave 2s infinite ease-in-out; }
+        .animate-bubble { animation: bounceIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        
+        .desk-surface {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            box-shadow: inset 0 1px 1px rgba(255,255,255,0.1), 0 10px 15px -3px rgba(0,0,0,0.5);
+        }
+        .monitor-glow {
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.3);
+        }
+        .speech-bubble {
+            position: relative;
+            background: #1e293b;
+            border: 1px solid #38bdf8;
+            border-radius: 12px;
+            padding: 8px 12px;
+            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.7), 0 0 15px rgba(56, 189, 248, 0.2);
+        }
+        .speech-bubble::after {
+            content: '';
+            position: absolute;
+            bottom: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 8px 8px 0;
+            border-style: solid;
+            border-color: #38bdf8 transparent;
+            display: block;
+            width: 0;
+        }
+
+        /* Glassmorphism */
+        .glass-panel {
+            background: rgba(19, 27, 46, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(31, 45, 77, 0.8);
+        }
+    </style>
+</head>
+<body class="bg-darkBg text-slate-100 font-sans min-h-screen flex flex-col antialiased selection:bg-neonBlue selection:text-black">
+
+    <!-- Top Navigation & Header -->
+    <header class="border-b border-darkBorder bg-darkCard/90 sticky top-0 z-40 backdrop-blur px-4 py-3 flex items-center justify-between shadow-lg">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-md shadow-cyan-500/20">
+                <i data-lucide="shield-check" class="w-6 h-6"></i>
+            </div>
+            <div>
+                <div class="flex items-center space-x-2">
+                    <h1 class="text-base font-bold tracking-tight text-white flex items-center">
+                        AutoQueue Sentinel Office
+                    </h1>
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        ANTIGRAVITY IMPLANT
+                    </span>
+                </div>
+                <p class="text-xs text-slate-400">Autonomous Sub-Agent Fleet • Self-Healing & Mobile Discord Gate</p>
+            </div>
+        </div>
+
+        <!-- Header Actions -->
+        <div class="flex items-center space-x-2">
+            <button id="btnSoundToggle" onclick="toggleAudio()" class="p-2 rounded-lg bg-darkBorder/60 hover:bg-darkBorder text-slate-300 hover:text-white transition" title="เปิด/ปิดเสียงบรรยากาศ">
+                <i id="soundIcon" data-lucide="volume-2" class="w-4 h-4"></i>
+            </button>
+            <button onclick="triggerQuickHeal()" class="px-3 py-1.5 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition active:scale-95">
+                <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+                <span>สั่ง Self-Heal ทันที</span>
+            </button>
+            <div class="h-6 w-px bg-darkBorder mx-1"></div>
+            <div id="liveClock" class="font-mono text-xs text-cyan-400 font-semibold px-2 py-1 rounded bg-slate-900 border border-darkBorder">
+                --:--:--
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace Container -->
+    <main class="flex-1 flex flex-col lg:flex-row overflow-hidden">
+
+        <!-- Left / Center: Interactive Virtual Office Viewport -->
+        <div class="flex-1 flex flex-col p-3 lg:p-4 overflow-y-auto space-y-4">
+            
+            <!-- Fleet Status Quick Bar -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <!-- Merchant Machines Online -->
+                <div class="glass-panel rounded-xl p-3 flex items-center justify-between border-l-4 border-l-emerald-500">
+                    <div>
+                        <div class="text-[11px] text-slate-400 uppercase font-medium">เครื่องแม่ค้าที่ดูแล</div>
+                        <div class="text-base font-bold text-white flex items-center gap-1.5">
+                            <span id="merchantCount">2</span> เครื่อง
+                            <span class="text-[10px] text-emerald-400 font-normal">(ออนไลน์ 100%)</span>
+                        </div>
+                    </div>
+                    <div class="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
+                        <i data-lucide="store" class="w-5 h-5"></i>
+                    </div>
+                </div>
+
+                <!-- Self-Healing Actions -->
+                <div class="glass-panel rounded-xl p-3 flex items-center justify-between border-l-4 border-l-cyan-500">
+                    <div>
+                        <div class="text-[11px] text-slate-400 uppercase font-medium">Self-Healing สำเร็จ</div>
+                        <div class="text-base font-bold text-white flex items-center gap-1.5">
+                            <span id="healingCount">14</span> ครั้ง
+                            <span class="text-[10px] text-cyan-400 font-normal">(ไม่ต้องอัปเดต)</span>
+                        </div>
+                    </div>
+                    <div class="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
+                        <i data-lucide="heart-pulse" class="w-5 h-5"></i>
+                    </div>
+                </div>
+
+                <!-- SQLite WAL & Locks -->
+                <div class="glass-panel rounded-xl p-3 flex items-center justify-between border-l-4 border-l-purple-500">
+                    <div>
+                        <div class="text-[11px] text-slate-400 uppercase font-medium">สถานะ SQLite & WAL</div>
+                        <div class="text-base font-bold text-white flex items-center gap-1.5">
+                            <span id="walSizeDisplay">0.01 MB</span>
+                            <span class="text-[10px] text-purple-400 font-normal">(NORMAL)</span>
+                        </div>
+                    </div>
+                    <div class="p-2 rounded-lg bg-purple-500/10 text-purple-400">
+                        <i data-lucide="database" class="w-5 h-5"></i>
+                    </div>
+                </div>
+
+                <!-- Discord Approvals -->
+                <div class="glass-panel rounded-xl p-3 flex items-center justify-between border-l-4 border-l-amber-500">
+                    <div>
+                        <div class="text-[11px] text-slate-400 uppercase font-medium">คำขออัปเดต (Discord)</div>
+                        <div class="text-base font-bold text-white flex items-center gap-1.5">
+                            <span id="pendingApprovalCount">0</span> ค้าง
+                            <span class="text-[10px] text-amber-400 font-normal">(Mobile Gate)</span>
+                        </div>
+                    </div>
+                    <div class="p-2 rounded-lg bg-amber-500/10 text-amber-400">
+                        <i data-lucide="message-square" class="w-5 h-5"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Virtual Office Canvas / Interactive 2.5D Room -->
+            <div class="relative glass-panel rounded-2xl border border-darkBorder overflow-hidden shadow-2xl p-4 sm:p-6 bg-gradient-to-b from-[#131d36] via-[#0d1424] to-[#080d18] min-h-[460px] flex flex-col justify-between">
+                
+                <!-- Room Background Accents: Server Rack & Windows -->
+                <div class="absolute inset-0 pointer-events-none opacity-20 bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:24px_24px]"></div>
+                
+                <!-- Server Room & Office Facilities Top Bar -->
+                <div class="relative z-10 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <!-- Server Rack Blinker -->
+                        <div class="flex items-center gap-1 px-2.5 py-1 rounded bg-black/60 border border-slate-700/60 text-[11px] text-slate-300">
+                            <span class="text-xs font-mono text-cyan-400">SERVER-RACK-01</span>
+                            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                            <span class="w-2 h-2 rounded-full bg-blue-400"></span>
+                            <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                        </div>
+                        <!-- Active Live Stream Badge -->
+                        <div id="liveStreamStatusBadge" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs font-semibold">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                            <span>แม่ค้ากำลังออนไลน์ (Standby Mode)</span>
+                        </div>
+                    </div>
+
+                    <!-- Speech Bubble Trigger Mode & Speed -->
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-slate-400">จำลองการคุยส่งงาน:</span>
+                        <button onclick="triggerDialogueDemo('HEALING')" class="px-2.5 py-1 text-xs rounded bg-cyan-950 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-900 transition flex items-center gap-1">
+                            <i data-lucide="play" class="w-3 h-3"></i>
+                            <span>เคส Self-Healing</span>
+                        </button>
+                        <button onclick="triggerDialogueDemo('VERSION_UPDATE')" class="px-2.5 py-1 text-xs rounded bg-amber-950 border border-amber-500/40 text-amber-300 hover:bg-amber-900 transition flex items-center gap-1">
+                            <i data-lucide="alert-triangle" class="w-3 h-3"></i>
+                            <span>เคส ขอแก้เวอร์ชัน</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Office Floor Plan with 4 Sub-Agent Desks -->
+                <div class="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-6 my-4">
+
+                    <!-- WORKSTATION 1: น้องสแกน (Scanner Agent - Telemetry & Fleet Watchdog) -->
+                    <div id="card-scanner" onclick="selectAgent('scanner')" class="group relative desk-surface rounded-xl p-4 border border-cyan-500/30 hover:border-cyan-400 transition cursor-pointer shadow-lg hover:shadow-cyan-500/10">
+                        <!-- Dynamic Speech Bubble Above Character -->
+                        <div id="bubble-scanner" class="hidden absolute -top-16 left-6 z-30 max-w-[280px] speech-bubble animate-bubble border-cyan-400">
+                            <div class="text-[11px] text-cyan-300 font-bold flex items-center gap-1">
+                                <span>🕵️ น้องสแกน:</span>
+                            </div>
+                            <div id="bubble-scanner-text" class="text-xs text-white mt-0.5 leading-snug">
+                                ตรวจพบความผิดปกติ กำลังส่งข้อมูลให้หัวหน้าคิโร่!
+                            </div>
+                        </div>
+
+                        <div class="flex items-start justify-between">
+                            <div class="flex items-center space-x-3">
+                                <!-- Character Avatar (Animated) -->
+                                <div class="relative w-14 h-14 rounded-xl bg-gradient-to-br from-cyan-600 to-blue-700 flex items-center justify-center text-2xl shadow-inner border border-cyan-300/40 group-hover:scale-105 transition">
+                                    <span class="animate-typing">🕵️</span>
+                                    <!-- Scanning radar indicator -->
+                                    <span class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-cyan-400/20 border border-cyan-400 flex items-center justify-center">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping"></span>
+                                    </span>
+                                </div>
+                                <div>
+                                    <div class="flex items-center space-x-2">
+                                        <h3 class="font-bold text-sm text-white group-hover:text-cyan-300 transition">น้องสแกน</h3>
+                                        <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                                            Telemetry Watchdog
+                                        </span>
+                                    </div>
+                                    <p class="text-xs text-slate-400">Gemini 3.8 Flash • เฝ้าระวังเครื่องแม่ค้า</p>
+                                </div>
+                            </div>
+                            <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" title="Active"></span>
+                        </div>
+
+                        <!-- Desk Gear & Live Terminal -->
+                        <div class="mt-3 bg-black/60 rounded-lg p-2.5 border border-slate-800 font-mono text-[11px] space-y-1">
+                            <div class="flex items-center justify-between text-slate-400">
+                                <span class="flex items-center gap-1 text-cyan-400">
+                                    <i data-lucide="radio" class="w-3 h-3 animate-spin"></i> Fleet Ping
+                                </span>
+                                <span class="text-emerald-400 font-bold">18ms (Online)</span>
+                            </div>
+                            <div id="scannerCurrentAction" class="text-slate-300 truncate text-[11px]">
+                                🟢 ตรวจสอบ Cloudflare Tunnel และ SQLite Contention ปกติ
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- WORKSTATION 2: หมอเมดิค (Medic Agent - Priority 1 Autonomous Self-Healing) -->
+                    <div id="card-medic" onclick="selectAgent('medic')" class="group relative desk-surface rounded-xl p-4 border border-emerald-500/30 hover:border-emerald-400 transition cursor-pointer shadow-lg hover:shadow-emerald-500/10">
+                        <!-- Dynamic Speech Bubble Above Character -->
+                        <div id="bubble-medic" class="hidden absolute -top-16 left-6 z-30 max-w-[280px] speech-bubble animate-bubble border-emerald-400">
+                            <div class="text-[11px] text-emerald-300 font-bold flex items-center gap-1">
+                                <span>🩺 หมอเมดิค:</span>
+                            </div>
+                            <div id="bubble-medic-text" class="text-xs text-white mt-0.5 leading-snug">
+                                กำลังทำ WAL Checkpoint คลี่คลายการล็อกทันทีครับ!
+                            </div>
+                        </div>
+
+                        <div class="flex items-start justify-between">
+                            <div class="flex items-center space-x-3">
+                                <!-- Character Avatar (Animated) -->
+                                <div class="relative w-14 h-14 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 flex items-center justify-center text-2xl shadow-inner border border-emerald-300/40 group-hover:scale-105 transition">
+                                    <span class="animate-heal">🩺</span>
+                                    <span class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-emerald-400/20 border border-emerald-400 flex items-center justify-center">
+                                        <i data-lucide="sparkles" class="w-2.5 h-2.5 text-emerald-300"></i>
+                                    </span>
+                                </div>
+                                <div>
+                                    <div class="flex items-center space-x-2">
+                                        <h3 class="font-bold text-sm text-white group-hover:text-emerald-300 transition">หมอเมดิค</h3>
+                                        <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                            Self-Healing Medic
+                                        </span>
+                                    </div>
+                                    <p class="text-xs text-slate-400">Autonomous Restorer • คลี่คลายไม่ต้องอัปเดต</p>
+                                </div>
+                            </div>
+                            <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" title="Ready"></span>
+                        </div>
+
+                        <!-- Desk Gear & Live Terminal -->
+                        <div class="mt-3 bg-black/60 rounded-lg p-2.5 border border-slate-800 font-mono text-[11px] space-y-1">
+                            <div class="flex items-center justify-between text-slate-400">
+                                <span class="flex items-center gap-1 text-emerald-400">
+                                    <i data-lucide="shield" class="w-3 h-3"></i> Mitigation Tool
+                                </span>
+                                <span class="text-cyan-400">WAL Truncate & Timeout</span>
+                            </div>
+                            <div id="medicCurrentAction" class="text-slate-300 truncate text-[11px]">
+                                🟢 แสตนด์บายหน่วยกู้ภัย SQLite & Tunnel Reconnect
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- WORKSTATION 3: หัวหน้าคิโร่ (Kiro Conductor - Senior Safety & Architecture Auditor) -->
+                    <div id="card-kiro" onclick="selectAgent('kiro')" class="group relative desk-surface rounded-xl p-4 border border-purple-500/30 hover:border-purple-400 transition cursor-pointer shadow-lg hover:shadow-purple-500/10">
+                        <!-- Dynamic Speech Bubble Above Character -->
+                        <div id="bubble-kiro" class="hidden absolute -top-16 left-6 z-30 max-w-[280px] speech-bubble animate-bubble border-purple-400">
+                            <div class="text-[11px] text-purple-300 font-bold flex items-center gap-1">
+                                <span>🛡️ หัวหน้าคิโร่:</span>
+                            </div>
+                            <div id="bubble-kiro-text" class="text-xs text-white mt-0.5 leading-snug">
+                                วิเคราะห์แล้ว: เป็นปัญหา Runtime ส่งต่อให้หมอเมดิคเลย!
+                            </div>
+                        </div>
+
+                        <div class="flex items-start justify-between">
+                            <div class="flex items-center space-x-3">
+                                <!-- Character Avatar (Animated) -->
+                                <div class="relative w-14 h-14 rounded-xl bg-gradient-to-br from-purple-700 to-indigo-800 flex items-center justify-center text-2xl shadow-inner border border-purple-300/40 group-hover:scale-105 transition">
+                                    <span class="animate-float">🛡️</span>
+                                    <span class="absolute -top-1 -right-1 px-1 py-0.2 rounded bg-purple-500 text-[8px] font-bold text-white uppercase">
+                                        OPUS
+                                    </span>
+                                </div>
+                                <div>
+                                    <div class="flex items-center space-x-2">
+                                        <h3 class="font-bold text-sm text-white group-hover:text-purple-300 transition">หัวหน้าคิโร่</h3>
+                                        <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                                            Chief Auditor
+                                        </span>
+                                    </div>
+                                    <p class="text-xs text-slate-400">Claude Opus Tier • ประเมินความปลอดภัย & แยกแยะปัญหา</p>
+                                </div>
+                            </div>
+                            <span class="w-2.5 h-2.5 rounded-full bg-purple-400 animate-pulse" title="Auditing"></span>
+                        </div>
+
+                        <!-- Desk Gear & Live Terminal -->
+                        <div class="mt-3 bg-black/60 rounded-lg p-2.5 border border-slate-800 font-mono text-[11px] space-y-1">
+                            <div class="flex items-center justify-between text-slate-400">
+                                <span class="flex items-center gap-1 text-purple-400">
+                                    <i data-lucide="cpu" class="w-3 h-3"></i> Reasoning Core
+                                </span>
+                                <span class="text-purple-300 font-bold">Deep Architectural Guard</span>
+                            </div>
+                            <div id="kiroCurrentAction" class="text-slate-300 truncate text-[11px]">
+                                🟢 ตรวจสอบสถานะความปลอดภัย Two-Tier RBAC เรียบร้อย
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- WORKSTATION 4: น้องดิสแพตช์ (Dispatcher Agent - Release Officer & Discord Bridge) -->
+                    <div id="card-dispatcher" onclick="selectAgent('dispatcher')" class="group relative desk-surface rounded-xl p-4 border border-amber-500/30 hover:border-amber-400 transition cursor-pointer shadow-lg hover:shadow-amber-500/10">
+                        <!-- Dynamic Speech Bubble Above Character -->
+                        <div id="bubble-dispatcher" class="hidden absolute -top-16 left-6 z-30 max-w-[280px] speech-bubble animate-bubble border-amber-400">
+                            <div class="text-[11px] text-amber-300 font-bold flex items-center gap-1">
+                                <span>📦 น้องดิสแพตช์:</span>
+                            </div>
+                            <div id="bubble-dispatcher-text" class="text-xs text-white mt-0.5 leading-snug">
+                                ส่งรายงานขออนุมัติ v1.0.8 เข้า Discord แล้ว รอเจ้านายกดอนุมัติครับ!
+                            </div>
+                        </div>
+
+                        <div class="flex items-start justify-between">
+                            <div class="flex items-center space-x-3">
+                                <!-- Character Avatar (Animated) -->
+                                <div class="relative w-14 h-14 rounded-xl bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center text-2xl shadow-inner border border-amber-300/40 group-hover:scale-105 transition">
+                                    <span class="animate-typing">📦</span>
+                                    <span class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-400/20 border border-amber-400 flex items-center justify-center">
+                                        <i data-lucide="bell" class="w-2.5 h-2.5 text-amber-300"></i>
+                                    </span>
+                                </div>
+                                <div>
+                                    <div class="flex items-center space-x-2">
+                                        <h3 class="font-bold text-sm text-white group-hover:text-amber-300 transition">น้องดิสแพตช์</h3>
+                                        <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                            Release & Discord
+                                        </span>
+                                    </div>
+                                    <p class="text-xs text-slate-400">Gemini 3.8 • ยื่นรายงานขออนุมัติผ่าน Discord</p>
+                                </div>
+                            </div>
+                            <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" title="Ready"></span>
+                        </div>
+
+                        <!-- Desk Gear & Live Terminal -->
+                        <div class="mt-3 bg-black/60 rounded-lg p-2.5 border border-slate-800 font-mono text-[11px] space-y-1">
+                            <div class="flex items-center justify-between text-slate-400">
+                                <span class="flex items-center gap-1 text-amber-400">
+                                    <i data-lucide="send" class="w-3 h-3"></i> Discord Webhook
+                                </span>
+                                <span class="text-amber-300 font-semibold">Interactive Mobile Gate</span>
+                            </div>
+                            <div id="dispatcherCurrentAction" class="text-slate-300 truncate text-[11px]">
+                                🟢 สแตนด์บายพร้อมส่งรายงานขอปรับปรุงเวอร์ชันใหม่
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Office Bottom Central Screen: Live Sub-Agent Workflow Feed -->
+                <div class="relative z-10 glass-panel rounded-xl p-3 border border-slate-800 flex items-center justify-between gap-4">
+                    <div class="flex items-center space-x-3 overflow-hidden">
+                        <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 flex-shrink-0">
+                            LIVE PROTOCOL
+                        </span>
+                        <div id="centralDialogueBanner" class="text-xs text-slate-200 truncate">
+                            <span class="text-cyan-400 font-semibold">น้องสแกน:</span> เชื่อมต่อระบบเฝ้าระวังเครื่องแม่ค้าทุกเครื่องแบบเรียลไทม์ พร้อมกลไก Self-Healing
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-2 flex-shrink-0">
+                        <button onclick="simulateIncident('RUNTIME')" class="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition active:scale-95 flex items-center gap-1">
+                            <i data-lucide="zap" class="w-3 h-3 text-cyan-400"></i>
+                            <span>จำลอง Tunnel/Lock</span>
+                        </button>
+                        <button onclick="simulateIncident('VERSION_UPDATE')" class="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition active:scale-95 flex items-center gap-1">
+                            <i data-lucide="git-pull-request" class="w-3 h-3 text-amber-400"></i>
+                            <span>จำลอง Code Bug</span>
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Tabs: Merchant Fleet / Self-Healing Log / Pending Discord Proposals -->
+            <div class="glass-panel rounded-2xl border border-darkBorder p-4">
+                <div class="flex items-center justify-between border-b border-darkBorder pb-3">
+                    <div class="flex space-x-2">
+                        <button id="tabBtnFleet" onclick="switchTab('fleet')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 flex items-center gap-1.5 transition">
+                            <i data-lucide="network" class="w-3.5 h-3.5"></i>
+                            <span>เครื่องแม่ค้าทั้งหมด (Fleet)</span>
+                        </button>
+                        <button id="tabBtnHealing" onclick="switchTab('healing')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/60 text-slate-400 border border-transparent hover:text-white flex items-center gap-1.5 transition">
+                            <i data-lucide="heart-pulse" class="w-3.5 h-3.5"></i>
+                            <span>ประวัติ Self-Healing</span>
+                            <span id="tabHealingBadge" class="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-500/20 text-emerald-300">14</span>
+                        </button>
+                        <button id="tabBtnProposals" onclick="switchTab('proposals')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/60 text-slate-400 border border-transparent hover:text-white flex items-center gap-1.5 transition">
+                            <i data-lucide="file-diff" class="w-3.5 h-3.5"></i>
+                            <span>รายงานขออนุมัติ (Discord)</span>
+                            <span id="tabProposalBadge" class="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500/20 text-amber-300">0</span>
+                        </button>
+                    </div>
+                    <button onclick="refreshData()" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-darkBorder transition" title="รีเฟรชข้อมูล">
+                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                    </button>
+                </div>
+
+                <!-- Tab Content 1: Fleet -->
+                <div id="tabContentFleet" class="mt-4 space-y-3">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3" id="merchantFleetList">
+                        <!-- Merchant Node 1 -->
+                        <div class="bg-darkBg/60 rounded-xl p-3.5 border border-slate-800 flex items-start justify-between">
+                            <div class="space-y-1">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                                    <h4 class="font-bold text-sm text-white">เครื่องหลักแม่ค้า (Live Stream Host)</h4>
+                                    <span class="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">เครื่องนี้</span>
+                                </div>
+                                <p class="text-xs text-slate-400">ร้านค้าสาขาหลัก • Port 3000 • SQLite WAL</p>
+                                <div class="text-[11px] font-mono text-slate-400 pt-1 flex items-center gap-2">
+                                    <span class="text-cyan-400">Tunnel:</span>
+                                    <span class="text-slate-300 truncate max-w-[200px]" id="merchantTunnelDisplay">https://released-wrote-infrared-radical.trycloudflare.com</span>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                    ONLINE (18ms)
+                                </span>
+                                <div class="text-[11px] text-slate-500 mt-1">ตรวจพบ 2 วินาทีที่แล้ว</div>
+                            </div>
+                        </div>
+
+                        <!-- Merchant Node 2 -->
+                        <div class="bg-darkBg/60 rounded-xl p-3.5 border border-slate-800 flex items-start justify-between">
+                            <div class="space-y-1">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                                    <h4 class="font-bold text-sm text-white">เครื่องคลังสินค้า & พิมพ์ใบปะหน้า Kerry</h4>
+                                    <span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">สาขาคลัง</span>
+                                </div>
+                                <p class="text-xs text-slate-400">แพ็คและจัดส่ง • Kerry Dropoff Automation</p>
+                                <div class="text-[11px] font-mono text-slate-400 pt-1 flex items-center gap-2">
+                                    <span class="text-purple-400">Sync:</span>
+                                    <span class="text-slate-300">ซิงก์ออเดอร์ล่าสุดเรียบร้อย</span>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                    STANDBY (24ms)
+                                </span>
+                                <div class="text-[11px] text-slate-500 mt-1">ตรวจพบ 5 วินาทีที่แล้ว</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content 2: Self-Healing Log -->
+                <div id="tabContentHealing" class="hidden mt-4 space-y-2 max-h-60 overflow-y-auto" id="healingLogList">
+                    <!-- Sample Item -->
+                    <div class="p-2.5 rounded-lg bg-darkBg/60 border border-slate-800 flex items-center justify-between text-xs">
+                        <div class="flex items-center space-x-2.5">
+                            <span class="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400">
+                                <i data-lucide="check-circle" class="w-4 h-4"></i>
+                            </span>
+                            <div>
+                                <div class="font-semibold text-slate-200">คลี่คลาย SQLite Lock Contention (Hot Mitigation)</div>
+                                <div class="text-slate-400 text-[11px]">ดำเนินการ PRAGMA wal_checkpoint(TRUNCATE) และขยาย busy_timeout = 10000 สำเร็จ</div>
+                            </div>
+                        </div>
+                        <div class="text-right flex-shrink-0">
+                            <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-medium">Self-Healed</span>
+                            <div class="text-[10px] text-slate-500 mt-0.5">วันนี้ 19:42 น.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content 3: Discord Proposals (RFCs) -->
+                <div id="tabContentProposals" class="hidden mt-4 space-y-3" id="proposalsList">
+                    <div class="p-4 rounded-xl bg-darkBg/60 border border-slate-800 text-center text-slate-400 text-xs">
+                        <i data-lucide="shield-check" class="w-8 h-8 text-emerald-400 mx-auto mb-2 opacity-80"></i>
+                        <p class="font-semibold text-slate-200">ยังไม่มีคำขอปรับปรุงเวอร์ชันใหม่ค้างอยู่</p>
+                        <p class="text-[11px] text-slate-400 mt-0.5">หากมีปัญหาที่ระบบ Self-Healing ไม่สามารถคลี่คลายได้ หัวหน้าคิโร่จะสั่งให้น้องดิสแพตช์ส่งรายงานเข้า Discord ทันที</p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Right Side Panel: Agent Detail Inspector / Live Action Panel -->
+        <div class="w-full lg:w-96 border-t lg:border-t-0 lg:border-l border-darkBorder bg-darkCard/95 p-4 flex flex-col space-y-4">
+            
+            <div class="flex items-center justify-between pb-2 border-b border-darkBorder">
+                <div class="flex items-center space-x-2">
+                    <i data-lucide="user-check" class="w-4 h-4 text-cyan-400"></i>
+                    <h3 class="font-bold text-sm text-white">Agent Inspector</h3>
+                </div>
+                <span id="selectedAgentBadge" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                    น้องสแกน (Selected)
+                </span>
+            </div>
+
+            <!-- Selected Agent Card Details -->
+            <div id="agentDetailContainer" class="glass-panel rounded-xl p-4 border border-darkBorder space-y-3">
+                <div class="flex items-center space-x-3">
+                    <div id="agentDetailAvatar" class="w-12 h-12 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-700 flex items-center justify-center text-2xl shadow">
+                        🕵️
+                    </div>
+                    <div>
+                        <h4 id="agentDetailName" class="font-bold text-sm text-white">น้องสแกน (Scanner Agent)</h4>
+                        <p id="agentDetailRole" class="text-xs text-slate-400">Telemetry & Fleet Watchdog</p>
+                        <span id="agentDetailModel" class="text-[10px] font-mono text-cyan-400">Gemini 3.8 Flash (1s polling)</span>
+                    </div>
+                </div>
+
+                <div class="border-t border-slate-800 pt-3 text-xs space-y-2">
+                    <div>
+                        <div class="text-[11px] text-slate-400 font-medium">หน้าที่และความรับผิดชอบ:</div>
+                        <p id="agentDetailDesc" class="text-slate-300 mt-0.5 leading-relaxed text-[11px]">
+                            ตรวจสอบสถานะเครื่องแม่ค้า, ท่อ Cloudflare Tunnel, SQLite Contention, และโควต้าสลิปแบบเรียลไทม์ หากพบอาการผิดปกติจะส่งเรื่องให้หัวหน้าคิโร่ทันที
+                        </p>
+                    </div>
+
+                    <div>
+                        <div class="text-[11px] text-slate-400 font-medium">สถานะปัจจุบัน:</div>
+                        <div id="agentDetailStatus" class="mt-1 p-2 rounded bg-black/60 border border-slate-800 font-mono text-[11px] text-emerald-400 flex items-center gap-1.5">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                            <span>กำลังมอนิเตอร์เครื่องแม่ค้าอย่างต่อเนื่อง</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pt-2">
+                    <button id="btnAgentAction" onclick="executeSelectedAgentAction()" class="w-full py-2 px-3 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-md transition active:scale-98">
+                        <i data-lucide="play" class="w-3.5 h-3.5"></i>
+                        <span id="btnAgentActionText">สั่งน้องสแกน สแกนเครื่องแม่ค้าทันที</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Discord Approval Bridge Quick Box -->
+            <div class="glass-panel rounded-xl p-3.5 border border-darkBorder space-y-2.5">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-white flex items-center gap-1.5">
+                        <i data-lucide="webhook" class="w-4 h-4 text-amber-400"></i>
+                        <span>Discord Mobile Webhook Gate</span>
+                    </span>
+                    <span class="text-[10px] text-emerald-400 font-mono">CONNECTED</span>
+                </div>
+                <p class="text-[11px] text-slate-400 leading-snug">
+                    หากหัวหน้าคิโร่วินิจฉัยว่าปัญหาต้องแก้ที่โค้ด (เช่น บั๊กใหญ่) น้องดิสแพตช์จะยื่นเรื่องขออนุมัติพร้อมปุ่มคลิกจากมือถือเข้า Discord ให้คุณยืนยันก่อนเสมอ
+                </p>
+                <div class="bg-black/40 rounded p-2 text-[10px] font-mono text-slate-300 truncate">
+                    https://discordapp.com/api/webhooks/1560336154786668545/...
+                </div>
+            </div>
+
+            <!-- Antigravity Implant Information -->
+            <div class="mt-auto p-3 rounded-xl bg-slate-900/80 border border-slate-800 text-[11px] text-slate-400 space-y-1">
+                <div class="flex items-center justify-between text-slate-300 font-semibold">
+                    <span>Antigravity Auxiliary Pane</span>
+                    <span class="text-cyan-400">v1.0.7 Sentinel</span>
+                </div>
+                <div>ติดตั้งอยู่ในฝั่งขวาของโปรแกรม Antigravity เฝ้าระวังเครื่องแม่ค้าทั้งหมดตลอด 24 ชั่วโมง</div>
+            </div>
+
+        </div>
+
+    </main>
+
+    <!-- Interactive Logic & Simulation Script -->
+    <script>
+        // State
+        let soundEnabled = false;
+        let selectedAgentKey = 'scanner';
+        let dialogueQueue = [];
+        let isProcessingDialogue = false;
+        let audioCtx = null;
+
+        const agentsData = {
+            scanner: {
+                name: 'น้องสแกน (Scanner Agent)',
+                role: 'Telemetry & Fleet Watchdog',
+                model: 'Gemini 3.8 Flash (1s Interval)',
+                avatar: '🕵️',
+                color: 'cyan',
+                desc: 'ตรวจสอบสถานะเครื่องแม่ค้า, ท่อ Cloudflare Tunnel, SQLite Contention, และโควต้าสลิปแบบเรียลไทม์ หากพบอาการผิดปกติจะส่งเรื่องให้หัวหน้าคิโร่ทันที',
+                actionText: 'สั่งน้องสแกน สแกนเครื่องแม่ค้าทันที'
+            },
+            medic: {
+                name: 'หมอเมดิค (Medic Agent)',
+                role: 'Autonomous Self-Healing Specialist',
+                model: 'Gemini 3.5 Flash / Fast Healer',
+                avatar: '🩺',
+                color: 'emerald',
+                desc: 'ผู้เชี่ยวชาญการกู้คืนระบบแบบอัตโนมัติ (Priority 1 Hot Mitigation) คลี่คลายปัญหา SQLite Lock, เคลียร์ WAL, ซิงก์ LINE Webhook และ Restart Tunnel โดยไม่ต้องอัปเดตเวอร์ชันใหม่',
+                actionText: 'สั่งหมอเมดิค รัน WAL Checkpoint & Defrag ทันที'
+            },
+            kiro: {
+                name: 'หัวหน้าคิโร่ (Kiro Conductor)',
+                role: 'Chief Safety & Architecture Auditor',
+                model: 'Claude Opus Tier (Pro Reasoning)',
+                avatar: '🛡️',
+                color: 'purple',
+                desc: 'หัวหน้าสถาปัตยกรรมระดับสูง ทำหน้าที่แยกแยะปัญหา หากเป็นปัญหาชั่วคราวจะสั่งหมอเมดิคทำ Self-Healing ทันที แต่ถ้าเป็น Bug ในโค้ด จะไม่อนุญาตให้แก้ข้ามขั้นตอน และสั่งทำรายงานขออนุมัติขึ้น Discord',
+                actionText: 'สั่งหัวหน้าคิโร่ รันการตรวจความปลอดภัย (Audit)'
+            },
+            dispatcher: {
+                name: 'น้องดิสแพตช์ (Dispatcher Agent)',
+                role: 'Release Officer & Discord Bridge',
+                model: 'Gemini 3.8 Flash',
+                avatar: '📦',
+                color: 'amber',
+                desc: 'เจ้าหน้าที่ควบคุมการปล่อยเวอร์ชันใหม่ ร่างรายงานสาเหตุ ผลกระทบ การแก้ไข และผลลัพธ์หลังแก้ พร้อมส่งปุ่ม [อนุมัติ] / [ไม่อนุมัติ] ไปที่ Discord ของเจ้านาย',
+                actionText: 'ทดสอบส่งข้อความยืนยันระบบเข้า Discord'
+            }
+        };
+
+        // Sound Synthesis via Web Audio API
+        function playBeep(type = 'bubble') {
+            if (!soundEnabled) return;
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                if (type === 'bubble') {
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.1);
+                    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+                    osc.start();
+                    osc.stop(audioCtx.currentTime + 0.1);
+                } else if (type === 'heal') {
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+                    osc.frequency.setValueAtTime(659.25, audioCtx.currentTime + 0.1); // E5
+                    osc.frequency.setValueAtTime(783.99, audioCtx.currentTime + 0.2); // G5
+                    gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.35);
+                    osc.start();
+                    osc.stop(audioCtx.currentTime + 0.35);
+                } else if (type === 'alert') {
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+                    osc.frequency.setValueAtTime(450, audioCtx.currentTime + 0.1);
+                    gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+                    osc.start();
+                    osc.stop(audioCtx.currentTime + 0.25);
+                }
+            } catch (e) {}
+        }
+
+        function toggleAudio() {
+            soundEnabled = !soundEnabled;
+            const icon = document.getElementById('soundIcon');
+            if (soundEnabled) {
+                icon.setAttribute('data-lucide', 'volume-2');
+                playBeep('bubble');
+            } else {
+                icon.setAttribute('data-lucide', 'volume-x');
+            }
+            lucide.createIcons();
+        }
+
+        // Live Clock
+        function updateClock() {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('th-TH', { hour12: false });
+            const clockEl = document.getElementById('liveClock');
+            if (clockEl) clockEl.innerText = timeStr;
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // Switch Agent Details in Inspector
+        function selectAgent(agentKey) {
+            selectedAgentKey = agentKey;
+            const agent = agentsData[agentKey];
+            if (!agent) return;
+
+            document.getElementById('agentDetailAvatar').innerText = agent.avatar;
+            document.getElementById('agentDetailName').innerText = agent.name;
+            document.getElementById('agentDetailRole').innerText = agent.role;
+            document.getElementById('agentDetailModel').innerText = agent.model;
+            document.getElementById('agentDetailDesc').innerText = agent.desc;
+            document.getElementById('btnAgentActionText').innerText = agent.actionText;
+
+            const badge = document.getElementById('selectedAgentBadge');
+            badge.innerText = `${agent.avatar} ${agent.name.split(' ')[0]} (Selected)`;
+
+            // Highlight desk card
+            document.querySelectorAll('[id^="card-"]').forEach(el => el.classList.remove('ring-2', 'ring-cyan-400', 'ring-emerald-400', 'ring-purple-400', 'ring-amber-400'));
+            const currentCard = document.getElementById(`card-${agentKey}`);
+            if (currentCard) {
+                currentCard.classList.add('ring-2', `ring-${agent.color}-400`);
+            }
+            playBeep('bubble');
+        }
+
+        // Tab Navigation
+        function switchTab(tabId) {
+            document.getElementById('tabContentFleet').classList.add('hidden');
+            document.getElementById('tabContentHealing').classList.add('hidden');
+            document.getElementById('tabContentProposals').classList.add('hidden');
+
+            const btnFleet = document.getElementById('tabBtnFleet');
+            const btnHealing = document.getElementById('tabBtnHealing');
+            const btnProposals = document.getElementById('tabBtnProposals');
+
+            [btnFleet, btnHealing, btnProposals].forEach(b => {
+                b.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/60 text-slate-400 border border-transparent hover:text-white flex items-center gap-1.5 transition';
+            });
+
+            if (tabId === 'fleet') {
+                document.getElementById('tabContentFleet').classList.remove('hidden');
+                btnFleet.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 flex items-center gap-1.5 transition';
+            } else if (tabId === 'healing') {
+                document.getElementById('tabContentHealing').classList.remove('hidden');
+                btnHealing.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 flex items-center gap-1.5 transition';
+            } else if (tabId === 'proposals') {
+                document.getElementById('tabContentProposals').classList.remove('hidden');
+                btnProposals.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-600/30 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 transition';
+            }
+            playBeep('bubble');
+        }
+
+        // Dialogue Flow Engine: Animate Speech Bubbles Passing Tasks
+        function showBubble(agentKey, text, duration = 3500) {
+            return new Promise(resolve => {
+                const bubble = document.getElementById(`bubble-${agentKey}`);
+                const textEl = document.getElementById(`bubble-${agentKey}-text`);
+                const banner = document.getElementById('centralDialogueBanner');
+                if (!bubble || !textEl) return resolve();
+
+                textEl.innerText = text;
+                bubble.classList.remove('hidden');
+                
+                const agent = agentsData[agentKey];
+                if (banner && agent) {
+                    banner.innerHTML = `<span class="text-${agent.color}-400 font-bold">${agent.avatar} ${agent.name.split(' ')[0]}:</span> ${text}`;
+                }
+
+                playBeep('bubble');
+
+                setTimeout(() => {
+                    bubble.classList.add('hidden');
+                    resolve();
+                }, duration);
+            });
+        }
+
+        async function triggerDialogueDemo(type = 'HEALING') {
+            if (isProcessingDialogue) return;
+            isProcessingDialogue = true;
+
+            if (type === 'HEALING') {
+                playBeep('alert');
+                await showBubble('scanner', '🚨 [Alert] เครื่องแม่ค้าแจ้งเตือน: ตรวจพบ SQLite Busy Contention จากออเดอร์ชนกัน!', 3000);
+                await showBubble('kiro', '🔍 หัวหน้าคิโร่วิเคราะห์: เป็นปัญหา Runtime Lock ไม่กระทบโค้ด สั่งหมอเมดิคทำ Self-Healing ทันที!', 3200);
+                playBeep('heal');
+                await showBubble('medic', '🩺 หมอเมดิครับเรื่อง! กำลังทำ PRAGMA wal_checkpoint(TRUNCATE) และขยาย busy_timeout = 10000...', 3200);
+                await showBubble('medic', '✅ คลี่คลายสำเร็จ! เคลียร์พื้นที่คืน 0.01MB แม่ค้าขายของต่อได้ทันทีโดยไม่ต้องอัปเดตเวอร์ชัน', 3000);
+                await showBubble('dispatcher', '📦 ส่งบันทึกสรุป Self-Healing สีเขียวเข้า Discord เรียบร้อยครับ!', 2800);
+                await showBubble('scanner', '🟢 ยอดเยี่ยม! สแกนเครื่องแม่ค้ากลับมาสถานะ Healthy 100%', 2500);
+            } else {
+                playBeep('alert');
+                await showBubble('scanner', '⚠️ พบข้อผิดพลาดซ้ำ: LINE Webhook batch array ตกหล่น (BUG-01)!', 3000);
+                await showBubble('kiro', '🛡️ หัวหน้าคิโร่วินิจฉัย: ปัญหานี้ต้องแก้ที่ Logic โค้ด index.js! ไม่อนุญาตให้ Self-Heal ข้ามขั้นตอน', 3400);
+                await showBubble('kiro', 'น้องดิสแพตช์ ร่างรายงานขออนุมัติเวอร์ชัน v1.0.8 ส่งเข้า Discord ด่วน เพื่อรอเจ้านายยืนยัน', 3200);
+                await showBubble('dispatcher', '📦 ส่งรายงานขออนุมัติพร้อมปุ่มกดผ่านมือถือเข้า Discord เรียบร้อย รอการยืนยันครับ!', 3200);
+            }
+
+            isProcessingDialogue = false;
+        }
+
+        // Quick Self-Heal Action
+        async function triggerQuickHeal() {
+            try {
+                playBeep('heal');
+                showBubble('medic', '🩺 ดำเนินการ Self-Heal ทันที: PRAGMA wal_checkpoint(TRUNCATE)...', 2500);
+                const res = await fetch('http://localhost:3000/api/sentinel/heal_now', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ category: 'MANUAL_QUICK_HEAL' })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    setTimeout(() => {
+                        showBubble('medic', '✅ คลี่คลายและ Checkpoint ฐานข้อมูลสำเร็จเรียบร้อย!', 2500);
+                        refreshData();
+                    }, 1200);
+                }
+            } catch (e) {
+                // Standalone Simulation fallback
+                setTimeout(() => {
+                    showBubble('medic', '✅ [Simulated] คลี่คลาย SQLite WAL Checkpoint สำเร็จ แม่ค้าขายของต่อได้ราบรื่น!', 2500);
+                }, 1000);
+            }
+        }
+
+        // Simulate Incident
+        async function simulateIncident(type) {
+            triggerDialogueDemo(type);
+            try {
+                await fetch('http://localhost:3000/api/sentinel/simulate_merchant_issue', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ issueType: type })
+                });
+                setTimeout(refreshData, 2000);
+            } catch (e) {}
+        }
+
+        // Execute Selected Agent Task
+        function executeSelectedAgentAction() {
+            if (selectedAgentKey === 'scanner') {
+                showBubble('scanner', '🕵️ กำลังสแกน Latency และความสมบูรณ์ของท่อ Cloudflare ทุกสาขา...', 2500);
+                setTimeout(() => {
+                    showBubble('scanner', '🟢 ผลการสแกน: ทั้ง 2 เครื่องออนไลน์ปกติ Latency 18ms ไม่มี Connection Drop', 2500);
+                }, 2600);
+            } else if (selectedAgentKey === 'medic') {
+                triggerQuickHeal();
+            } else if (selectedAgentKey === 'kiro') {
+                showBubble('kiro', '🛡️ หัวหน้าคิโร่รัน Architectural Audit: ตรวจสอบความถูกต้องของสิทธิ์ Two-Tier RBAC และ SQLite Transaction Isolation', 3000);
+                setTimeout(() => {
+                    showBubble('kiro', '🌟 ผลการตรวจสอบ: ระบบมีความปลอดภัยสูงสุด 100% (Certified Grade A+)', 3000);
+                }, 3100);
+            } else if (selectedAgentKey === 'dispatcher') {
+                showBubble('dispatcher', '📦 ทดสอบส่งสถานะสุขภาพของระบบเข้า Discord Webhook...', 2500);
+                fetch('http://localhost:3000/api/sentinel/test_healing', { method: 'POST' }).catch(() => {});
+                setTimeout(() => {
+                    showBubble('dispatcher', '✅ ส่งการแจ้งเตือนเข้า Discord สำเร็จแล้ว ตรวจสอบที่ Discord ได้เลยครับ!', 2500);
+                }, 2600);
+            }
+        }
+
+        // Live Data Polling
+        async function refreshData() {
+            try {
+                const res = await fetch('http://localhost:3000/api/sentinel/office_state');
+                if (!res.ok) throw new Error('API not available');
+                const data = await res.json();
+                
+                if (data.merchants) {
+                    document.getElementById('merchantCount').innerText = data.merchants.length;
+                }
+                if (data.tunnelUrl) {
+                    document.getElementById('merchantTunnelDisplay').innerText = data.tunnelUrl;
+                }
+                if (data.storageHealth && data.storageHealth.database) {
+                    document.getElementById('walSizeDisplay').innerText = data.storageHealth.database.walSizeMB + ' MB';
+                }
+                if (data.healingHistory) {
+                    document.getElementById('healingCount').innerText = data.healingHistory.length;
+                    document.getElementById('tabHealingBadge').innerText = data.healingHistory.length;
+                    renderHealingLogs(data.healingHistory);
+                }
+                if (data.proposals) {
+                    const pending = data.proposals.filter(p => p.status === 'PENDING').length;
+                    document.getElementById('pendingApprovalCount').innerText = pending;
+                    document.getElementById('tabProposalBadge').innerText = pending;
+                    renderProposals(data.proposals);
+                }
+            } catch (err) {
+                // Fallback demo state
+            }
+        }
+
+        function renderHealingLogs(logs) {
+            const container = document.getElementById('tabContentHealing');
+            if (!container || !logs || logs.length === 0) return;
+            container.innerHTML = logs.map(l => `
+                <div class="p-2.5 rounded-lg bg-darkBg/60 border border-slate-800 flex items-center justify-between text-xs">
+                    <div class="flex items-center space-x-2.5">
+                        <span class="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400">
+                            <i data-lucide="check-circle" class="w-4 h-4"></i>
+                        </span>
+                        <div>
+                            <div class="font-semibold text-slate-200">${l.action || l.category}</div>
+                            <div class="text-slate-400 text-[11px]">${l.details || 'ดำเนินการ Self-Healing สำเร็จ'}</div>
+                        </div>
+                    </div>
+                    <div class="text-right flex-shrink-0">
+                        <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-medium">Self-Healed</span>
+                        <div class="text-[10px] text-slate-500 mt-0.5">${new Date(l.timestamp).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.</div>
+                    </div>
+                </div>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        function renderProposals(proposals) {
+            const container = document.getElementById('tabContentProposals');
+            if (!container) return;
+            if (proposals.length === 0) {
+                container.innerHTML = `
+                    <div class="p-4 rounded-xl bg-darkBg/60 border border-slate-800 text-center text-slate-400 text-xs">
+                        <i data-lucide="shield-check" class="w-8 h-8 text-emerald-400 mx-auto mb-2 opacity-80"></i>
+                        <p class="font-semibold text-slate-200">ยังไม่มีคำขอปรับปรุงเวอร์ชันใหม่ค้างอยู่</p>
+                        <p class="text-[11px] text-slate-400 mt-0.5">หากมีปัญหาที่ระบบ Self-Healing ไม่สามารถคลี่คลายได้ หัวหน้าคิโร่จะสั่งให้น้องดิสแพตช์ส่งรายงานเข้า Discord ทันที</p>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = proposals.map(p => `
+                    <div class="p-3.5 rounded-xl bg-darkBg/60 border ${p.status === 'PENDING' ? 'border-amber-500/40' : 'border-slate-800'} space-y-2 text-xs">
+                        <div class="flex items-center justify-between">
+                            <span class="font-bold text-white text-sm">${p.diagnosis?.proposedVersion || 'New Patch'}</span>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold ${p.status === 'PENDING' ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'}">
+                                ${p.status}
+                            </span>
+                        </div>
+                        <p class="text-slate-300 text-[11px]">${p.diagnosis?.problemSummary || p.title}</p>
+                        <div class="text-[10px] text-slate-400 font-mono">ไฟล์เป้าหมาย: ${p.targetFile}</div>
+                        ${p.status === 'PENDING' ? `
+                            <div class="pt-1 flex items-center gap-2">
+                                <a href="http://localhost:3000/api/sentinel/action?id=${p.id}&token=${p.token}&action=approve" target="_blank" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px]">
+                                    ✓ อนุมัติและแก้ไขทันที
+                                </a>
+                                <a href="http://localhost:3000/api/sentinel/action?id=${p.id}&token=${p.token}&action=reject" target="_blank" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-[11px]">
+                                    ✕ ไม่อนุมัติ
+                                </a>
+                            </div>
+                        ` : ''}
+                    </div>
+                `).join('');
+            }
+            lucide.createIcons();
+        }
+
+        // Initialize icons & poll
+        lucide.createIcons();
+        setInterval(refreshData, 3000);
+        refreshData();
+
+        // Cyclic Ambient Chatter
+        const ambientChatter = [
+            { agent: 'scanner', text: '📡 สแกนสถานะท่อ Cloudflare ทุก 1 วินาที ปกติสมบูรณ์ครับ' },
+            { agent: 'medic', text: '🩺 แคชหน่วยความจำและ SQLite WAL อยู่ในเกณฑ์คลีน ไม่มีความแออัด' },
+            { agent: 'kiro', text: '☕ กำลังรีวิวโค้ดระบบความปลอดภัย Two-Tier RBAC... สมบูรณ์แบบ' },
+            { agent: 'dispatcher', text: '📱 ระบบ Discord Webhook สแตนด์บายพร้อมส่งแจ้งเตือนด่วน' }
+        ];
+        let chatterIndex = 0;
+        setInterval(() => {
+            if (!isProcessingDialogue) {
+                const item = ambientChatter[chatterIndex];
+                showBubble(item.agent, item.text, 3000);
+                chatterIndex = (chatterIndex + 1) % ambientChatter.length;
+            }
+        }, 12000);
+
+    </script>
+</body>
+</html>

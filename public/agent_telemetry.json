@@ -1,7 +1,7 @@
 {
-  "lastUpdated": "2026-10-16T13:32:51.932Z",
-  "activeSubagentsCount": 5,
-  "systemStatus": "ALL_AGENTS_STANDBY",
+  "lastUpdated": "2026-10-16T13:55:44.943Z",
+  "activeSubagentsCount": 4,
+  "systemStatus": "AGENTS_ACTIVELY_WORKING",
   "workflow": "Gemini 3.8 (Vibe Coder) + Claude Opus 4.6 (Inspector & Mentor)",
   "learnedSkillsCount": 3,
   "server": {
@@ -10,12 +10,12 @@
     "mode": "Live Dual-Engine Synergy"
   },
   "storageHealth": {
-    "timestamp": "2026-10-16T13:32:51.931Z",
+    "timestamp": "2026-10-16T13:55:42.959Z",
     "status": "HEALTHY",
     "message": "พื้นที่ฮาร์ดดิสก์และฐานข้อมูลปกติสมบูรณ์",
     "disk": {
       "totalGB": 930.9,
-      "freeGB": 780.2,
+      "freeGB": 780.3,
       "usedGB": 150.6,
       "freePercent": 83.8,
       "usedPercent": 16.2,
@@ -29,10 +29,10 @@
       "newestAgeDays": 0
     },
     "database": {
-      "dbSizeBytes": 73728,
-      "dbSizeMB": "0.07",
-      "walSizeBytes": 12392,
-      "walSizeMB": "0.01",
+      "dbSizeBytes": 81920,
+      "dbSizeMB": "0.08",
+      "walSizeBytes": 0,
+      "walSizeMB": "0.00",
       "shmSizeBytes": 32768,
       "isWalBloated": false,
       "rowCounts": {
@@ -51,83 +51,79 @@
   },
   "agents": [
     {
-      "id": "gemini-vibe",
-      "name": "Gemini 3.8 Flash",
-      "type": "vibe-coder",
-      "role": "Pair Programmer & Rapid Executor",
-      "icon": "⚡",
-      "state": "idle",
-      "currentAction": "🟢 สแตนด์บาย (Standby) พร้อมรับคำสั่งถัดไป",
-      "badge": "Standby",
+      "id": "sentinel-scanner",
+      "name": "น้องสแกน (Scanner Agent)",
+      "type": "sentinel_scanner",
+      "role": "Telemetry & Fleet Watchdog",
+      "icon": "🕵️",
+      "state": "running",
+      "currentAction": "⚡ รันคำสั่ง Terminal: Test heal_now API",
+      "badge": "⚡ RUNNING",
       "targetFile": "-",
-      "progress": 100,
+      "progress": 65,
       "codingDetail": {
-        "operation": "Awaiting dispatch",
-        "step": 0
+        "functionName": "run_command",
+        "lines": "-",
+        "operation": "\"node -e \\\"\\nconst http = require('http');\\nrequire('./index.js');\\nsetTimeout(() => {\\n    const po",
+        "step": 4419,
+        "lastSeenSecondsAgo": 3
       }
     },
     {
-      "id": "claude-code",
-      "name": "Claude Code Agent (Opus 4.6)",
-      "type": "claude-code-agent",
-      "role": "Lead Architect, Inspector & Mentor",
-      "icon": "🧠",
-      "state": "idle",
-      "currentAction": "🟢 สแตนด์บาย (Standby) พร้อมรับคำสั่งถัดไป",
-      "badge": "Standby",
+      "id": "sentinel-medic",
+      "name": "หมอเมดิค (Medic Agent)",
+      "type": "sentinel_medic",
+      "role": "Priority 1 Autonomous Self-Healing",
+      "icon": "🩺",
+      "state": "running",
+      "currentAction": "⚡ รันคำสั่ง Terminal: Test heal_now API",
+      "badge": "⚡ RUNNING",
       "targetFile": "-",
-      "progress": 100,
+      "progress": 65,
       "codingDetail": {
-        "operation": "Awaiting dispatch",
-        "step": 0
+        "functionName": "run_command",
+        "lines": "-",
+        "operation": "\"node -e \\\"\\nconst http = require('http');\\nrequire('./index.js');\\nsetTimeout(() => {\\n    const po",
+        "step": 4419,
+        "lastSeenSecondsAgo": 3
       }
     },
     {
-      "id": "c9c384d0",
-      "name": "Agent Fleet Observer",
-      "type": "agent-observer",
-      "role": "Supervisor & Telemetry Tracker",
-      "icon": "👁️",
+      "id": "kiro-conductor",
+      "name": "หัวหน้าคิโร่ (Kiro Conductor)",
+      "type": "kiro_conductor",
+      "role": "Chief Auditor & Safety Officer (Opus Tier)",
+      "icon": "🛡️",
       "state": "idle",
-      "currentAction": "🟢 สแตนด์บาย (Standby) พร้อมรับคำสั่งถัดไป",
-      "badge": "Standby",
-      "targetFile": "-",
+      "currentAction": "🛡️ หัวหน้าฝ่ายสถาปัตยกรรม (Opus Tier) ควบคุมการวิเคราะห์และตรวจสอบความปลอดภัย",
+      "badge": "Chief Auditor (Opus)",
+      "targetFile": "Architectural Guard",
       "progress": 100,
       "codingDetail": {
-        "operation": "Awaiting dispatch",
-        "step": 0
+        "functionName": "Completed",
+        "lines": "Architectural Guard",
+        "operation": "Auditor Standby",
+        "step": 73,
+        "lastSeenSecondsAgo": 1640
       }
     },
     {
-      "id": "fc89b6b8",
-      "name": "Concurrency Stress Tester",
-      "type": "webhook-simulator-tester",
-      "role": "Concurrency Stress QA",
-      "icon": "🧪",
-      "state": "idle",
-      "currentAction": "🟢 สแตนด์บาย (Standby) พร้อมรับคำสั่งถัดไป",
-      "badge": "Standby",
+      "id": "sentinel-dispatcher",
+      "name": "น้องดิสแพตช์ (Dispatcher Agent)",
+      "type": "sentinel_dispatcher",
+      "role": "Release Officer & Discord Bridge",
+      "icon": "📦",
+      "state": "running",
+      "currentAction": "⚡ รันคำสั่ง Terminal: Test heal_now API",
+      "badge": "⚡ RUNNING",
       "targetFile": "-",
-      "progress": 100,
+      "progress": 65,
       "codingDetail": {
-        "operation": "Awaiting dispatch",
-        "step": 0
-      }
-    },
-    {
-      "id": "07786c46",
-      "name": "Storage & DB Health Monitor",
-      "type": "storage-health-monitor",
-      "role": "Disk, Uploads & SQLite Health Watcher",
-      "icon": "💾",
-      "state": "idle",
-      "currentAction": "🟢 สแตนด์บาย (Standby) พร้อมรับคำสั่งถัดไป",
-      "badge": "Standby",
-      "targetFile": "-",
-      "progress": 100,
-      "codingDetail": {
-        "operation": "Awaiting dispatch",
-        "step": 0
+        "functionName": "run_command",
+        "lines": "-",
+        "operation": "\"node -e \\\"\\nconst http = require('http');\\nrequire('./index.js');\\nsetTimeout(() => {\\n    const po",
+        "step": 4419,
+        "lastSeenSecondsAgo": 3
       }
     }
   ],
