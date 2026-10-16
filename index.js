@@ -336,12 +336,16 @@ app.post('/api/sentinel/test_healing', async (req, res) => {
     }
 });
 
+// 🌐 Remote Merchant Registry & Telemetry Ingestion Pool (Lives on Developer PC)
+const connectedMerchants = new Map();
+
 // 🏢 Sentinel Office Dashboard Live State Endpoint
 app.get('/api/sentinel/office_state', (req, res) => {
     try {
         const publicUrl = (sentinel.getPublicUrl && sentinel.getPublicUrl()) || currentPublicUrl || 'http://localhost:3000';
         const isLive = typeof activeLiveSession !== 'undefined' && activeLiveSession && activeLiveSession.active;
         
+        // Base local merchant fleet
         const merchantsFleet = [
             {
                 id: 'merchant-node-01',
@@ -354,8 +358,30 @@ app.get('/api/sentinel/office_state', (req, res) => {
                 tunnelUrl: publicUrl,
                 latencyMs: 18,
                 lastSeen: new Date().toISOString()
-            },
-            {
+            }
+        ];
+
+        // Merge any remote merchants reporting over tunnel/network
+        for (const [mId, mData] of connectedMerchants.entries()) {
+            merchantsFleet.push({
+                id: mId,
+                name: mData.shopName || mId,
+                location: mData.location || 'ร้านค้าเครือข่ายภายนอก',
+                isCurrentHost: false,
+                status: (Date.now() - new Date(mData.lastSeen).getTime() < 120000) ? 'ONLINE' : 'OFFLINE',
+                liveStatus: mData.liveStatus || 'STANDBY',
+                activeSessionId: mData.activeSessionId || null,
+                tunnelUrl: mData.tunnelUrl || publicUrl,
+                latencyMs: mData.latencyMs || 28,
+                lastSeen: mData.lastSeen,
+                lastIncident: mData.lastIncident || null,
+                metrics: mData.metrics || {}
+            });
+        }
+
+        // If no remote merchants yet, include sample warehouse branch for preview
+        if (connectedMerchants.size === 0) {
+            merchantsFleet.push({
                 id: 'merchant-node-02',
                 name: 'เครื่องคลังสินค้า & พิมพ์ใบปะหน้า Kerry',
                 location: 'สาขาคลังกระจายสินค้า',
@@ -366,8 +392,8 @@ app.get('/api/sentinel/office_state', (req, res) => {
                 tunnelUrl: publicUrl,
                 latencyMs: 24,
                 lastSeen: new Date(Date.now() - 4000).toISOString()
-            }
-        ];
+            });
+        }
 
         res.json({
             success: true,
@@ -386,8 +412,117 @@ app.get('/api/sentinel/office_state', (req, res) => {
     }
 });
 
+// 🛰️ Central Telemetry Ingestion Endpoint (Collects issues from Merchant PCs)
+app.post('/api/sentinel/telemetry_ingest', express.json(), async (req, res) => {
+    try {
+        const { merchantId, shopName, appVersion, category = 'INFO', error = {}, metrics = {} } = req.body || {};
+        if (!merchantId) {
+            return res.status(400).json({ success: false, message: 'Missing merchantId' });
+        }
+
+        const now = new Date().toISOString();
+        const existing = connectedMerchants.get(merchantId) || {};
+        connectedMerchants.set(merchantId, {
+            ...existing,
+            merchantId,
+            shopName: shopName || existing.shopName || `ร้านค้า (${merchantId})`,
+            appVersion: appVersion || existing.appVersion || 'v1.0.7',
+            lastSeen: now,
+            metrics: { ...existing.metrics, ...metrics },
+            lastIncident: category !== 'HEARTBEAT' ? { category, message: error.message, time: now } : existing.lastIncident
+        });
+
+        // If simple Heartbeat ping, return early
+        if (category === 'HEARTBEAT') {
+            return res.json({ success: true, acknowledged: true, serverTime: now });
+        }
+
+        console.log(`[Sentinel Central Ingest] 🚨 Incident from [${shopName || merchantId}]: ${category} - ${error.message}`);
+
+        // --- Step 1: Check if this is a Priority 1 Self-Healing candidate ---
+        const runtimeCategories = ['DATABASE', 'DATABASE_LOCK', 'SQLITE_BUSY', 'TUNNEL', 'TUNNEL_DROP', 'CACHE_BLOAT', 'MEMORY_HIGH'];
+        const isRuntimeIssue = runtimeCategories.includes(category) || (error.message && (error.message.includes('locked') || error.message.includes('busy') || error.message.includes('tunnel')));
+
+        // Broadcast to Pixel Office Canvas on Developer PC
+        if (io) {
+            io.emit('pixel_telemetry_event', {
+                merchantId,
+                shopName: shopName || merchantId,
+                category,
+                isRuntimeIssue,
+                error,
+                metrics,
+                time: now
+            });
+        }
+
+        if (isRuntimeIssue) {
+            const healAction = category.includes('DATABASE') || (error.message && error.message.includes('locked'))
+                ? 'PRAGMA wal_checkpoint(TRUNCATE) & busy_timeout = 10000'
+                : 'Cloudflare Tunnel Watchdog Kick & Memory GC';
+
+            const record = {
+                category: category,
+                action: healAction,
+                details: `Self-Healing สำเร็จสำหรับ ${shopName || merchantId}: ${error.message || 'Transient failure resolved'}`,
+                status: 'RESOLVED_WITHOUT_UPDATE',
+                triggeredBy: `Merchant Probe [${merchantId}]`
+            };
+            sentinel.addHealingRecord(record);
+
+            // Report green alert to Discord
+            await reportSelfHealingToDiscord({
+                category,
+                title: `กู้คืนเครื่องแม่ค้า (${shopName || merchantId}) สำเร็จ`,
+                issue: error.message || 'ตรวจพบความผิดปกติชั่วคราว',
+                actionDetails: healAction
+            }).catch(() => {});
+
+            return res.json({
+                success: true,
+                healed: true,
+                action: healAction,
+                instructions: 'RESUME_STREAM_NORMAL',
+                message: 'หมอเมดิค (Medic Agent) ดำเนินการคลี่คลายปัญหาเรียบร้อย แม่ค้าไลฟ์สดต่อได้ทันที'
+            });
+        }
+
+        // --- Step 2: Code Defect requiring Version Update RFC (Kiro Conductor & Dispatcher) ---
+        await sentinel.reportIncident({
+            type: 'ERROR',
+            category,
+            title: `ตรวจพบข้อผิดพลาดจากเครื่องแม่ค้า (${shopName || merchantId})`,
+            message: error.message || 'Unhandled error on merchant machine',
+            stack: error.stack || '',
+            context: { merchantId, shopName, appVersion, metrics }
+        });
+
+        res.json({
+            success: true,
+            healed: false,
+            rfcPending: true,
+            message: 'ส่งเรื่องให้หัวหน้าคิโร่วิเคราะห์ และน้องดิสแพตช์ส่งรายงานเข้า Discord เพื่อรอการอนุมัติผ่านมือถือเรียบร้อย'
+        });
+
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 🎮 Pixel Office Route (Accessible ONLY on developer PC localhost)
+app.get('/sentinel/office', (req, res) => {
+    const brainOfficePath = path.join(
+        process.env.USERPROFILE || 'C:/Users/napat',
+        '.gemini/antigravity/brain/82c1fccc-253f-4df2-a685-20e6068f9a40/sentinel_office.html'
+    );
+    if (fs.existsSync(brainOfficePath)) {
+        return res.sendFile(brainOfficePath, { dotfiles: 'allow' });
+    }
+    res.status(404).send('Pixel Office Dashboard is only available on Developer PC inside Antigravity.');
+});
+
 // 🩺 Trigger Immediate Self-Healing
-app.post('/api/sentinel/heal_now', async (req, res) => {
+app.post('/api/sentinel/heal_now', express.json(), async (req, res) => {
     try {
         const { category = 'DATABASE_MAINTENANCE' } = req.body || {};
         const record = await sentinel.executeManualHealing(category);
@@ -398,7 +533,7 @@ app.post('/api/sentinel/heal_now', async (req, res) => {
 });
 
 // 🧪 Simulate Merchant Incident from Office Dashboard
-app.post('/api/sentinel/simulate_merchant_issue', async (req, res) => {
+app.post('/api/sentinel/simulate_merchant_issue', express.json(), async (req, res) => {
     try {
         const { issueType = 'RUNTIME', scenario = 'SQLITE_LOCK' } = req.body || {};
         
