@@ -1606,6 +1606,8 @@ app.post('/api/live_session/end', async (req, res) => {
         
         // ล้าง active_live_session
         await supabase.from('configs').delete().eq('key', 'active_live_session');
+        // 📦 BUG-03: จำไลฟ์ล่าสุดที่เพิ่งจบ เพื่อให้ Export Kerry หลังจบไลฟ์ได้ลูกค้าครบแม้ไลฟ์ข้ามเที่ยงคืน
+        await supabase.from('configs').upsert([{ key: 'last_ended_live_session', value: JSON.stringify(endedSession) }]);
         const prevSession = activeLiveSession;
         activeLiveSession = null;
         
@@ -1619,12 +1621,36 @@ app.post('/api/live_session/end', async (req, res) => {
 
 // 📦 API ดึงข้อมูลสรุปสำหรับ Kerry Express (ทั้งแบบ JSON และดาวน์โหลด Excel)
 async function getOrdersForKerry(options = {}) {
-    const { sessionId, date } = options;
+    let { sessionId, date } = options;
     const targetDate = date || getTodayString();
+
+    // 📦 BUG-03 (ไลฟ์ข้ามเที่ยงคืน): ถ้าไม่ได้ระบุ sessionId และไม่มีไลฟ์ที่กำลังดำเนินอยู่
+    // ให้ใช้ "ไลฟ์ล่าสุดที่เพิ่งจบ" หากวันที่ที่เลือกอยู่ในช่วงเวลาของไลฟ์นั้น (วันเริ่ม หรือ วันจบ)
+    // ส่วนการเลือกวันอื่นย้อนหลัง ยังกรองตามวันที่เหมือนเดิม
+    if (!sessionId && !activeLiveSession) {
+        try {
+            const { data: lastRow } = await supabase.from('configs').select('value').eq('key', 'last_ended_live_session').single();
+            const last = lastRow && lastRow.value ? JSON.parse(lastRow.value) : null;
+            if (last && last.id) {
+                const toBkkDate = (ms) => {
+                    const d = new Date(new Date(ms).toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+                    return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+                };
+                const spanDates = [last.startTime, last.endTime].filter(Boolean).map(toBkkDate);
+                if (spanDates.includes(targetDate)) {
+                    // รวมทั้ง "ทุกสลิปของไลฟ์นั้น" และ "สลิปของวันที่เลือก" เพื่อไม่ให้ออเดอร์นอกไลฟ์ในวันเดียวกันหายไป
+                    options.__unionDate = targetDate;
+                    sessionId = String(last.id).replace(/,/g, '');
+                }
+            }
+        } catch (e) { /* ไม่มีประวัติไลฟ์ล่าสุด ใช้การกรองตามวันที่แบบเดิม */ }
+    }
     
     // ดึงสลิปที่สำเร็จหรือมีของ (completed, waiting, called, skipped) โดยไม่นับ rejected
     let query = supabase.from('slips').select('*').neq('status', 'rejected');
-    if (sessionId) {
+    if (sessionId && options.__unionDate) {
+        query = query.or(`session_id.eq.${sessionId},trans_date.eq.${options.__unionDate}`);
+    } else if (sessionId) {
         query = query.eq('session_id', sessionId);
     } else if (date) {
         query = query.eq('trans_date', date);
@@ -3023,7 +3049,7 @@ app.post('/webhook', async (req, res) => {
                 const amount = slipData.amount;
 
                 // 🛡️ ป้องกันสลิปซ้ำระดับ B-Tree Index: เช็กว่ารหัสสลิปนี้เคยส่งเข้ามาในระบบแล้วหรือยัง
-                const existingSlip = supabase.db.prepare('SELECT id, trans_date FROM slips WHERE trans_ref = ? LIMIT 1').get(transRef);
+                const existingSlip = supabase.db.prepare("SELECT id, trans_date FROM slips WHERE trans_ref = ? AND trans_ref IS NOT NULL AND trans_ref != '' LIMIT 1").get(transRef);
                 if (existingSlip) {
                     addLog('WARN', `ตรวจพบสลิปซ้ำ: ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ที่เคยบันทึกไปแล้ว`);
                     console.log(`⚠️ ตรวจพบสลิปซ้ำ: ${transRef}`);
@@ -3059,7 +3085,7 @@ app.post('/webhook', async (req, res) => {
                 try {
                     inserted = supabase.runTransaction(() => {
                         // Double check ป้องกัน race condition ในระดับ transaction
-                        const dup = supabase.db.prepare('SELECT id FROM slips WHERE trans_ref = ? LIMIT 1').get(transRef);
+                        const dup = supabase.db.prepare("SELECT id FROM slips WHERE trans_ref = ? AND trans_ref IS NOT NULL AND trans_ref != '' LIMIT 1").get(transRef);
                         if (dup) throw new Error('DUPLICATE_SLIP');
 
                         if (customer) {
@@ -3304,6 +3330,46 @@ async function updateLineWebhookEndpoint(publicUrl, retries = 3) {
 }
 
 // 🚇 ระบบท่อเชื่อมต่อสัญญาณอัจฉริยะแบบ Dual-Engine (Cloudflare + LocalTunnel Fallback)
+// 🔁 P1-7 Cloudflare Tunnel Watchdog
+// - ถ้าโปรแกรม Tunnel ปิดตัวกลางทาง: เปิดใหม่อัตโนมัติ หน่วง 5 → 15 → 30 → 60 วินาที
+// - ทุก 60 วินาที ทดสอบเรียกลิงก์สาธารณะของร้าน ถ้าล้มเหลว 3 ครั้งติด (≈3 นาที) ถือว่าค้าง สั่งปิดเพื่อให้ Watchdog เปิดใหม่
+let tunnelRestartAttempt = 0;
+let tunnelRestartTimer = null;
+let tunnelProbeTimer = null;
+let tunnelProbeFailures = 0;
+function scheduleTunnelRestart(port, reason) {
+    if (tunnelRestartTimer) return; // มีการนัดเปิดใหม่อยู่แล้ว
+    const delays = [5, 15, 30, 60];
+    const delaySec = delays[Math.min(tunnelRestartAttempt, delays.length - 1)];
+    tunnelRestartAttempt += 1;
+    if (tunnelProbeTimer) { clearInterval(tunnelProbeTimer); tunnelProbeTimer = null; }
+    addLog('WARN', `🔁 ${reason} — จะเชื่อมต่อ Tunnel ใหม่อัตโนมัติใน ${delaySec} วินาที (ครั้งที่ ${tunnelRestartAttempt})`);
+    io.emit('tunnel_status', { active: false, url: null, type: 'Cloudflare', reconnecting: true });
+    tunnelRestartTimer = setTimeout(() => {
+        tunnelRestartTimer = null;
+        if (typeof shuttingDown !== 'undefined' && shuttingDown) return;
+        startAutoTunnel(port);
+    }, delaySec * 1000);
+}
+function startTunnelHealthProbe(port) {
+    if (tunnelProbeTimer) clearInterval(tunnelProbeTimer);
+    tunnelProbeFailures = 0;
+    tunnelProbeTimer = setInterval(async () => {
+        if (!currentPublicUrl || !cloudflareProcess) return;
+        try {
+            await axios.get(`${currentPublicUrl}/api/health`, { timeout: 10000 });
+            tunnelProbeFailures = 0;
+        } catch (e) {
+            tunnelProbeFailures += 1;
+            if (tunnelProbeFailures >= 3) {
+                tunnelProbeFailures = 0;
+                addLog('WARN', '🔁 ตรวจพบ Tunnel ค้าง (เรียกลิงก์สาธารณะไม่ได้ 3 ครั้งติด) กำลังเริ่มการเชื่อมต่อใหม่');
+                try { cloudflareProcess.kill(); } catch (killErr) { scheduleTunnelRestart(port, 'Tunnel ค้าง'); }
+            }
+        }
+    }, 60 * 1000);
+}
+
 function startAutoTunnel(port) {
     const cloudflaredPath = path.join(__dirname, 'cloudflared.exe');
     
@@ -3341,6 +3407,8 @@ function startAutoTunnel(port) {
                         synced: false 
                     });
                     updateLineWebhookEndpoint(currentPublicUrl);
+                    tunnelRestartAttempt = 0;
+                    startTunnelHealthProbe(port);
                     sendDiscordAlert({
                         type: 'SUCCESS',
                         category: 'STARTUP',
@@ -3359,7 +3427,12 @@ function startAutoTunnel(port) {
                 console.log(`🚇 Cloudflare Tunnel ปิดการทำงาน (code: ${code})`);
                 if (!urlFound) {
                     startLocalTunnelFallback(port);
+                    return;
                 }
+                // 🔁 P1-7 Watchdog: Tunnel เคยเชื่อมต่อแล้วแต่หลุดกลางทาง → เปิดใหม่อัตโนมัติแบบหน่วงเวลา 5/15/30/60 วินาที
+                // (startAutoTunnel จะได้ลิงก์ใหม่และซิงก์ Webhook URL ไปที่ LINE ให้อัตโนมัติ)
+                if (typeof shuttingDown !== 'undefined' && shuttingDown) return;
+                scheduleTunnelRestart(port, `Tunnel หลุด (code: ${code})`);
             });
 
             cloudflareProcess.on('error', (err) => {
