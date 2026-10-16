@@ -771,6 +771,9 @@
                 <button id="tabBtnBackup" onclick="switchWizardTab('backup')" style="padding: 8px 16px; border: none; border-bottom: 3px solid transparent; background: none; font-weight: 500; color: #2563eb; cursor: pointer; font-family: 'Kanit';">
                     💾 สำรองฐานข้อมูล (Backup)
                 </button>
+                <button id="tabBtnStorage" onclick="switchWizardTab('storage')" style="padding: 8px 16px; border: none; border-bottom: 3px solid transparent; background: none; font-weight: 500; color: #0284c7; cursor: pointer; font-family: 'Kanit';">
+                    📊 สุขภาพพื้นที่ & ฐานข้อมูล (Storage)
+                </button>
                 <button id="tabBtnReset" onclick="switchWizardTab('reset')" style="padding: 8px 16px; border: none; border-bottom: 3px solid transparent; background: none; font-weight: 500; color: #dc2626; cursor: pointer; font-family: 'Kanit';">
                     🧹 ล้างข้อมูลทดสอบ (Reset)
                 </button>
@@ -793,6 +796,15 @@
                     <div>
                         <label style="font-weight: 500; font-size: 0.9em; display: block; margin-bottom: 4px;">LINE Channel Access Token:</label>
                         <input type="text" id="wizLineToken" placeholder="วาง Access Token จาก LINE Developers" style="width: 100%; box-sizing: border-box; padding: 9px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Kanit';">
+                    </div>
+
+                    <!-- 1.1 LINE CHANNEL SECRET (WEBHOOK SECURITY) -->
+                    <div>
+                        <label style="font-weight: 500; font-size: 0.9em; display: flex; justify-content: space-between; margin-bottom: 4px;">
+                            <span>LINE Channel Secret (ความปลอดภัย Webhook):</span>
+                            <span style="font-size: 0.85em; color: #10b981; font-weight: normal;">🛡️ แนะนำให้ใส่ (HMAC-SHA256)</span>
+                        </label>
+                        <input type="text" id="wizLineChannelSecret" placeholder="วาง Channel Secret จากแท็บ Basic settings" style="width: 100%; box-sizing: border-box; padding: 9px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Kanit';">
                     </div>
 
                     <!-- 2. GEMINI API KEY (AI PARSER) -->
@@ -1106,6 +1118,97 @@
                     </div>
                 </div>
             </div>
+
+            <!-- TAB 6: STORAGE & DATABASE HEALTH TELEMETRY -->
+            <div id="tabContentStorage" style="display: none;">
+                <div style="background: #f0f9ff; border: 1px solid #bae6fd; padding: 18px; border-radius: 12px; margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <h3 style="margin: 0 0 6px 0; color: #0369a1; font-size: 1.15em; display: flex; align-items: center; gap: 8px;">
+                                <span>💾 สุขภาพพื้นที่ฮาร์ดดิสก์ & ฐานข้อมูล (Storage & DB Health)</span>
+                                <span id="storageHealthStatusBadge" style="background: #dcfce7; color: #15803d; border: 1px solid #86efac; font-size: 0.75em; padding: 2px 8px; border-radius: 12px; font-weight: 600;">● ปกติสมบูรณ์</span>
+                            </h3>
+                            <p style="margin: 0; font-size: 0.88em; color: #0369a1; line-height: 1.5;" id="storageHealthSummaryMsg">
+                                ระบบเฝ้าระวังพื้นที่ฮาร์ดดิสก์ของเครื่องแม่ค้า รูปสลิป และขนาดไฟล์ฐานข้อมูล SQLite อัตโนมัติ ป้องกันปัญหาพื้นที่เต็มระหว่างไลฟ์สด
+                            </p>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span id="storageActionStatus" style="font-size: 0.82em; color: #16a34a; font-weight: 500;"></span>
+                            <button onclick="loadStorageHealth(true)" style="background: #0284c7; color: #fff; border: none; padding: 8px 16px; border-radius: 8px; font-size: 0.9em; font-weight: 500; cursor: pointer; font-family: 'Kanit'; display: flex; align-items: center; gap: 6px;">
+                                🔄 รีเฟรชสถานะ
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3 Metric Cards Grid -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 15px;">
+                    <!-- Card 1: Host Hard Drive -->
+                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-weight: 600; font-size: 0.9em; color: #1e293b;">💿 ความจุฮาร์ดดิสก์ (Drive C:)</span>
+                            <span id="merchantDiskFreePct" style="font-weight: 700; color: #16a34a; font-size: 0.95em;">--% ว่าง</span>
+                        </div>
+                        <div style="width: 100%; height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+                            <div id="merchantDiskBar" style="height: 100%; width: 0%; background: #0284c7; transition: width 0.5s;"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 0.82em; color: #64748b;">
+                            <span>ใช้ไป: <strong id="merchantDiskUsedGB" style="color: #334155;">-- GB</strong></span>
+                            <span>พื้นที่ว่าง: <strong id="merchantDiskFreeGB" style="color: #16a34a;">-- GB</strong></span>
+                        </div>
+                        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #f1f5f9; font-size: 0.78em; color: #64748b;">
+                            💡 พื้นที่คงเหลือเพียงพอสำหรับไลฟ์สดต่อเนื่องได้มากกว่า 15 รอบ
+                        </div>
+                    </div>
+
+                    <!-- Card 2: SQLite Engine & WAL -->
+                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-weight: 600; font-size: 0.9em; color: #1e293b;">🗄️ ฐานข้อมูล (SQLite Engine)</span>
+                            <span id="merchantWalBadge" style="font-weight: 600; color: #16a34a; font-size: 0.85em; background: #f0fdf4; padding: 2px 8px; border-radius: 6px; border: 1px solid #bbf7d0;">● Zero Bloat</span>
+                        </div>
+                        <div style="font-size: 0.85em; color: #475569; line-height: 1.8;">
+                            <div>• ขนาดฐานข้อมูลหลัก: <strong id="merchantDbSize" style="color: #0284c7;">-- MB</strong></div>
+                            <div>• แคชบัฟเฟอร์ (WAL): <strong id="merchantWalSize" style="color: #16a34a;">0.00 MB</strong></div>
+                        </div>
+                        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #f1f5f9;">
+                            <button onclick="optimizeDbFromMerchant()" id="btnOptimizeDb" style="width: 100%; background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 6px 10px; border-radius: 6px; font-size: 0.82em; font-weight: 600; cursor: pointer; font-family: 'Kanit';">
+                                ⚡ เคลียร์แคช WAL และจัดระเบียบ DB
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Card 3: Slips Uploads & Auto-Pruning -->
+                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-weight: 600; font-size: 0.9em; color: #1e293b;">📸 คลังรูปสลิป (Uploads)</span>
+                            <span id="merchantUploadsCount" style="font-weight: 600; color: #64748b; font-size: 0.85em;">0 รูป (0 MB)</span>
+                        </div>
+                        <div style="font-size: 0.82em; color: #64748b; line-height: 1.6; margin-bottom: 8px;">
+                            ระบบตั้งเวลาลบรูปสลิปเก่าที่มีอายุเกิน 7 วันให้อัตโนมัติทุกวัน เพื่อไม่ให้เปลืองพื้นที่คอมพิวเตอร์ของร้าน
+                        </div>
+                        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #f1f5f9;">
+                            <button onclick="cleanupUploadsFromMerchant()" id="btnCleanupUploads" style="width: 100%; background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 6px 10px; border-radius: 6px; font-size: 0.82em; font-weight: 600; cursor: pointer; font-family: 'Kanit';">
+                                🧹 สั่งทำความสะอาดไฟล์สลิปเก่าทันที
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Backups & Autonomous Sentinel Policy Notice -->
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 1.5em;">🛡️</span>
+                        <div style="font-size: 0.85em; color: #334155; line-height: 1.5;">
+                            <strong>นโยบายดูแลรักษาพื้นที่อัตโนมัติ (Autonomous Sentinel):</strong>
+                            <br>• ตัดและฟลัช WAL ทันทีเมื่อแตะ 20 MB • ลบสลิปเกิน 7 วันอัตโนมัติ • เก็บสำรองฐานข้อมูลย้อนหลัง 10 ไฟล์ล่าสุด
+                        </div>
+                    </div>
+                    <div style="font-size: 0.82em; color: #64748b; font-family: monospace;" id="merchantBackupInfo">
+                        สำรองล่าสุด: กำลังโหลด...
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1368,7 +1471,8 @@
         socket.on('full_sync', (data) => {
             const selectedDate = document.getElementById('historyDateInput').value.replace(/-/g, '');
             const today = getClientTodayStr();
-            if(selectedDate === today) {
+            const isLiveActive = (typeof currentLiveSession !== 'undefined' && currentLiveSession !== null && currentLiveSession.startTime);
+            if(isLiveActive || selectedDate === today) {
                 renderDashboard(data); // เรียกใช้งานวาดหน้าจอ
             }
         });
@@ -1376,8 +1480,30 @@
         socket.on('update_stats', (stats) => {
             const selectedDate = document.getElementById('historyDateInput').value.replace(/-/g, '');
             const today = getClientTodayStr();
-            if(selectedDate === today) updateStatsUI(stats);
+            const isLiveActive = (typeof currentLiveSession !== 'undefined' && currentLiveSession !== null && currentLiveSession.startTime);
+            if(isLiveActive || selectedDate === today) updateStatsUI(stats);
         });
+
+        // 🕒 Midnight Date Auto-Advance Watcher (ตรวจจับการข้ามเที่ยงคืนเพื่อไม่ให้หน้าจอหลุดวัน)
+        let lastKnownDateStr = getClientTodayStr();
+        setInterval(() => {
+            const currentDateStr = getClientTodayStr();
+            if (currentDateStr !== lastKnownDateStr) {
+                const dateInput = document.getElementById('historyDateInput');
+                if (dateInput) {
+                    const selectedDate = dateInput.value.replace(/-/g, '');
+                    if (selectedDate === lastKnownDateStr) {
+                        const now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Bangkok"}));
+                        const yyyy = now.getFullYear();
+                        const mm = String(now.getMonth() + 1).padStart(2, '0');
+                        const dd = String(now.getDate()).padStart(2, '0');
+                        dateInput.value = `${yyyy}-${mm}-${dd}`;
+                        console.log(`🌅 Midnight passed! Auto-advanced dashboard date to ${dateInput.value}`);
+                    }
+                }
+                lastKnownDateStr = currentDateStr;
+            }
+        }, 30000);
 
         socket.on('play_sound', () => {
             const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
@@ -2295,7 +2421,7 @@
         }
 
         function switchWizardTab(tab) {
-            const tabs = ['setup', 'pass', 'logs', 'backup', 'reset', 'update'];
+            const tabs = ['setup', 'pass', 'logs', 'backup', 'storage', 'reset', 'update'];
             tabs.forEach(t => {
                 const el = document.getElementById(`tabContent${t.charAt(0).toUpperCase() + t.slice(1)}`);
                 if (el) el.style.display = (t === tab) ? 'block' : 'none';
@@ -2303,12 +2429,12 @@
                 const btn = document.getElementById(`tabBtn${t.charAt(0).toUpperCase() + t.slice(1)}`);
                 if (btn) {
                     if (t === tab) {
-                        btn.style.borderBottom = (t === 'reset') ? '3px solid #dc2626' : (t === 'backup' || t === 'update' ? '3px solid #16a34a' : '3px solid #1a73e8');
-                        btn.style.color = (t === 'reset') ? '#dc2626' : (t === 'backup' || t === 'update' ? '#16a34a' : '#1a73e8');
+                        btn.style.borderBottom = (t === 'reset') ? '3px solid #dc2626' : (t === 'storage' ? '3px solid #0284c7' : (t === 'backup' || t === 'update' ? '3px solid #16a34a' : '3px solid #1a73e8'));
+                        btn.style.color = (t === 'reset') ? '#dc2626' : (t === 'storage' ? '#0284c7' : (t === 'backup' || t === 'update' ? '#16a34a' : '#1a73e8'));
                         btn.style.fontWeight = '600';
                     } else {
                         btn.style.borderBottom = '3px solid transparent';
-                        btn.style.color = (t === 'reset') ? '#dc2626' : (t === 'backup' || t === 'update' ? '#16a34a' : '#64748b');
+                        btn.style.color = (t === 'reset') ? '#dc2626' : (t === 'storage' ? '#0284c7' : (t === 'backup' || t === 'update' ? '#16a34a' : '#64748b'));
                         btn.style.fontWeight = '500';
                     }
                 }
@@ -2316,6 +2442,161 @@
 
             if (tab === 'logs') loadSystemLogs();
             if (tab === 'update') checkAppUpdate(false);
+            if (tab === 'storage') loadStorageHealth(false);
+        }
+
+        async function loadStorageHealth(showFeedback = false) {
+            const statusMsg = document.getElementById('storageActionStatus');
+            if (showFeedback && statusMsg) statusMsg.textContent = 'กำลังโหลดข้อมูล...';
+
+            try {
+                const res = await fetch('/api/admin/storage_health?t=' + Date.now());
+                const data = await res.json();
+                if (!data || !data.success) throw new Error(data.error || 'Fetch error');
+
+                const disk = data.disk || {};
+                const dbInfo = data.database || {};
+                const uploads = data.uploads || {};
+                const backups = data.backups || {};
+
+                // Status Badge
+                const isHealthy = data.status === 'HEALTHY';
+                const badge = document.getElementById('storageHealthStatusBadge');
+                if (badge) {
+                    badge.textContent = isHealthy ? '● ปกติสมบูรณ์' : '● ' + data.status;
+                    badge.style.background = isHealthy ? '#dcfce7' : '#fef3c7';
+                    badge.style.color = isHealthy ? '#15803d' : '#b45309';
+                    badge.style.border = isHealthy ? '1px solid #86efac' : '1px solid #fde68a';
+                }
+
+                // Summary message
+                if (document.getElementById('storageHealthSummaryMsg')) {
+                    document.getElementById('storageHealthSummaryMsg').textContent = data.message || 'ระบบเฝ้าระวังพื้นที่ฮาร์ดดิสก์ รูปสลิป และขนาดไฟล์ฐานข้อมูล SQLite อัตโนมัติ';
+                }
+
+                // Disk Info
+                if (document.getElementById('merchantDiskFreePct')) {
+                    document.getElementById('merchantDiskFreePct').textContent = (disk.freePercent !== undefined ? disk.freePercent : '--') + '% ว่าง';
+                }
+                if (document.getElementById('merchantDiskUsedGB')) {
+                    document.getElementById('merchantDiskUsedGB').textContent = (disk.usedGB || 0) + ' GB';
+                }
+                if (document.getElementById('merchantDiskFreeGB')) {
+                    document.getElementById('merchantDiskFreeGB').textContent = (disk.freeGB || 0) + ' GB';
+                }
+                if (document.getElementById('merchantDiskBar')) {
+                    document.getElementById('merchantDiskBar').style.width = (disk.usedPercent || 0) + '%';
+                }
+
+                // DB Info
+                if (document.getElementById('merchantDbSize')) {
+                    document.getElementById('merchantDbSize').textContent = (dbInfo.dbSizeMB || '0.00') + ' MB';
+                }
+                if (document.getElementById('merchantWalSize')) {
+                    document.getElementById('merchantWalSize').textContent = (dbInfo.walSizeMB || '0.00') + ' MB';
+                }
+                if (document.getElementById('merchantWalBadge')) {
+                    const walBadge = document.getElementById('merchantWalBadge');
+                    walBadge.textContent = dbInfo.isWalBloated ? '⚠️ แคชขยายตัว' : '● Zero Bloat';
+                    walBadge.style.color = dbInfo.isWalBloated ? '#d97706' : '#16a34a';
+                    walBadge.style.background = dbInfo.isWalBloated ? '#fef3c7' : '#f0fdf4';
+                    walBadge.style.border = dbInfo.isWalBloated ? '1px solid #fde68a' : '1px solid #bbf7d0';
+                }
+
+                // Uploads Info
+                if (document.getElementById('merchantUploadsCount')) {
+                    document.getElementById('merchantUploadsCount').textContent = `${uploads.count || 0} รูป (${uploads.totalMB || '0.00'} MB)`;
+                }
+
+                // Backup Info
+                if (document.getElementById('merchantBackupInfo')) {
+                    const latestDate = backups.latestBackupTime ? new Date(backups.latestBackupTime).toLocaleString('th-TH') : 'ยังไม่มีประวัติ';
+                    document.getElementById('merchantBackupInfo').innerHTML = `สำรองล่าสุด: <strong>${latestDate}</strong> (${backups.count || 0} ไฟล์ / ${backups.totalMB || '0.00'} MB)`;
+                }
+
+                if (showFeedback && statusMsg) {
+                    statusMsg.textContent = '✅ อัปเดตข้อมูลล่าสุดเรียบร้อย';
+                    setTimeout(() => { if (statusMsg) statusMsg.textContent = ''; }, 3000);
+                }
+            } catch (err) {
+                console.error('loadStorageHealth error:', err);
+                if (statusMsg) {
+                    statusMsg.textContent = '⚠️ ดึงข้อมูลล้มเหลว: ' + err.message;
+                    statusMsg.style.color = '#dc2626';
+                }
+            }
+        }
+
+        async function optimizeDbFromMerchant() {
+            const btn = document.getElementById('btnOptimizeDb');
+            const statusMsg = document.getElementById('storageActionStatus');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '⏳ กำลังจัดระเบียบ...';
+            }
+            try {
+                const res = await fetch('/api/admin/storage/optimize_db', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    if (statusMsg) {
+                        statusMsg.textContent = '✅ เคลียร์แคช WAL และจัดระเบียบฐานข้อมูลสำเร็จ';
+                        statusMsg.style.color = '#16a34a';
+                    }
+                    await loadStorageHealth(false);
+                } else {
+                    if (statusMsg) {
+                        statusMsg.textContent = '❌ ' + (data.error || 'ล้มเหลว');
+                        statusMsg.style.color = '#dc2626';
+                    }
+                }
+            } catch (e) {
+                if (statusMsg) {
+                    statusMsg.textContent = '❌ ' + e.message;
+                    statusMsg.style.color = '#dc2626';
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '⚡ เคลียร์แคช WAL และจัดระเบียบ DB';
+                }
+                setTimeout(() => { if (statusMsg) statusMsg.textContent = ''; }, 4000);
+            }
+        }
+
+        async function cleanupUploadsFromMerchant() {
+            const btn = document.getElementById('btnCleanupUploads');
+            const statusMsg = document.getElementById('storageActionStatus');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '⏳ กำลังทำความสะอาด...';
+            }
+            try {
+                const res = await fetch('/api/admin/storage/cleanup_uploads', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    if (statusMsg) {
+                        statusMsg.textContent = '✅ ทำความสะอาดไฟล์สลิปเรียบร้อย';
+                        statusMsg.style.color = '#16a34a';
+                    }
+                    await loadStorageHealth(false);
+                } else {
+                    if (statusMsg) {
+                        statusMsg.textContent = '❌ ' + (data.error || 'ล้มเหลว');
+                        statusMsg.style.color = '#dc2626';
+                    }
+                }
+            } catch (e) {
+                if (statusMsg) {
+                    statusMsg.textContent = '❌ ' + e.message;
+                    statusMsg.style.color = '#dc2626';
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '🧹 สั่งทำความสะอาดไฟล์สลิปเก่าทันที';
+                }
+                setTimeout(() => { if (statusMsg) statusMsg.textContent = ''; }, 4000);
+            }
         }
 
         function selectSlipProvider(provider) {
@@ -2364,6 +2645,9 @@
                         const pkgEl = document.getElementById('wizSlipOkPackage');
                         if (pkgEl) pkgEl.value = (data.slipokPackageLimit !== undefined) ? data.slipokPackageLimit : '100';
                         document.getElementById('wizLineToken').value = data.lineAccessToken || '';
+                        if (document.getElementById('wizLineChannelSecret')) {
+                            document.getElementById('wizLineChannelSecret').value = data.lineChannelSecret || '';
+                        }
                         document.getElementById('wizGeminiKey').value = data.geminiApiKey || '';
                         document.getElementById('wizSlipOkKey').value = data.slipokApiKey || '';
                         document.getElementById('wizSlipOkBranch').value = data.slipokBranchId || '';
@@ -2383,6 +2667,7 @@
                 slipProvider: selectedProvider,
                 slipokPackageLimit: document.getElementById('wizSlipOkPackage') ? document.getElementById('wizSlipOkPackage').value : 100,
                 lineAccessToken: document.getElementById('wizLineToken').value.trim(),
+                lineChannelSecret: document.getElementById('wizLineChannelSecret') ? document.getElementById('wizLineChannelSecret').value.trim() : '',
                 geminiApiKey: document.getElementById('wizGeminiKey').value.trim(),
                 slipokApiKey: document.getElementById('wizSlipOkKey').value.trim(),
                 slipokBranchId: document.getElementById('wizSlipOkBranch').value.trim(),
@@ -2655,7 +2940,8 @@
                 body: JSON.stringify({
                     downloadUrl: latestUpdateInfo.downloadUrl,
                     latestVersion: latestUpdateInfo.latestVersion,
-                    changelog: latestUpdateInfo.changelog
+                    changelog: latestUpdateInfo.changelog,
+                    sha256: latestUpdateInfo.sha256
                 })
             })
             .then(res => res.json())

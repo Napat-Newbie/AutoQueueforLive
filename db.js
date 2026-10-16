@@ -5,8 +5,12 @@ const fs = require('fs');
 const dbPath = path.join(__dirname, 'data.sqlite');
 const db = new Database(dbPath);
 
-// Enable WAL mode for high performance and concurrency
+// Enable WAL mode, configure busy_timeout, autocheckpoint, and journal_size_limit
 db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+db.pragma('busy_timeout = 10000');
+db.pragma('wal_autocheckpoint = 1000');
+db.pragma('journal_size_limit = 16777216'); // WAL หดกลับอัตโนมัติเหลือไม่เกิน 16MB หลัง checkpoint
 
 // Initialize Tables
 db.exec(`
@@ -24,10 +28,18 @@ db.exec(`
     line_id TEXT,
     trans_date TEXT,
     trans_time TEXT,
+    trans_ref TEXT,
     qr_payload TEXT,
     status TEXT DEFAULT 'waiting',
+    session_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE INDEX IF NOT EXISTS idx_slips_trans_date ON slips(trans_date);
+  CREATE INDEX IF NOT EXISTS idx_slips_status ON slips(status);
+  CREATE INDEX IF NOT EXISTS idx_slips_line_id_trans_date ON slips(line_id, trans_date);
+  CREATE INDEX IF NOT EXISTS idx_slips_qr_payload ON slips(qr_payload);
+  CREATE INDEX IF NOT EXISTS idx_slips_status_id ON slips(status, id);
 
   CREATE TABLE IF NOT EXISTS customers (
     line_id TEXT PRIMARY KEY,
@@ -40,6 +52,61 @@ db.exec(`
     line_id TEXT UNIQUE
   );
 `);
+
+// 🛡️ Migration: เพิ่ม trans_ref & session_id หากยังไม่มี และสร้าง UNIQUE INDEX ป้องกันสลิปซ้ำระดับฐานข้อมูล
+try {
+  const slipCols = db.pragma('table_info(slips)').map(c => c.name);
+  if (!slipCols.includes('session_id')) {
+    db.exec(`ALTER TABLE slips ADD COLUMN session_id TEXT;`);
+    console.log('✅ Migration: เพิ่มคอลัมน์ session_id ในตาราง slips สำเร็จ');
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_slips_session_status ON slips(session_id, status);`);
+
+  if (!slipCols.includes('trans_ref')) {
+    db.exec(`ALTER TABLE slips ADD COLUMN trans_ref TEXT;`);
+    console.log('✅ Migration: เพิ่มคอลัมน์ trans_ref ในตาราง slips สำเร็จ');
+  }
+
+  // 1. Backfill trans_ref สำหรับสลิปปกติที่ไม่ใช่ manual_image
+  db.exec(`
+    UPDATE slips 
+    SET trans_ref = substr(qr_payload, 1, instr(qr_payload, '|') - 1) 
+    WHERE qr_payload LIKE '%|%' 
+      AND qr_payload NOT LIKE 'manual_image%' 
+      AND (trans_ref IS NULL OR trans_ref = '');
+  `);
+
+  // 2. เคลียร์ trans_ref ที่เป็น 'manual_image' หรือค่าว่างให้เป็น NULL ไม่ให้ชน UNIQUE constraint
+  db.exec(`UPDATE slips SET trans_ref = NULL WHERE trans_ref = 'manual_image' OR trans_ref = '';`);
+
+  // 3. ป้องกันข้อมูลซ้ำเดิมที่มีอยู่ก่อนหน้า: ลบค่าซ้ำโดยคงเหลือไว้แค่รายการแรก เพื่อให้สร้าง UNIQUE INDEX ผ่าน 100%
+  db.exec(`
+    UPDATE slips 
+    SET trans_ref = NULL 
+    WHERE id NOT IN (
+      SELECT MIN(id) FROM slips WHERE trans_ref IS NOT NULL AND trans_ref != '' GROUP BY trans_ref
+    )
+    AND trans_ref IS NOT NULL AND trans_ref != '';
+  `);
+
+  // 4. สร้าง Partial UNIQUE INDEX
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_slips_trans_ref ON slips(trans_ref) WHERE trans_ref IS NOT NULL AND trans_ref != '';`);
+  console.log('✅ Migration: idx_slips_trans_ref UNIQUE index verified');
+} catch (migErr) {
+  console.error('Migration trans_ref warning:', migErr.message);
+}
+
+// Safe auto-migration for existing databases
+try {
+  const slipCols = db.pragma('table_info(slips)');
+  if (!slipCols.some(col => col.name === 'session_id')) {
+    db.exec('ALTER TABLE slips ADD COLUMN session_id TEXT;');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_slips_session_id ON slips(session_id);');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_slips_line_id_session_id ON slips(line_id, session_id);');
+} catch(migErr) {
+  console.error('Migration warning (session_id):', migErr.message);
+}
 
 console.log('📦 Local SQLite Database Initialized:', dbPath);
 
@@ -315,41 +382,92 @@ function query(tableName) {
   return builder;
 }
 
-async function performBackup() {
-  const backupsDir = path.join(__dirname, 'backups');
-  if (!fs.existsSync(backupsDir)) {
-    try { fs.mkdirSync(backupsDir, { recursive: true }); } catch (e) {}
-  }
-  const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const backupFile = path.join(backupsDir, `backup_${dateStr}.sqlite`);
-  try {
-    await db.backup(backupFile);
-    console.log(`💾 Auto-Backup สำเร็จ: ${backupFile}`);
+let backupInFlight = null;
+async function performBackup(prefix = 'backup') {
+  if (backupInFlight) return backupInFlight;
+  backupInFlight = (async () => {
+    const backupsDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupsDir)) {
+      try { fs.mkdirSync(backupsDir, { recursive: true }); } catch (e) {}
+    }
+    const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const backupFile = path.join(backupsDir, `${prefix}_${dateStr}.sqlite`);
+    try {
+      await db.backup(backupFile);
+      console.log(`💾 Auto-Backup สำเร็จ: ${backupFile}`);
 
-    // เก็บเฉพาะ 10 ไฟล์ล่าสุด ลบไฟล์เก่าทิ้ง
-    const files = fs.readdirSync(backupsDir)
-      .filter(f => f.startsWith('backup_') && f.endsWith('.sqlite'))
-      .map(f => ({ name: f, path: path.join(backupsDir, f), time: fs.statSync(path.join(backupsDir, f)).mtimeMs }))
+      // 🧹 เก็บเฉพาะ 10 ไฟล์ล่าสุด ลบไฟล์เก่าทิ้ง (ครอบคลุมทั้ง backup_ และ data_backup_)
+      cleanupBackups(backupsDir, 10);
+      return { success: true, file: backupFile };
+    } catch (err) {
+      console.error('Backup error:', err.message);
+      return { success: false, error: err.message };
+    }
+  })();
+  try { return await backupInFlight; } finally { backupInFlight = null; }
+}
+
+// 🧹 ฟังก์ชันจัดการล้างไฟล์สำรองเก่า (Universal SQLite Backup Pruner)
+function cleanupBackups(dirPath, keepLatest = 10, maxAgeDays = 30) {
+  try {
+    if (!fs.existsSync(dirPath)) return;
+    const now = Date.now();
+    const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+    const files = fs.readdirSync(dirPath)
+      .filter(f => f.endsWith('.sqlite'))
+      .map(f => {
+        const full = path.join(dirPath, f);
+        return { name: f, path: full, time: fs.statSync(full).mtimeMs };
+      })
       .sort((a, b) => b.time - a.time);
 
-    if (files.length > 10) {
-      files.slice(10).forEach(old => {
-        try { fs.unlinkSync(old.path); } catch(e) {}
-      });
-    }
-    return { success: true, file: backupFile };
+    // เก็บ keepLatest ไว้เสมอ ลบไฟล์ที่เกินโควตาหรือเก่าเกิน maxAgeDays
+    files.forEach((file, index) => {
+      if (index >= keepLatest || (now - file.time > maxAgeMs && index >= 3)) {
+        try {
+          fs.unlinkSync(file.path);
+          console.log(`🧹 ลบไฟล์สำรองเก่าเรียบร้อย: ${file.name}`);
+        } catch (e) {}
+      }
+    });
   } catch (err) {
-    console.error('Backup error:', err.message);
-    return { success: false, error: err.message };
+    console.error('Error during cleanupBackups:', err.message);
   }
+}
+
+// ⚡ บำรุงรักษาฐานข้อมูล SQLite (Checkpoint WAL & Analyze Query Plan)
+function optimizeDb() {
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    db.pragma('optimize');
+    console.log('⚡ บำรุงรักษาฐานข้อมูล SQLite สำเร็จ (WAL Checkpointed & Optimized)');
+    return true;
+  } catch (err) {
+    console.error('SQLite optimize error:', err.message);
+    return false;
+  }
+}
+
+// 🔒 ปิดฐานข้อมูลอย่างปลอดภัย (Safe Shutdown & Flush WAL)
+function closeDb() {
+  try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (e) {}
+  try { if (db.open) db.close(); } catch (e) {}
+  console.log('🔒 ฐานข้อมูล SQLite ถูกปิดอย่างปลอดภัยเรียบร้อย');
 }
 
 // ออโต้สำรองข้อมูลทุกๆ 6 ชั่วโมง และสำรองข้อมูลเมื่อปิดโปรแกรม
 setInterval(performBackup, 6 * 60 * 60 * 1000);
+// บำรุงรักษาฐานข้อมูลทุกๆ 12 ชั่วโมง
+setInterval(optimizeDb, 12 * 60 * 60 * 1000);
 
 module.exports = {
   db,
   query,
   from: query,
-  performBackup
+  performBackup,
+  cleanupBackups,
+  optimizeDb,
+  closeDb,
+  transaction: (fn) => db.transaction(fn),
+  runTransaction: (fn) => db.transaction(fn)()
 };

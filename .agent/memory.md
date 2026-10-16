@@ -38,3 +38,9 @@
    ```bash
    node index.js
    ```
+
+## 5. Multi-Model Team Workflow (Kiro + Gemini)
+* **Kiro Conductor (`kiro_conductor` - Model: `pro` / Claude Opus Tier):**
+  - Responsibilities: System auditing, architectural oversight, edge-case analysis, acceptance criteria definition, and post-implementation review.
+* **Gemini (`gemini` - Model: Gemini 3.8 Flash):**
+  - Responsibilities: Rapid code generation, bug fixing, database migrations, script executions, and unit testing following Kiro's criteria.

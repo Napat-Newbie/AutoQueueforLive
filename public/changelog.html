@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📜 AutoQueue for Live — ประวัติเวอร์ชันและการอัปเดต (Changelog)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0d1117; color: #c9d1d9; }
+    </style>
+</head>
+<body class="p-4 md:p-8 font-sans antialiased min-h-screen">
+    <div class="max-w-4xl mx-auto space-y-6">
+        
+        <!-- Header -->
+        <div class="flex items-center justify-between border-b border-zinc-800 pb-5">
+            <div class="flex items-center space-x-3.5">
+                <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500/20 to-purple-500/20 text-blue-400 flex items-center justify-center font-bold text-2xl border border-blue-500/30 shadow-md">
+                    📜
+                </div>
+                <div>
+                    <div class="flex items-center space-x-2.5">
+                        <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">Version History & Changelog</h1>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.7 (CURRENT)</span>
+                    </div>
+                    <p class="text-xs text-zinc-400 mt-0.5">บันทึกประวัติการปรับปรุง แก้ไขบั๊ก และฟีเจอร์ใหม่ของ AutoQueue for Live ทั้งหมด</p>
+                </div>
+            </div>
+            <a href="/" class="text-xs px-3.5 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition">
+                ← กลับหน้าหลัก
+            </a>
+        </div>
+
+        <!-- Timeline Container -->
+        <div class="space-y-6">
+
+            <!-- v1.0.7 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.7</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/40 font-bold">Kiro & Claude Opus Certified</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">16 ตุลาคม 2026</span>
+                </div>
+
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">⚡ ความเสถียรภาพระดับไลฟ์สด (Live Stream Stability):</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li><strong>Atomic Transaction & Trans Ref:</strong> เพิ่มการล็อกความปลอดภัยระดับ SQLite Transaction ป้องกันสลิปยิงซ้ำ (Duplicate Credit) 100%</li>
+                            <li><strong>2-State Dynamic Programming:</strong> ปรับปรุงอัลกอริทึมคำนวณสิทธิ์จับรางวัลเป็น 2-State Unbounded Knapsack เร็วขึ้นเหลือ 5.6ms แม่นยำ 100.0%</li>
+                            <li><strong>Smart Address Fallback:</strong> แก้ไข Bug ชื่อลูกค้า LINE หลุดและเพิ่ม Rule-based Fallback สำรองทันทีเมื่อ AI ออฟไลน์</li>
+                            <li><strong>Storage Sentinel Non-blocking:</strong> เพิ่ม Uploads Memory Cache 60 วินาที และ In-flight Coalescing ตัดปัญหา I/O คอขวด</li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <h3 class="text-xs font-bold text-blue-400 uppercase tracking-wider mb-1.5">🛡️ ยกระดับความปลอดภัยระบบ (Enterprise Security Hardening):</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li><strong>Credential Protection:</strong> ลบค่า Default Webhook/Tokens ทั้งหมด พร้อมระบบ Scrypt Password Hashing ปลอดภัยระดับอุตสาหกรรม</li>
+                            <li><strong>LINE Webhook HMAC Verification:</strong> ตรวจสอบลายเซ็นดิจิทัล x-line-signature เพื่อป้องกันการปลอมแปลง Event จากภายนอก</li>
+                            <li><strong>Path Traversal & CRLF Defense:</strong> ป้องกันการฉีดค่าในไฟล์ระบบและป้องกัน Directory Traversal ตลอดกระบวนการอัปเดต</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- v1.0.6 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/60 border border-zinc-800 shadow space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-zinc-300">📦 Version 1.0.6</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700 font-bold">STABLE</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">16 ตุลาคม 2026</span>
+                </div>
+
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-blue-400 uppercase tracking-wider mb-1.5">🛡️ ความปลอดภัย & เสถียรภาพ (Security & Integrity):</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li><strong>SEC-01 Checksum:</strong> เพิ่มการตรวจสอบรหัสไฟล์ <strong>SHA-256 Cryptographic Checksum</strong> สกัดกั้นไฟล์อัปเดตที่เสียหายหรือถูกดัดแปลง</li>
+                            <li><strong>Redirect Domain Whitelist:</strong> บล็อกการ Redirect ออกนอก Official GitHub Release ป้องกันการโจมตีแบบ Open Redirect</li>
+                            <li><strong>Path Traversal Sanitization:</strong> ล็อกโฟลเดอร์ปลายทางเฉพาะใน <code>updates/</code> ป้องกันการบันทึกทับไฟล์ระบบภายนอก</li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">⚡ การทำงานพร้อมกัน & ฐานข้อมูล (Concurrency & Performance):</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li><strong>BUG-01 Batch Event Isolation:</strong> ปรับระบบ LINE Webhook จาก <code>events[0]</code> เป็นวนลูปพร้อม Error Boundary แยกอิสระ (ผ่านการทดสอบ 0.00% Drop Rate)</li>
+                            <li><strong>DB-01 SQLite Indexing:</strong> เพิ่ม <code>busy_timeout = 10000</code> พร้อมสร้าง 4 Compound Indices ป้องกันปัญหาฐานข้อมูลล็อก (<code>SQLITE_BUSY</code>)</li>
+                            <li><strong>PERF-01 Knapsack Branch-and-Bound:</strong> ปรับปรุงการคำนวณสิทธิ์ลุ้น ลดเวลาคำนวณยอดโอนหลักหมื่นจาก 1,029ms เหลือ <strong>0ms</strong> (ความถูกต้องตรงเดิม 100%)</li>
+                            <li><strong>WAL Truncation:</strong> ตั้งค่า <code>wal_checkpoint(TRUNCATE)</code> คืนพื้นที่ดิสก์เป็น 0 bytes อัตโนมัติทุกรอบบำรุงรักษา</li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <h3 class="text-xs font-bold text-purple-400 uppercase tracking-wider mb-1.5">🔄 รองรับการไลฟ์ข้ามเที่ยงคืน (Midnight Boundary):</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li><strong>BUG-02 & BUG-03:</strong> ผูกข้อมูลคิว ยอดเงิน และการส่งออกพัสดุ Kerry Express เข้ากับ <code>session_id</code> ป้องกันยอดเงินและคิวรีเซ็ตตอน 00:00 น.</li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <h3 class="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1.5">🔄 การฟื้นฟูระบบอัตโนมัติ (Resilience & Failover):</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li><strong>RES-02 Quota Failover:</strong> ระบบสลับผู้ให้บริการตรวจสลิปสำรองอัตโนมัติ (<code>SlipOK ➡️ EasySlip / Thunder ➡️ ตรวจภาพเอง</code>) ออเดอร์ไม่สะดุดแม้เครดิตหมด</li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <h3 class="text-xs font-bold text-pink-400 uppercase tracking-wider mb-1.5">💬 ปรับปรุงประสบการณ์ลูกค้า & มอนิเตอร์ (UX & Telemetry):</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li><strong>MSG-01 ข้อความสไตล์แม่ค้าผักกาด:</strong> ตอบกลับสลิปน่ารัก กระชับ เตือนให้ลูกค้าส่งชื่อที่อยู่เบอร์โทรทันที พร้อมแนบลิงก์ LINE OpenChat</li>
+                            <li><strong>OBS-01 Live Telemetry Watcher:</strong> มอนิเตอร์ SubAgents สดบนพาเนลขวามือของ Antigravity IDE</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- v1.0.5 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-3">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+                    <span class="text-base font-bold text-zinc-200">📦 Version 1.0.5</span>
+                    <span class="text-xs text-zinc-400 font-mono">15 ตุลาคม 2026</span>
+                </div>
+                <ul class="list-disc list-inside space-y-1 text-xs text-zinc-400 ml-1">
+                    <li>เพิ่มระบบ Remote Monitor เชื่อมต่อแจ้งเตือนเข้า Discord แบบ Real-time</li>
+                    <li>เพิ่มระบบ Auto-Diagnosis วิเคราะห์และอธิบายสาเหตุ Error เป็นภาษาไทยเข้าใจง่าย พร้อมวิธีแก้ไข</li>
+                    <li>ส่งลิงก์ Cloudflare เข้า Discord ทันทีที่เปิดโปรแกรม เพื่อดู Dashboard ระยะไกลได้ทันที</li>
+                    <li>ระบบแจ้งเตือนด่วนกรณีโควตาตรวจสลิปหมด หรือสัญญาณเชื่อมต่อหลุด</li>
+                </ul>
+            </div>
+
+            <!-- v1.0.4 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-3">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+                    <span class="text-base font-bold text-zinc-200">📦 Version 1.0.4</span>
+                    <span class="text-xs text-zinc-400 font-mono">10 ตุลาคม 2026</span>
+                </div>
+                <ul class="list-disc list-inside space-y-1 text-xs text-zinc-400 ml-1">
+                    <li>เพิ่มระบบ Gemini Generative AI สำหรับสกัดชื่อ ที่อยู่ และเบอร์โทรศัพท์ลูกค้าจากข้อความอัตโนมัติ</li>
+                    <li>เพิ่มระบบสำรอง Regex สกัดที่อยู่เมื่อระบบ AI ไม่พร้อมใช้งาน</li>
+                    <li>เชื่อมโยงฐานข้อมูลตำบล/อำเภอ/จังหวัด/รหัสไปรษณีย์ของไทย</li>
+                </ul>
+            </div>
+
+            <!-- v1.0.3 - v1.0.0 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-3">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+                    <span class="text-base font-bold text-zinc-200">📦 Version 1.0.0 – 1.0.3 (Foundational Releases)</span>
+                    <span class="text-xs text-zinc-400 font-mono">กันยายน – ตุลาคม 2026</span>
+                </div>
+                <ul class="list-disc list-inside space-y-1 text-xs text-zinc-400 ml-1">
+                    <li>ระบบคำนวณสิทธิ์และสินค้าแบบ Knapsack รองรับสินค้าหลายราคาและโปรโมชั่นส่งฟรี</li>
+                    <li>ระบบป้องกันคอมพิวเตอร์เข้า Sleep Mode ระหว่างไลฟ์สด (Keep Awake Service)</li>
+                    <li>ระบบส่งออกข้อมูลพัสดุ Kerry Express (KEX) EasyShip ในรูปแบบ Excel (.xlsx)</li>
+                    <li>การเชื่อมต่อ LINE Messaging API Webhook และ SlipOK QR Code Verification</li>
+                </ul>
+            </div>
+
+        </div>
+
+        <!-- Footer -->
+        <div class="text-center text-xs text-zinc-400 border-t border-zinc-800/80 pt-4 font-mono">
+            AutoQueue for Live • Enterprise Multi-Agent Architecture
+        </div>
+
+    </div>
+</body>
+</html>

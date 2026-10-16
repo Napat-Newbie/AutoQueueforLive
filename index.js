@@ -7,9 +7,12 @@ const FormData = require('form-data');
 // const { createClient } = require('@supabase/supabase-js');
 const path = require('path'); 
 const fs = require('fs'); 
+const crypto = require('crypto'); 
 
 const ExcelJS = require('exceljs');
 const { enableSleepBlocker } = require('./keep_awake.js');
+const sentinel = require('./sentinel/sentinel_agent.js');
+const TelemetryWatcher = require('./sentinel/telemetry_watcher.js');
 
 // 🛡️ ป้องกัน Windows Sleep Mode ระหว่างใช้งาน/ไลฟ์สด
 enableSleepBlocker();
@@ -18,15 +21,73 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+// 🛰️ Realtime SubAgents Telemetry Watcher (Method 1)
+const telemetryWatcher = new TelemetryWatcher({ io });
+telemetryWatcher.start();
+
+app.get('/api/subagents/telemetry', (req, res) => {
+    res.json(telemetryWatcher.currentData || {});
+});
+
 // 🔴 Live Session State & Storage
 let activeLiveSession = null; // { id: 'LIVE_timestamp', startTime: Date.now(), endTime: null }
+var merchantAccountName = process.env.MERCHANT_ACCOUNT_NAME || "";
 
-// 📢 ระบบ Discord Webhook Remote Monitoring & Auto-Diagnosis
-const DEFAULT_DISCORD_WEBHOOK_URL = 'https://discordapp.com/api/webhooks/1560336154786668545/6JofEN84L1gXPZfyWAR3ol3Bo1MB9dqaIyJJwf9ms6MT-RIgTwrwMbKZDiEEpsAYQy2v';
-const DISCORD_WEBHOOK_URL = (process.env.DISCORD_WEBHOOK_URL || DEFAULT_DISCORD_WEBHOOK_URL).trim();
+// 📢 ระบบ Discord Webhook Remote Monitoring & Auto-Diagnosis (เปิด/ปิดผ่าน .env)
+const DISCORD_WEBHOOK_URL = (process.env.DISCORD_WEBHOOK_URL || '').trim();
 
 // Cache ป้องกันการส่งข้อความซ้ำรัวๆ (Debounce 2 นาทีสำหรับ Error เดียวกัน)
 const discordAlertDebounce = new Map();
+
+// 🛡️ เคลียร์ Memory Cache ของ Debounce ป้องกัน Memory Leak
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, timestamp] of discordAlertDebounce.entries()) {
+        if (now - timestamp > 15 * 60 * 1000) discordAlertDebounce.delete(key);
+    }
+}, 5 * 60 * 1000);
+
+// 🚦 Discord Rate Limit Queue & Throttler (ป้องกัน HTTP 429 Too Many Requests)
+const discordAlertQueue = [];
+let isProcessingDiscordQueue = false;
+let discordRateLimitedUntil = 0;
+
+async function processDiscordQueue() {
+    if (isProcessingDiscordQueue) return;
+    isProcessingDiscordQueue = true;
+
+    try {
+        while (discordAlertQueue.length > 0) {
+            const now = Date.now();
+            if (now < discordRateLimitedUntil) {
+                const waitMs = discordRateLimitedUntil - now;
+                await new Promise(r => setTimeout(r, waitMs));
+            }
+
+            const item = discordAlertQueue.shift();
+            try {
+                await axios.post(DISCORD_WEBHOOK_URL, item.payload, { timeout: 8000 });
+                // เว้นระยะห่างอย่างน้อย 1,500ms ระหว่างการส่งข้อความแต่ละครั้งตามมาตรฐาน Discord Webhook
+                await new Promise(r => setTimeout(r, 1500));
+            } catch (err) {
+                const status = err.response?.status;
+                if (status === 429) {
+                    const retryAfterSec = Number(err.response?.data?.retry_after || err.response?.headers?.['retry-after'] || 5);
+                    const waitMs = Math.ceil(retryAfterSec * 1000) + 500;
+                    discordRateLimitedUntil = Date.now() + waitMs;
+                    console.warn(`⚠️ Discord Rate Limited (HTTP 429). จะส่งใหม่ในอีก ${retryAfterSec} วินาที...`);
+                    // ใส่ข้อความกลับเข้าหัวคิวเพื่อส่งซ้ำ
+                    discordAlertQueue.unshift(item);
+                    await new Promise(r => setTimeout(r, waitMs));
+                } else {
+                    console.error('Failed to send Discord alert:', err.message);
+                }
+            }
+        }
+    } finally {
+        isProcessingDiscordQueue = false;
+    }
+}
 
 async function sendDiscordAlert(options = {}) {
     const { 
@@ -41,12 +102,13 @@ async function sendDiscordAlert(options = {}) {
     } = options;
 
     if (!DISCORD_WEBHOOK_URL) return;
+    if (process.env.DISCORD_ALERTS_ENABLED === 'false' || (process.env.DISCORD_MUTE === 'true' && type !== 'SELF_HEALING')) return;
 
     // ตรวจสอบ Debounce ป้องกัน Spam ข้อความซ้ำ
     const debounceKey = `${category}_${title}_${(message || '').slice(0, 30)}`;
     const now = Date.now();
     const lastSent = discordAlertDebounce.get(debounceKey) || 0;
-    if (!force && type !== 'SUCCESS' && now - lastSent < 120000) {
+    if (!force && type !== 'SUCCESS' && type !== 'SELF_HEALING' && now - lastSent < 120000) {
         return; // ไม่ส่งซ้ำภายใน 2 นาที
     }
     discordAlertDebounce.set(debounceKey, now);
@@ -56,10 +118,11 @@ async function sendDiscordAlert(options = {}) {
         : (process.env.MERCHANT_ACCOUNT_NAME ? `ร้าน${process.env.MERCHANT_ACCOUNT_NAME}` : 'ร้านค้า (AutoQueue)');
 
     const colorMap = {
-        'ERROR': 15158332,   // แดง
-        'WARN': 16753920,    // ส้ม
-        'SUCCESS': 3066993,  // เขียว
-        'INFO': 3447003      // ฟ้า
+        'ERROR': 15158332,        // แดง
+        'WARN': 16753920,         // ส้ม
+        'SUCCESS': 3066993,       // เขียว
+        'SELF_HEALING': 1095809,  // เขียวมรกต (0x10B981)
+        'INFO': 3447003           // ฟ้า
     };
 
     // 🧠 ระบบวิเคราะห์ปัญหาอัตโนมัติ (Auto-Diagnosis) เป็นภาษาไทยเข้าใจง่าย
@@ -108,7 +171,7 @@ async function sendDiscordAlert(options = {}) {
     const fields = [
         { name: '🏢 ร้านค้า', value: shopName, inline: true },
         { name: '🕒 เวลา', value: new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }), inline: true },
-        { name: '📦 เวอร์ชัน', value: 'v1.0.5', inline: true }
+        { name: '📦 เวอร์ชัน', value: 'v1.0.6', inline: true }
     ];
 
     if (publicUrl) {
@@ -132,18 +195,31 @@ async function sendDiscordAlert(options = {}) {
         fields.push({ name: '📋 Technical Details', value: `\`\`\`${shortDetails}\`\`\``, inline: false });
     }
 
-    try {
-        await axios.post(DISCORD_WEBHOOK_URL, {
+    discordAlertQueue.push({
+        payload: {
             embeds: [{
                 title: title,
                 color: colorMap[type] || colorMap['INFO'],
                 fields: fields,
                 footer: { text: 'AutoQueueforLive Monitor & Diagnosis System' }
             }]
-        }, { timeout: 8000 });
-    } catch(err) {
-        console.error('Failed to send Discord alert:', err.message);
-    }
+        }
+    });
+    processDiscordQueue().catch(() => {});
+}
+
+// ⚡ ระบบรายงานข้อผิดพลาดที่ Self-Healing สำเร็จเข้า Discord อัตโนมัติ (Priority 1 Recovery Alert)
+async function reportSelfHealingToDiscord(options = {}) {
+    const { category = 'SELF_HEALING', title = 'กู้คืนระบบสำเร็จ', issue = '', actionDetails = '', details = null } = options;
+    await sendDiscordAlert({
+        type: 'SELF_HEALING',
+        category: category,
+        title: `⚡ [Self-Healing สำเร็จ] ${title}`,
+        message: issue || 'ตรวจพบความผิดปกติในระบบ แต่กลไก Self-Healing ได้ดำเนินการแก้ไขและฟื้นฟูระบบสำเร็จเรียบร้อยแล้ว',
+        suggestion: `✅ สิ่งที่ระบบแก้ไขอัตโนมัติ: ${actionDetails}\n(แม่ค้าสามารถไลฟ์สดขายของต่อได้ทันทีโดยไม่ต้องกังวล)`,
+        details: details,
+        force: true
+    });
 }
 
 // 📜 ระบบบันทึก System & Error Logs สำหรับหน้าตั้งค่าเชื่อมต่อ
@@ -159,24 +235,8 @@ function addLog(type, message, details = null) {
     systemLogs.unshift(logItem); // เอาใหม่อยู่บนสุด
     if (systemLogs.length > 200) systemLogs.pop(); // เก็บสูงสุด 200 รายการล่าสุด
 
-    // 🚀 ส่งแจ้งเตือนเข้า Discord อัตโนมัติเมื่อเกิดข้อผิดพลาด
-    if (type === 'ERROR') {
-        sendDiscordAlert({
-            type: 'ERROR',
-            category: 'SYSTEM',
-            title: '🚨 [แจ้งเตือนข้อผิดพลาด] ' + message.slice(0, 70),
-            message: message,
-            details: details
-        });
-    } else if (type === 'WARN' && /quota|เครดิต|หมด|หลุด|ล้มเหลว|ผิดพลาด/i.test(message)) {
-        sendDiscordAlert({
-            type: 'WARN',
-            category: 'SYSTEM',
-            title: '⚠️ [แจ้งเตือนระบบ] ' + message.slice(0, 70),
-            message: message,
-            details: details
-        });
-    }
+    // 🛡️ บันทึก System Logs ใน Dashboard เท่านั้น (ไม่ส่งสแปมเข้า Discord เพื่อป้องกันการแจ้งเตือนรบกวน)
+    // การแจ้งเตือนเข้า Discord จะส่งเฉพาะกรณีวิกฤตระดับ Crash (uncaughtException) หรือสั่งส่งโดยตรงเท่านั้น
 }
 addLog('INFO', 'ระบบเริ่มต้นทำงานเรียบร้อย');
 
@@ -192,6 +252,15 @@ process.on('uncaughtException', (err) => {
         details: err.stack,
         force: true
     });
+    // 🛡️ AutoQueue Sentinel AI Watchdog
+    sentinel.reportIncident({
+        type: 'CRASH',
+        category: 'SYSTEM_CRASH',
+        title: 'ตรวจพบ Uncaught Exception วิกฤตในระบบ',
+        message: err.message,
+        stack: err.stack,
+        logs: systemLogs.slice(0, 10).map(l => `[${l.time}] [${l.type}] ${l.message}`)
+    }).catch(e => console.error('[Sentinel Error Handler]:', e.message));
 });
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection:', reason);
@@ -204,6 +273,15 @@ process.on('unhandledRejection', (reason, promise) => {
         details: reason?.stack,
         force: true
     });
+    // 🛡️ AutoQueue Sentinel AI Watchdog
+    sentinel.reportIncident({
+        type: 'CRASH',
+        category: 'SYSTEM_CRASH',
+        title: 'ตรวจพบ Unhandled Rejection วิกฤตในระบบ',
+        message: reason?.message || String(reason),
+        stack: reason?.stack,
+        logs: systemLogs.slice(0, 10).map(l => `[${l.time}] [${l.type}] ${l.message}`)
+    }).catch(e => console.error('[Sentinel Error Handler]:', e.message));
 });
 
 app.use((req, res, next) => {
@@ -214,11 +292,59 @@ app.use((req, res, next) => {
     next();
 });
 
+// 📱 Sentinel Mobile Approval Action Endpoint
+app.get('/api/sentinel/action', async (req, res) => {
+    try {
+        const { id, token, action } = req.query;
+        const result = await sentinel.handleAction(id, token, action);
+        res.send(result.html);
+    } catch (err) {
+        res.status(500).send(`<h3>เกิดข้อผิดพลาด: ${err.message}</h3>`);
+    }
+});
+
+// 🧪 Test Sentinel Incident & Review Simulation
+app.post('/api/sentinel/test', async (req, res) => {
+    try {
+        const { category = 'LINE_BATCH', message = 'LINE Webhook batch array dropped events (BUG-01 simulation)' } = req.body || {};
+        await sentinel.reportIncident({
+            type: 'ERROR',
+            category,
+            title: 'จำลองการตรวจพบปัญหา LINE Webhook Batch Drop (BUG-01)',
+            message,
+            stack: 'Error: Multiple events in webhook batch array dropped\n    at handleLineWebhook (index.js:452:12)',
+            logs: systemLogs.slice(0, 10).map(l => `[${l.time}] [${l.type}] ${l.message}`)
+        });
+        res.json({ success: true, message: 'Sentinel Incident Triggered! ตรวจสอบที่ Discord ใหม่ของคุณได้เลยครับ' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 🧪 Test Self-Healing Alert to Discord
+app.post('/api/sentinel/test_healing', async (req, res) => {
+    try {
+        await reportSelfHealingToDiscord({
+            category: 'DATABASE_BUSY',
+            title: 'คลี่คลายการล็อกของฐานข้อมูล SQLite สำเร็จ (Self-Healing)',
+            issue: 'ตรวจพบ SQLite Busy Contention ชั่วคราวเนื่องจากคำสั่งซื้อเข้ามาพร้อมกันจำนวนมาก',
+            actionDetails: 'ระบบ Sentinel ดำเนินการ PRAGMA wal_checkpoint(TRUNCATE) และขยาย busy_timeout อัตโนมัติ แม่ค้าไลฟ์สดต่อได้ราบรื่นทันที'
+        });
+        res.json({ success: true, message: 'Self-Healing Alert sent to Discord successfully!' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: Date.now() });
 });
 
-app.use(express.json());
+app.use(express.json({
+    verify: (req, res, buf) => {
+        req.rawBody = buf;
+    }
+}));
 app.use(express.static(path.join(__dirname, 'public'))); 
 
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
@@ -245,12 +371,33 @@ cleanupOldUploads();
 
 // Local embedded SQLite database (100% private to this seller)
 const supabase = require('./db.js');
+if (supabase && supabase.db) {
+    sentinel.setDatabase(supabase.db);
+    telemetryWatcher.setDatabase(supabase.db);
+}
+
+// 🧹 ระบบดูแลรักษาพื้นที่ฮาร์ดดิสก์และไฟล์สำรองเก่า (Housekeeping & Disk Space Retention)
+function cleanupOldBackups(maxAgeDays = 30, keepLatest = 10) {
+    try {
+        const backupsDir = path.join(__dirname, 'backups');
+        if (supabase && typeof supabase.cleanupBackups === 'function') {
+            supabase.cleanupBackups(backupsDir, keepLatest, maxAgeDays);
+        }
+        if (supabase && typeof supabase.optimizeDb === 'function') {
+            supabase.optimizeDb();
+        }
+    } catch (e) {
+        console.error('cleanupOldBackups error:', e.message);
+    }
+}
+setInterval(cleanupOldBackups, 24 * 60 * 60 * 1000); // ทำงานวันละ 1 ครั้ง
+cleanupOldBackups();
 
 let priceList = []; 
 let rawPriceString = "";
 let shippingFee = 39; 
 let freeShippingThreshold = 0; 
-let merchantAccountName = "";
+merchantAccountName = merchantAccountName || "";
 let openchatLink = ""; 
 let slipokPackageLimit = 100; // ค่ามาตรฐาน: OK Basic (100 สลิป/เดือน ฟรี)
 
@@ -289,6 +436,140 @@ loadConfig();
 
 app.get('/api/config', (req, res) => res.json({ prices: rawPriceString, shippingFee, freeShippingThreshold, merchantAccountName, openchatLink }));
 
+
+// ================= 🔐 AUTHENTICATION & SECURITY LAYER =================
+const SESSION_COOKIE = 'aq_session';
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const sessions = new Map(); // token -> { role, exp }
+
+// เคลียร์ session ที่หมดอายุอัตโนมัติ
+setInterval(() => {
+    const now = Date.now();
+    for (const [t, s] of sessions) {
+        if (s.exp < now) sessions.delete(t);
+    }
+}, 10 * 60 * 1000).unref();
+
+function hashPassword(plain) {
+    const salt = crypto.randomBytes(16);
+    const hash = crypto.scryptSync(String(plain), salt, 64);
+    return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
+}
+
+function verifyPassword(plain, stored) {
+    if (!stored || typeof plain !== 'string') return false;
+    if (stored.startsWith('scrypt$')) {
+        const parts = stored.split('$');
+        if (parts.length < 3) return false;
+        const salt = Buffer.from(parts[1], 'hex');
+        const expected = Buffer.from(parts[2], 'hex');
+        const actual = crypto.scryptSync(plain, salt, expected.length);
+        return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+    }
+    // รองรับ plaintext แบบเดิมเพื่อ migration โดยใช้ constant-time comparison
+    const a = Buffer.from(String(plain));
+    const b = Buffer.from(String(stored));
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function readSessionToken(req) {
+    const h = req.headers?.authorization || '';
+    if (h.startsWith('Bearer ')) return h.slice(7).trim();
+    const cookieHeader = req.headers?.cookie || '';
+    const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([a-f0-9]{64})`));
+    return match ? match[1] : null;
+}
+
+function getSession(req) {
+    const token = readSessionToken(req);
+    if (!token) return null;
+    const session = sessions.get(token);
+    if (!session) return null;
+    if (session.exp < Date.now()) {
+        sessions.delete(token);
+        return null;
+    }
+    return session;
+}
+
+function issueSession(res, role) {
+    const token = crypto.randomBytes(32).toString('hex');
+    sessions.set(token, { role, exp: Date.now() + SESSION_TTL_MS });
+    if (res && typeof res.setHeader === 'function') {
+        res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    }
+    return token;
+}
+
+function clientIp(req) {
+    return String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim();
+}
+
+// ป้องกัน Brute-force: จำกัดการล็อกอินไม่เกิน 10 ครั้งต่อ 15 นาทีต่อ IP
+const loginAttempts = new Map();
+function isLoginRateLimited(req) {
+    const ip = clientIp(req) || 'unknown';
+    const now = Date.now();
+    const record = loginAttempts.get(ip);
+    if (!record || record.resetAt < now) {
+        loginAttempts.set(ip, { count: 1, resetAt: now + 15 * 60 * 1000 });
+        return false;
+    }
+    record.count += 1;
+    return record.count > 10;
+}
+
+const DREAMDEV_USERNAME = (process.env.DREAMDEV_USERNAME || 'Dreamdev').trim();
+const DREAMDEV_PASSWORD = (process.env.DREAMDEV_PASSWORD || '').trim();
+const DREAMDEV_PASSWORD_HASH = (process.env.DREAMDEV_PASSWORD_HASH || '').trim();
+
+// 🛡️ Middleware ป้องกันการเข้าถึง Endpoint จัดการระบบโดยไม่ได้รับอนุญาต (Two-Tier RBAC Hardening)
+app.use((req, res, next) => {
+    const p = req.path.toLowerCase();
+    const method = req.method.toUpperCase();
+
+    // 🔒 Tier B: สิทธิ์สูงสุดเฉพาะผู้พัฒนา (Dreamdev Only)
+    const isTierB = (
+        p.startsWith('/api/admin/') ||
+        p.startsWith('/api/test/') ||
+        p.startsWith('/api/sentinel/') ||
+        p === '/api/system/shutdown' ||
+        p === '/api/system/apply_update' ||
+        p === '/api/system/save_update_url' ||
+        p === '/api/auth/change_password'
+    );
+    if (isTierB) {
+        const session = getSession(req);
+        if (!session) {
+            return res.status(401).json({ success: false, message: 'UNAUTHORIZED: กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
+        }
+        if (session.role !== 'dreamdev') {
+            return res.status(403).json({ success: false, message: 'FORBIDDEN: สิทธิ์ของคุณไม่สามารถดำเนินการส่วนนี้ได้ (เฉพาะผู้พัฒนา Dreamdev เท่านั้น)' });
+        }
+        req.auth = session;
+        return next();
+    }
+
+    // 🛡️ Tier A: สิทธิ์สำหรับแม่ค้าหรือผู้พัฒนา (Merchant or Dreamdev)
+    const isTierA = (
+        (p === '/api/config' && method === 'POST') ||
+        p.startsWith('/api/kerry/') ||
+        p.startsWith('/api/queue/') ||
+        (p.startsWith('/api/live_session/') && (p === '/api/live_session/start' || p === '/api/live_session/end')) ||
+        p === '/api/history_data'
+    );
+    if (isTierA) {
+        const session = getSession(req);
+        if (!session) {
+            return res.status(401).json({ success: false, message: 'UNAUTHORIZED: กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
+        }
+        req.auth = session;
+        return next();
+    }
+
+    next();
+});
+
 app.post('/api/config', async (req, res) => {
     const { newPrices, newShipping, newThreshold, newMerchantName, newOpenchatLink } = req.body;
     try {
@@ -308,12 +589,6 @@ app.post('/api/config', async (req, res) => {
     }
 });
 
-// 🔐 AUTHENTICATION: แยก 2 ระดับสิทธิ์ (Dreamdev & แม่ค้า Merchant)
-const DREAMDEV_CREDENTIALS = {
-    username: 'Dreamdev',
-    password: '0817342899'
-};
-
 // เช็คสถานะว่าแม่ค้าเคยตั้งรหัสผ่านร้านค้าหรือยัง
 app.get('/api/auth/status', async (req, res) => {
     try {
@@ -327,15 +602,30 @@ app.get('/api/auth/status', async (req, res) => {
     }
 });
 
-// ล็อกอินเข้าสู่ระบบ (รองรับทั้ง Dreamdev และ แม่ค้า)
+// ล็อกอินเข้าสู่ระบบ (รองรับทั้ง Dreamdev และ แม่ค้า พร้อม Scrypt & HttpOnly Session)
 app.post('/api/auth/login', async (req, res) => {
-    const { username, password } = req.body;
+    if (isLoginRateLimited(req)) {
+        return res.status(429).json({ success: false, message: 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอ 15 นาที' });
+    }
+
+    const { username, password } = req.body || {};
+    if (typeof password !== 'string' || !password) {
+        return res.status(400).json({ success: false, message: 'กรุณากรอกรหัสผ่าน' });
+    }
     
-    // 1. เช็คสิทธิ์ Dreamdev (Master Developer) - ตรวจสอบถ้ากรอก User Dreamdev หรือกรอกรหัสผ่าน Master Dev
-    if ((username === DREAMDEV_CREDENTIALS.username && password === DREAMDEV_CREDENTIALS.password) ||
-        (password === DREAMDEV_CREDENTIALS.password && (!username || username === ''))) {
+    // 1. เช็คสิทธิ์ Dreamdev (Master Developer) - ไม่ใช้ Hardcoded fallback
+    let isDreamdevMatch = false;
+    const isDreamdevUser = (username === DREAMDEV_USERNAME);
+    if (DREAMDEV_PASSWORD_HASH && isDreamdevUser) {
+        isDreamdevMatch = verifyPassword(password, DREAMDEV_PASSWORD_HASH);
+    } else if (DREAMDEV_PASSWORD && isDreamdevUser) {
+        isDreamdevMatch = (password === DREAMDEV_PASSWORD);
+    }
+
+    if (isDreamdevMatch) {
+        const token = issueSession(res, 'dreamdev');
         addLog('SUCCESS', `ผู้พัฒนา [Dreamdev] เข้าสู่ระบบในโหมด Developer สำเร็จ`);
-        return res.json({ success: true, role: 'dreamdev', token: 'DEV_TOKEN_' + Date.now() });
+        return res.json({ success: true, role: 'dreamdev', token });
     }
 
     // 2. เช็คสิทธิ์แม่ค้า (Merchant)
@@ -345,18 +635,26 @@ app.post('/api/auth/login', async (req, res) => {
 
         // หากร้านนี้ยังไม่เคยตั้งรหัสผ่าน ให้รหัสที่ส่งมากลายเป็นรหัสที่ตั้งใหม่ทันที
         if (!savedPass) {
-            if (!password || password.trim().length < 4) {
+            if (password.trim().length < 4) {
                 return res.status(400).json({ success: false, message: 'กรุณาตั้งรหัสผ่านร้านค้าอย่างน้อย 4 ตัวอักษร' });
             }
-            await supabase.from('configs').upsert([{ key: 'merchant_password', value: password.trim() }]);
-            addLog('SUCCESS', 'แม่ค้าได้สร้างรหัสผ่านร้านค้าเริ่มต้นเรียบร้อยแล้ว');
-            return res.json({ success: true, role: 'merchant', token: 'MERCHANT_TOKEN_' + Date.now(), isNewPassword: true });
+            const hashed = hashPassword(password.trim());
+            await supabase.from('configs').upsert([{ key: 'merchant_password', value: hashed }]);
+            const token = issueSession(res, 'merchant');
+            addLog('SUCCESS', 'แม่ค้าได้สร้างรหัสผ่านร้านค้าเริ่มต้นเรียบร้อยแล้ว (เข้ารหัส Scrypt)');
+            return res.json({ success: true, role: 'merchant', token: 'MERCHANT_TOKEN_' + token, isNewPassword: true });
         }
 
-        // หากเคยตั้งรหัสไว้แล้ว ตรวจสอบความถูกต้อง
-        if (password === savedPass) {
+        // ตรวจสอบความถูกต้องของรหัสผ่าน
+        if (verifyPassword(password, savedPass)) {
+            // Auto-upgrade: หากรหัสเดิมยังเป็น plaintext ให้ migrate เป็น scrypt ทันที
+            if (!savedPass.startsWith('scrypt$')) {
+                const newHash = hashPassword(password);
+                supabase.from('configs').upsert([{ key: 'merchant_password', value: newHash }]).catch(() => {});
+            }
+            const token = issueSession(res, 'merchant');
             addLog('SUCCESS', 'แม่ค้า (Merchant) เข้าสู่ระบบสำเร็จ');
-            return res.json({ success: true, role: 'merchant', token: 'MERCHANT_TOKEN_' + Date.now() });
+            return res.json({ success: true, role: 'merchant', token: 'MERCHANT_TOKEN_' + token });
         } else {
             addLog('WARN', 'แม่ค้าเข้าสู่ระบบไม่สำเร็จ (รหัสผ่านไม่ถูกต้อง)');
             return res.status(401).json({ success: false, message: 'รหัสผ่านร้านค้าไม่ถูกต้อง' });
@@ -368,20 +666,21 @@ app.post('/api/auth/login', async (req, res) => {
 
 // เปลี่ยนรหัสผ่านของแม่ค้า
 app.post('/api/auth/change_password', async (req, res) => {
-    const { oldPassword, newPassword } = req.body;
+    const { oldPassword, newPassword } = req.body || {};
     try {
         const { data: configPass } = await supabase.from('configs').select('value').eq('key', 'merchant_password').single();
         const savedPass = configPass?.value;
 
-        if (savedPass && oldPassword !== savedPass) {
+        if (savedPass && !verifyPassword(oldPassword, savedPass)) {
             return res.status(400).json({ success: false, message: 'รหัสผ่านเดิมไม่ถูกต้อง' });
         }
-        if (!newPassword || newPassword.trim().length < 4) {
+        if (!newPassword || typeof newPassword !== 'string' || newPassword.trim().length < 4) {
             return res.status(400).json({ success: false, message: 'รหัสผ่านใหม่ต้องมีความยาวอย่างน้อย 4 ตัวอักษร' });
         }
 
-        await supabase.from('configs').upsert([{ key: 'merchant_password', value: newPassword.trim() }]);
-        addLog('SUCCESS', 'แม่ค้าเปลี่ยนรหัสผ่านร้านค้าสำเร็จ');
+        const hashed = hashPassword(newPassword.trim());
+        await supabase.from('configs').upsert([{ key: 'merchant_password', value: hashed }]);
+        addLog('SUCCESS', 'แม่ค้าเปลี่ยนรหัสผ่านร้านค้าสำเร็จ (เข้ารหัส Scrypt)');
         res.json({ success: true, message: 'เปลี่ยนรหัสผ่านเรียบร้อยแล้ว' });
     } catch(e) {
         res.status(500).json({ success: false, message: e.message });
@@ -390,10 +689,19 @@ app.post('/api/auth/change_password', async (req, res) => {
 
 // backward compatibility alias
 app.post('/api/admin/login', (req, res) => {
-    const { username, password } = req.body;
-    if (username === DREAMDEV_CREDENTIALS.username && password === DREAMDEV_CREDENTIALS.password) {
-        addLog('SUCCESS', `ผู้พัฒนา [${username}] เข้าสู่ระบบสำเร็จ`);
-        res.json({ success: true, token: 'DEV_AUTHORIZED_TOKEN_' + Date.now() });
+    const { username, password } = req.body || {};
+    const isDreamdevUser = (username === DREAMDEV_USERNAME) || (!username && password === DREAMDEV_PASSWORD);
+    let isMatch = false;
+    if (DREAMDEV_PASSWORD_HASH) {
+        isMatch = isDreamdevUser && verifyPassword(password, DREAMDEV_PASSWORD_HASH);
+    } else {
+        isMatch = isDreamdevUser && (password === DREAMDEV_PASSWORD);
+    }
+
+    if (isMatch) {
+        const token = issueSession(res, 'dreamdev');
+        addLog('SUCCESS', `ผู้พัฒนา [${username || 'Dreamdev'}] เข้าสู่ระบบสำเร็จ`);
+        res.json({ success: true, token: 'DEV_AUTHORIZED_TOKEN_' + token });
     } else {
         addLog('WARN', `พยายามเข้าสู่ระบบไม่ถูกต้อง โดย User: ${username}`);
         res.status(401).json({ success: false, message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
@@ -408,6 +716,7 @@ app.get('/api/admin/setup_keys', (req, res) => {
         slipProvider: process.env.SLIP_PROVIDER || 'slipok',
         slipokPackageLimit: slipokPackageLimit || 100,
         lineAccessToken: process.env.LINE_ACCESS_TOKEN ? `${process.env.LINE_ACCESS_TOKEN.substring(0, 15)}...${process.env.LINE_ACCESS_TOKEN.substring(process.env.LINE_ACCESS_TOKEN.length - 8)}` : '',
+        lineChannelSecret: process.env.LINE_CHANNEL_SECRET ? `${process.env.LINE_CHANNEL_SECRET.substring(0, 4)}...${process.env.LINE_CHANNEL_SECRET.substring(process.env.LINE_CHANNEL_SECRET.length - 4)}` : '',
         geminiApiKey: process.env.GEMINI_API_KEY ? `${process.env.GEMINI_API_KEY.substring(0, 8)}...` : '',
         slipokApiKey: process.env.SLIPOK_API_KEY ? `${process.env.SLIPOK_API_KEY.substring(0, 6)}...` : '',
         slipokBranchId: process.env.SLIPOK_BRANCH_ID || '',
@@ -422,7 +731,7 @@ app.get('/api/admin/setup_keys', (req, res) => {
 
 app.post('/api/admin/setup_keys', async (req, res) => {
     const { 
-        slipProvider, slipokPackageLimit: reqPackageLimit, lineAccessToken, geminiApiKey, 
+        slipProvider, slipokPackageLimit: reqPackageLimit, lineAccessToken, lineChannelSecret, geminiApiKey, 
         slipokApiKey, slipokBranchId, easyslipToken,
         thunderToken, slipverifyKey,
         customApiUrl, customApiHeader, customApiKey,
@@ -432,22 +741,23 @@ app.post('/api/admin/setup_keys', async (req, res) => {
         const envPath = path.join(__dirname, '.env');
         let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
 
+        // 🛡️ Safe Environment Variable Updater (ป้องกัน CRLF Injection & Regex Replacement Exploit)
         const updateEnvVar = (name, val) => {
-            if (val === undefined || val === null || val.includes('...')) return; // ถ้าไม่ได้แก้ ไม่ต้องทับ
+            if (val === undefined || val === null) return;
+            val = String(val).trim();
+            if (val.includes('...')) return; // ค่า masked = ไม่ได้แก้
+            if (/[\r\n"\\]/.test(val)) throw new Error(`ค่า ${name} มีอักขระต้องห้าม ป้องกันการแทรกคำสั่ง`);
             const regex = new RegExp(`^${name}=.*$`, 'm');
-            const line = `${name}="${val.trim()}"`;
-            if (regex.test(envContent)) {
-                envContent = envContent.replace(regex, line);
-            } else {
-                envContent += `\n${line}`;
-            }
-            process.env[name] = val.trim();
+            const line = `${name}="${val}"`;
+            envContent = regex.test(envContent) ? envContent.replace(regex, () => line) : `${envContent}\n${line}`;
+            process.env[name] = val;
         };
 
         if (slipProvider) {
             updateEnvVar('SLIP_PROVIDER', slipProvider);
         }
         updateEnvVar('LINE_ACCESS_TOKEN', lineAccessToken);
+        updateEnvVar('LINE_CHANNEL_SECRET', lineChannelSecret);
         updateEnvVar('SLIPOK_API_KEY', slipokApiKey);
         updateEnvVar('SLIPOK_BRANCH_ID', slipokBranchId);
         updateEnvVar('EASYSLIP_TOKEN', easyslipToken);
@@ -463,8 +773,10 @@ app.post('/api/admin/setup_keys', async (req, res) => {
             await supabase.from('configs').upsert([{ key: 'slipok_package_limit', value: slipokPackageLimit.toString() }]);
         }
 
-        // เฉพาะ Dreamdev เท่านั้นที่อนุญาตให้แก้ไข Gemini API Key ได้
-        if (role === 'dreamdev' && geminiApiKey !== undefined) {
+        // เฉพาะ Dreamdev ที่ยืนยันตัวตนแล้วเท่านั้นที่อนุญาตให้แก้ไข Gemini API Key ได้
+        const session = getSession(req);
+        const isDreamdev = (session && session.role === 'dreamdev') || (role === 'dreamdev' && (req.headers.authorization?.includes('DEV_') || readSessionToken(req)));
+        if (isDreamdev && geminiApiKey !== undefined) {
             updateEnvVar('GEMINI_API_KEY', geminiApiKey);
         }
 
@@ -493,6 +805,12 @@ app.post('/api/admin/logs/clear', (req, res) => {
     systemLogs.length = 0;
     addLog('INFO', 'ล้างประวัติ Logs เรียบร้อยแล้ว');
     res.json({ success: true });
+});
+
+app.post('/api/admin/discord/clear', (req, res) => {
+    discordAlertQueue.length = 0;
+    discordAlertDebounce.clear();
+    res.json({ success: true, message: 'เคลียร์คิวข้อความแจ้งเตือน Discord เรียบร้อย' });
 });
 
 // 💾 BACKUP DATABASE API
@@ -533,6 +851,42 @@ app.post('/api/admin/reset_test_data', async (req, res) => {
     }
 });
 
+// 💾 STORAGE & DB HEALTH API (สำหรับ Tab ตั้งค่าระบบของแม่ค้า)
+app.get('/api/admin/storage_health', async (req, res) => {
+    try {
+        if (telemetryWatcher && telemetryWatcher.storageMonitor) {
+            const report = await telemetryWatcher.storageMonitor.checkHealthAndSelfHeal();
+            return res.json({ success: true, ...report });
+        }
+        res.status(500).json({ success: false, error: 'Storage monitor not initialized' });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/admin/storage/optimize_db', (req, res) => {
+    try {
+        if (supabase && typeof supabase.optimizeDb === 'function') {
+            supabase.optimizeDb();
+            addLog('SUCCESS', 'จัดระเบียบฐานข้อมูล SQLite และ Truncate WAL สำเร็จโดยผู้ใช้');
+            return res.json({ success: true, message: 'เคลียร์แคชและจัดระเบียบฐานข้อมูลสำเร็จ' });
+        }
+        res.status(500).json({ success: false, error: 'Database optimize function not found' });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/admin/storage/cleanup_uploads', (req, res) => {
+    try {
+        cleanupOldUploads();
+        addLog('SUCCESS', 'สั่งทำความสะอาดไฟล์สลิปเก่า (Uploads Cleanup) สำเร็จโดยผู้ใช้');
+        res.json({ success: true, message: 'ทำความสะอาดไฟล์สลิปเก่าเรียบร้อยแล้ว' });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 function getTodayString() { 
     const date = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Bangkok"}));
     const yyyy = date.getFullYear();
@@ -549,51 +903,117 @@ function getLocalTimeString() {
     return `${hh}:${mm}:${ss}`;
 }
 
+const MAX_DP_BUDGET = 500000; // เพดานคำนวณอัตโนมัติ 500,000 บาท (คำนวณในหน่วยความจำ <3MB, เวลา <10ms ป้องกัน Event Loop ค้าง)
 function calculateBestDraws(virtualBalance, pastDraws) {
     let best = { draws: 0, remainder: virtualBalance, cost: 0, isFreeShip: false, appliedShipping: false, breakdown: [] };
-    if (priceList.length === 0) return best;
+    if (!priceList || priceList.length === 0) return best;
 
-    let sortedPriceList = [...priceList].sort((a, b) => b.price - a.price);
+    const items = [...priceList].sort((a, b) => b.price - a.price);
+    const minPrice = Math.min(...items.map(p => p.price));
+    if (!(minPrice > 0) || !(virtualBalance >= minPrice)) return best;
 
-    let minPrice = Math.min(...sortedPriceList.map(p => p.price));
-    if(minPrice <= 0) return best;
-    let maxQty = Math.ceil(virtualBalance / minPrice);
-    
-    function search(index, currentDraws, currentItemCost, currentCounts) {
-        if (index === sortedPriceList.length) {
-            let totalDraws = pastDraws + currentDraws;
-            let totalCost = currentItemCost;
-            let isFree = (totalDraws >= freeShippingThreshold);
-            let appliedShip = false;
-            
-            if (currentDraws > 0 && !isFree) {
-                totalCost += shippingFee;
-                appliedShip = true;
-            }
-            
-            if (totalCost <= virtualBalance) {
-                let remainder = virtualBalance - totalCost;
-                if (remainder < best.remainder || (remainder === best.remainder && currentDraws > best.draws)) {
-                    let breakdownArr = [];
-                    for (let i = 0; i < currentCounts.length; i++) {
-                        if (currentCounts[i] > 0) breakdownArr.push(`${sortedPriceList[i].name} x${currentCounts[i]}`);
+    const B = Math.floor(virtualBalance);
+    if (B > MAX_DP_BUDGET) {
+        addLog('WARN', `ยอด ${virtualBalance}฿ เกินเพดานคำนวณอัตโนมัติ (${MAX_DP_BUDGET}฿) — กรุณาตรวจสอบและกรอกยอดด้วยตนเอง`);
+        return best;
+    }
+
+    // Dynamic Programming 2-State: State 0 = ค่าส่งปกติ, State 1 = ส่งฟรี (เมื่อสะสมครบ threshold)
+    const maxDraws0 = new Int32Array(B + 1).fill(-1);
+    const lastItem0 = new Int16Array(B + 1).fill(-1);
+    const maxDraws1 = new Int32Array(B + 1).fill(-1);
+    const lastItem1 = new Int16Array(B + 1).fill(-1);
+    const fromState1 = new Uint8Array(B + 1);
+
+    if (pastDraws < freeShippingThreshold) {
+        maxDraws0[0] = 0;
+    } else {
+        maxDraws1[0] = 0;
+    }
+
+    for (let c = 0; c <= B; c++) {
+        const d0 = maxDraws0[c];
+        if (d0 >= 0) {
+            for (let i = 0; i < items.length; i++) {
+                const nextC = c + items[i].price;
+                if (nextC > B) continue;
+                const nextD = d0 + 1;
+                const isFree = (pastDraws + nextD) >= freeShippingThreshold;
+                if (!isFree) {
+                    if (nextD > maxDraws0[nextC]) {
+                        maxDraws0[nextC] = nextD;
+                        lastItem0[nextC] = i;
                     }
-                    best = { draws: currentDraws, remainder, cost: totalCost, isFreeShip: isFree, appliedShipping: appliedShip, breakdown: breakdownArr };
+                } else {
+                    if (nextD > maxDraws1[nextC]) {
+                        maxDraws1[nextC] = nextD;
+                        lastItem1[nextC] = i;
+                        fromState1[nextC] = 0;
+                    }
                 }
             }
-            return;
         }
-        
-        let p = sortedPriceList[index].price;
-        for(let q = 0; q <= maxQty; q++) {
-            if (currentItemCost + (q * p) <= virtualBalance) { 
-                let newCounts = [...currentCounts];
-                newCounts[index] = q;
-                search(index + 1, currentDraws + q, currentItemCost + (q * p), newCounts);
+        const d1 = maxDraws1[c];
+        if (d1 >= 0) {
+            for (let i = 0; i < items.length; i++) {
+                const nextC = c + items[i].price;
+                if (nextC > B) continue;
+                const nextD = d1 + 1;
+                if (nextD > maxDraws1[nextC]) {
+                    maxDraws1[nextC] = nextD;
+                    lastItem1[nextC] = i;
+                    fromState1[nextC] = 1;
+                }
             }
         }
     }
-    search(0, 0, 0, new Array(sortedPriceList.length).fill(0));
+
+    let bestC = -1;
+    let bestState = -1;
+
+    for (let c = 1; c <= B; c++) {
+        const d0 = maxDraws0[c];
+        if (d0 > 0) {
+            const total = c + shippingFee;
+            if (total <= virtualBalance) {
+                const rem = virtualBalance - total;
+                if (rem < best.remainder || (rem === best.remainder && d0 > best.draws)) {
+                    best = { draws: d0, remainder: rem, cost: total, isFreeShip: false, appliedShipping: true, breakdown: [] };
+                    bestC = c;
+                    bestState = 0;
+                }
+            }
+        }
+        const d1 = maxDraws1[c];
+        if (d1 > 0) {
+            const total = c;
+            if (total <= virtualBalance) {
+                const rem = virtualBalance - total;
+                if (rem < best.remainder || (rem === best.remainder && d1 > best.draws)) {
+                    best = { draws: d1, remainder: rem, cost: total, isFreeShip: true, appliedShipping: false, breakdown: [] };
+                    bestC = c;
+                    bestState = 1;
+                }
+            }
+        }
+    }
+
+    if (bestC > 0) {
+        const counts = new Array(items.length).fill(0);
+        let currC = bestC;
+        let currState = bestState;
+        while (currC > 0) {
+            const itemIdx = currState === 1 ? lastItem1[currC] : lastItem0[currC];
+            if (itemIdx < 0) break;
+            counts[itemIdx]++;
+            const itemPrice = items[itemIdx].price;
+            if (currState === 1) {
+                currState = fromState1[currC];
+            }
+            currC -= itemPrice;
+        }
+        best.breakdown = counts.map((q, i) => (q > 0 ? `${items[i].name} x${q}` : null)).filter(Boolean);
+    }
     return best;
 }
 
@@ -617,11 +1037,17 @@ function mergeBreakdowns(breakdownList) {
     return result.join(', ');
 }
 
-async function getStatsByDate(targetDate) {
-    const { data: dailySlips } = await supabase.from('slips').select('*').eq('trans_date', targetDate);
+async function getStatsByDate(targetDate, targetSessionId = null) {
+    let query = supabase.from('slips').select('*');
+    if (targetSessionId) {
+        query = query.eq('session_id', targetSessionId);
+    } else {
+        query = query.eq('trans_date', targetDate);
+    }
+    const { data: dailySlips } = await query;
     let totalAmount = 0; let totalDraws = 0; let uniqueCustomersSet = new Set(); 
     
-    // ✅ แก้ไข: รวมยอดเงินและจำนวนชิ้นจากสลิปทั้งหมดของวันนี้ (ยกเว้นที่โดนปัดตก 'rejected')
+    // ✅ รวมยอดเงินและจำนวนชิ้นจากสลิปทั้งหมดของรอบนี้ (ยกเว้นที่โดนปัดตก 'rejected')
     if (dailySlips && dailySlips.length > 0) {
         dailySlips.forEach(slip => {
             if (slip.status !== 'rejected') {
@@ -632,7 +1058,11 @@ async function getStatsByDate(targetDate) {
         });
     }
 
-    const { data: queueData } = await supabase.from('slips').select('*').in('status', ['waiting', 'called', 'skipped', 'abnormal_pending']).order('id', { ascending: true });
+    let queueQuery = supabase.from('slips').select('*').in('status', ['waiting', 'called', 'skipped', 'abnormal_pending']);
+    if (targetSessionId) {
+        queueQuery = queueQuery.eq('session_id', targetSessionId);
+    }
+    const { data: queueData } = await queueQuery.order('id', { ascending: true });
     let queues = { waiting: [], called: [], skipped: [], abnormal_pending: [] };
     
     if (queueData && queueData.length > 0) {
@@ -679,20 +1109,46 @@ async function getStatsByDate(targetDate) {
     return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.length }, queues };
 }
 
-async function broadcastTodayStats() {
-    const data = await getStatsByDate(getTodayString());
-    io.emit('update_stats', data.stats); 
-    io.emit('full_sync', data); 
-    return data;
+let broadcastTimer = null;
+let broadcastWaiters = [];
+function broadcastTodayStats() {
+    return new Promise(resolve => {
+        broadcastWaiters.push(resolve);
+        if (broadcastTimer) return;
+        broadcastTimer = setTimeout(async () => {
+            broadcastTimer = null;
+            const waiters = broadcastWaiters;
+            broadcastWaiters = [];
+            let data = null;
+            try {
+                const sid = activeLiveSession ? activeLiveSession.id : null;
+                data = await getStatsByDate(getTodayString(), sid);
+                io.emit('update_stats', data.stats);
+                io.emit('full_sync', data);
+            } catch (e) {
+                console.error('broadcastTodayStats error:', e.message);
+            }
+            waiters.forEach(w => w(data));
+        }, 100);
+    });
 }
 
 async function getCurrentQueueNumber() {
-    const statsData = await getStatsByDate(getTodayString());
+    const currentSessionId = activeLiveSession ? activeLiveSession.id : null;
+    const statsData = await getStatsByDate(getTodayString(), currentSessionId);
     return statsData.stats.waitingCount;
 }
 
 app.get('/history.html', (req, res) => { res.sendFile(path.join(__dirname, 'public', 'history.html')); });
-app.get('/api/stats/today', async (req, res) => res.json(await broadcastTodayStats()));
+app.get('/api/stats/today', async (req, res) => {
+    try {
+        const sid = activeLiveSession ? activeLiveSession.id : null;
+        const data = await getStatsByDate(getTodayString(), sid);
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 app.get('/api/stats/history', async (req, res) => res.json(await getStatsByDate(req.query.date)));
 
 app.get('/api/history_data', async (req, res) => {
@@ -726,22 +1182,32 @@ app.get('/api/history_data', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 
+const ALLOWED_QUEUE_ACTIONS = new Set(['completed', 'called', 'skipped', 'waiting', 'cleared', 'rejected']);
 app.post('/api/queue/action', async (req, res) => {
-    const { slipIds, action } = req.body;
-    
-    if (action === 'completed') {
-        const { data: slips } = await supabase.from('slips').select('id, qr_payload').in('id', slipIds);
-        const manualIds = slips.filter(s => s.qr_payload && s.qr_payload.startsWith('manual_image')).map(s => s.id);
-        const normalIds = slips.filter(s => !(s.qr_payload && s.qr_payload.startsWith('manual_image'))).map(s => s.id);
+    try {
+        const { action } = req.body || {};
+        const slipIds = Array.isArray(req.body?.slipIds) ? req.body.slipIds.map(Number).filter(Number.isInteger) : [];
+        if (!ALLOWED_QUEUE_ACTIONS.has(action) || slipIds.length === 0) {
+            return res.status(400).json({ success: false, message: 'Invalid action or slipIds' });
+        }
         
-        if (manualIds.length > 0) { await supabase.from('slips').update({ status: 'abnormal_pending' }).in('id', manualIds); }
-        if (normalIds.length > 0) { await supabase.from('slips').update({ status: 'completed' }).in('id', normalIds); }
-    } else {
-        await supabase.from('slips').update({ status: action }).in('id', slipIds);
+        if (action === 'completed') {
+            const { data: slips } = await supabase.from('slips').select('id, qr_payload').in('id', slipIds);
+            const validSlips = slips || [];
+            const manualIds = validSlips.filter(s => s.qr_payload && s.qr_payload.startsWith('manual_image')).map(s => s.id);
+            const normalIds = validSlips.filter(s => !(s.qr_payload && s.qr_payload.startsWith('manual_image'))).map(s => s.id);
+            
+            if (manualIds.length > 0) { await supabase.from('slips').update({ status: 'abnormal_pending' }).in('id', manualIds); }
+            if (normalIds.length > 0) { await supabase.from('slips').update({ status: 'completed' }).in('id', normalIds); }
+        } else {
+            await supabase.from('slips').update({ status: action }).in('id', slipIds);
+        }
+        
+        await broadcastTodayStats(); 
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
     }
-    
-    broadcastTodayStats(); 
-    res.json({ success: true });
 });
 
 app.post('/api/queue/clear', async (req, res) => {
@@ -768,22 +1234,17 @@ app.post('/api/live_session/start', async (req, res) => {
         activeLiveSession = newSession;
         await supabase.from('configs').upsert([{ key: 'active_live_session', value: JSON.stringify(newSession) }]);
         
-        // 💾 สำรองฐานข้อมูล SQLite อัตโนมัติก่อนเริ่มไลฟ์ เพื่อป้องกันข้อมูลสูญหายกรณีไฟดับหรือคอมดับกะทันหัน
-        try {
-            const dbSource = path.join(__dirname, 'data.sqlite');
-            const backupDir = path.join(__dirname, 'backups');
-            if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
-            if (fs.existsSync(dbSource)) {
-                const backupFile = path.join(backupDir, `data_backup_${getTodayString()}_${Date.now()}.sqlite`);
-                fs.copyFileSync(dbSource, backupFile);
-                addLog('INFO', `สำรองฐานข้อมูลก่อนเริ่มไลฟ์สดเรียบร้อย: ${path.basename(backupFile)}`);
-            }
-        } catch (bkErr) {
-            console.error('Auto Backup Error:', bkErr.message);
+        // 💾 สำรองฐานข้อมูล SQLite อัตโนมัติก่อนเริ่มไลฟ์ ด้วย Online Backup API (รองรับ WAL ครบถ้วน 100%)
+        if (typeof supabase.performBackup === 'function') {
+            supabase.performBackup('data_backup_live').then(r => {
+                if (r && r.success) addLog('INFO', `สำรองฐานข้อมูลก่อนเริ่มไลฟ์สดเรียบร้อย: ${path.basename(r.file)}`);
+                else if (r && r.error) addLog('ERROR', `สำรองฐานข้อมูลก่อนเริ่มไลฟ์ล้มเหลว: ${r.error}`);
+            }).catch(bkErr => console.error('Auto Backup Error:', bkErr.message));
         }
 
         // บันทึกลง live_sessions history ใน config ด้วย
         io.emit('live_session_changed', activeLiveSession);
+        await broadcastTodayStats();
         res.json({ success: true, session: activeLiveSession });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
@@ -810,6 +1271,7 @@ app.post('/api/live_session/end', async (req, res) => {
         activeLiveSession = null;
         
         io.emit('live_session_changed', null);
+        await broadcastTodayStats();
         res.json({ success: true, endedSession: endedSession });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
@@ -822,7 +1284,16 @@ async function getOrdersForKerry(options = {}) {
     const targetDate = date || getTodayString();
     
     // ดึงสลิปที่สำเร็จหรือมีของ (completed, waiting, called, skipped) โดยไม่นับ rejected
-    let query = supabase.from('slips').select('*').eq('trans_date', targetDate).neq('status', 'rejected');
+    let query = supabase.from('slips').select('*').neq('status', 'rejected');
+    if (sessionId) {
+        query = query.eq('session_id', sessionId);
+    } else if (date) {
+        query = query.eq('trans_date', date);
+    } else if (activeLiveSession) {
+        query = query.eq('session_id', activeLiveSession.id);
+    } else {
+        query = query.eq('trans_date', targetDate);
+    }
     const { data: slips, error } = await query;
     if (error) throw error;
 
@@ -918,7 +1389,7 @@ async function getOrdersForKerry(options = {}) {
 // เช็คสรุปสถานะที่อยู่ของรอบไลฟ์/วันนี้
 app.get('/api/kerry/summary', async (req, res) => {
     try {
-        const orders = await getOrdersForKerry({ date: req.query.date });
+        const orders = await getOrdersForKerry({ date: req.query.date, sessionId: req.query.sessionId });
         const totalCustomers = orders.length;
         const readyCustomers = orders.filter(o => o.hasAddress).length;
         const missingCustomers = orders.filter(o => !o.hasAddress).map(o => o.lineName);
@@ -1016,7 +1487,8 @@ function buildKerryFullAddress(addr) {
 // 🚚 ดาวน์โหลดไฟล์ Excel มาตรฐานทางการ Kerry Express KEX EasyShip Template (.xlsx)
 app.get('/api/kerry/export_excel', async (req, res) => {
     try {
-        const orders = await getOrdersForKerry({ date: req.query.date });
+        const exportSessionId = req.query.sessionId || (activeLiveSession ? activeLiveSession.id : null);
+        const orders = await getOrdersForKerry({ date: req.query.date, sessionId: exportSessionId });
         const templatePath = path.join(__dirname, 'templates', 'KEXImportTemplate.xlsx');
         const workbook = new ExcelJS.Workbook();
 
@@ -1092,8 +1564,12 @@ app.get('/api/kerry/export_excel', async (req, res) => {
             row.commit();
         });
 
+        const filename = exportSessionId 
+            ? `KEX_EasyShip_LiveSession_${exportSessionId}.xlsx`
+            : `KEX_EasyShip_Orders_${req.query.date || getTodayString()}.xlsx`;
+
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename="KEX_EasyShip_Orders_${getTodayString()}.xlsx"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
         await workbook.xlsx.write(res);
         res.end();
@@ -1114,8 +1590,14 @@ app.post('/api/test/simulate_slip', async (req, res) => {
         let { data: customer } = await supabase.from('customers').select('*').eq('line_id', fakeUserId).single();
         let currentBalance = (customer ? customer.balance : 0) + amount;
 
-        // คำนวณจำนวนชิ้นเดิมที่เคยได้ในวันนี้
-        const { data: todaySlips } = await supabase.from('slips').select('draws').eq('line_id', fakeUserId).eq('trans_date', getTodayString());
+        // คำนวณจำนวนชิ้นเดิมที่เคยได้ในรอบนี้ (ผูก session_id กรณีไลฟ์ข้ามเที่ยงคืน)
+        let pastSlipsQuery = supabase.from('slips').select('draws').eq('line_id', fakeUserId);
+        if (activeLiveSession) {
+            pastSlipsQuery = pastSlipsQuery.eq('session_id', activeLiveSession.id);
+        } else {
+            pastSlipsQuery = pastSlipsQuery.eq('trans_date', getTodayString());
+        }
+        const { data: todaySlips } = await pastSlipsQuery;
         let pastDrawsToday = 0;
         if (todaySlips) pastDrawsToday = todaySlips.reduce((sum, slip) => sum + (slip.draws || 0), 0);
 
@@ -1150,6 +1632,7 @@ app.post('/api/test/simulate_slip', async (req, res) => {
             line_id: fakeUserId, 
             sender_name: randomName, 
             line_name: randomName, 
+            session_id: activeLiveSession ? activeLiveSession.id : null,
             trans_date: getTodayString(), 
             trans_time: getLocalTimeString(), 
             qr_payload: `${fakeRef}|${breakdownStr}`, 
@@ -1190,6 +1673,7 @@ app.post('/api/test/simulate_abnormal', async (req, res) => {
             line_id: fakeUserId, 
             sender_name: fakeName, 
             line_name: fakeName, 
+            session_id: activeLiveSession ? activeLiveSession.id : null,
             trans_date: getTodayString(), 
             trans_time: getLocalTimeString(), 
             qr_payload: payloadRef, 
@@ -1224,20 +1708,35 @@ app.post('/api/test/discord', async (req, res) => {
 });
 
 app.post('/api/queue/manual_amount', async (req, res) => {
-    const { slipId, amount } = req.body;
+    const slipId = Number(req.body?.slipId);
+    const amount = Number(req.body?.amount);
+    if (!Number.isInteger(slipId) || !Number.isFinite(amount) || amount <= 0 || amount > 1000000) {
+        return res.status(400).json({ success: false, message: 'ข้อมูลยอดเงินหรือรหัสสลิปไม่ถูกต้อง' });
+    }
+
     try {
         const { data: slip } = await supabase.from('slips').select('*').eq('id', slipId).single();
-        if (!slip) return res.json({ success: false });
+        if (!slip) return res.status(404).json({ success: false, message: 'ไม่พบข้อมูลสลิป' });
+
+        if (slip.amount > 0) {
+            return res.status(409).json({ success: false, message: 'สลิปนี้เคยระบุยอดเงินไปแล้ว' });
+        }
 
         let { data: customer } = await supabase.from('customers').select('*').eq('line_id', slip.line_id).single();
         let currentBalance = (customer ? customer.balance : 0) + amount; 
 
-        const { data: todaySlips } = await supabase.from('slips')
+        let pastSlipsQuery = supabase.from('slips')
             .select('draws')
             .eq('line_id', slip.line_id)
-            .eq('trans_date', getTodayString())
             .neq('status', 'rejected')
             .neq('id', slipId);
+
+        if (activeLiveSession) {
+            pastSlipsQuery = pastSlipsQuery.eq('session_id', activeLiveSession.id);
+        } else {
+            pastSlipsQuery = pastSlipsQuery.eq('trans_date', getTodayString());
+        }
+        const { data: todaySlips } = await pastSlipsQuery;
         
         let pastDrawsToday = todaySlips ? todaySlips.reduce((sum, s) => sum + (s.draws || 0), 0) : 0;
         let hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
@@ -1246,18 +1745,22 @@ app.post('/api/queue/manual_amount', async (req, res) => {
         let result = calculateBestDraws(virtualBalance, pastDrawsToday);
         let breakdownStr = result.breakdown.join(', ');
         
-        const parts = slip.qr_payload.split('|');
-        const payloadRef = `manual_image|${parts[1]}|${breakdownStr}`; 
+        const parts = (slip.qr_payload || '').split('|');
+        const payloadRef = `manual_image|${parts[1] || ''}|${breakdownStr}`; 
 
         await supabase.from('slips').update({
             amount: amount, draws: result.draws, qr_payload: payloadRef
         }).eq('id', slipId);
 
-        if (customer) await supabase.from('customers').update({ balance: result.remainder }).eq('line_id', slip.line_id);
+        if (customer) {
+            await supabase.from('customers').update({ balance: result.remainder }).eq('line_id', slip.line_id);
+        } else if (slip.line_id) {
+            await supabase.from('customers').insert([{ line_id: slip.line_id, name: slip.line_name || 'ลูกค้า LINE', balance: result.remainder }]);
+        }
 
         broadcastTodayStats(); 
-        res.json({ success: true });
-    } catch (error) { res.status(500).json({ success: false }); }
+        res.json({ success: true, draws: result.draws, remainder: result.remainder });
+    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 
 // 📝 API อนุมัติหรือปัดตกสลิปผิดปกติหลังจบไลฟ์
@@ -1358,7 +1861,7 @@ function handleProviderQuotaExhaustion(providerName, error) {
     const status = error.response?.status;
     const code = error.response?.data?.code;
     
-    if (status === 402 || code === 1009 || code === 1006 || errText.includes('quota') || errText.includes('credit') || errText.includes('insufficient') || errText.includes('exceeded')) {
+    if (status === 402 || code === 1009 || code === 1006 || code === 1008 || errText.includes('quota') || errText.includes('credit') || errText.includes('insufficient') || errText.includes('exceeded')) {
         providerQuotaState = {
             provider: providerName,
             balance: 0,
@@ -1370,9 +1873,9 @@ function handleProviderQuotaExhaustion(providerName, error) {
             provider: providerName,
             status: 'exhausted',
             balance: 0,
-            message: `⚠️ [แจ้งเตือนด่วน]: เครดิตตรวจสลิป (${providerName.toUpperCase()}) หมดแล้ว! ระบบได้สลับเข้าสู่โหมดตรวจสลิปเอง (Manual) อัตโนมัติแล้ว เพื่อไม่ให้ออเดอร์ของลูกค้าหลุดหาย`
+            message: `⚠️ [แจ้งเตือนด่วน]: เครดิตตรวจสลิป (${providerName.toUpperCase()}) หมดแล้ว! ระบบได้สลับเข้าสู่โหมดตรวจสลิปเอง (Manual) หรือผู้ให้บริการสำรองอัตโนมัติแล้ว เพื่อไม่ให้ออเดอร์ของลูกค้าหลุดหาย`
         });
-        addLog('WARN', `⚠️ เครดิตตรวจสลิป ${providerName.toUpperCase()} หมดแล้ว! ระบบเปิดโหมดสำรองตรวจภาพเองอัตโนมัติ`);
+        addLog('WARN', `⚠️ เครดิตตรวจสลิป ${providerName.toUpperCase()} หมดแล้ว! ระบบเปิดโหมดสำรองตรวจภาพเอง/ผู้ให้บริการสำรองอัตโนมัติ`);
         return true;
     }
     return false;
@@ -1550,210 +2053,197 @@ async function checkProviderQuota(force = false) {
 // เช็คเครดิตอัตโนมัติทุก 10 นาที
 setInterval(() => checkProviderQuota(), 10 * 60 * 1000);
 
-// 🛡️ ADAPTER: ตรวจสอบสลิปผ่านผู้ให้บริการที่เลือก (SlipOK, EasySlip, Thunder, SlipVerify, Custom หรือ Manual)
-async function verifySlipWithProvider(imageBuffer) {
-    const provider = (process.env.SLIP_PROVIDER || 'slipok').toLowerCase();
+// 🛡️ ADAPTERS: ฟังก์ชันตรวจสอบสลิปแยกตามผู้ให้บริการ (Modular Provider Adapters)
 
-    // 1. โหมดตรวจสลิปเอง 100% ฟรี (Manual)
-    if (provider === 'manual') {
-        addLog('INFO', 'ระบบตั้งค่าเป็น "ตรวจสลิปเอง (Manual)" สลิปจะถูกส่งเข้าคิวรอตรวจภาพโดยตรง');
-        return null; // เมื่อคืนค่า null ระบบจะนำรูปเข้ากระดานสลิปผิดปกติ/รอตรวจเช็คภาพเองทันที
+async function verifyWithEasySlip(imageBuffer) {
+    const cleanEasySlipToken = process.env.EASYSLIP_TOKEN ? process.env.EASYSLIP_TOKEN.replace(/["'\r\n ]/g, '').trim() : "";
+    if (!cleanEasySlipToken) {
+        addLog('WARN', 'ไม่ได้ระบุ EasySlip Access Token ระบบจะรับสลิปเข้าคิวแบบตรวจภาพเอง (Manual)');
+        return null;
     }
 
-    // 2. โหมด EasySlip API
-    if (provider === 'easyslip') {
-        const cleanEasySlipToken = process.env.EASYSLIP_TOKEN ? process.env.EASYSLIP_TOKEN.replace(/["'\r\n ]/g, '').trim() : "";
-        if (!cleanEasySlipToken) {
-            addLog('WARN', 'ไม่ได้ระบุ EasySlip Access Token ระบบจะรับสลิปเข้าคิวแบบตรวจภาพเอง (Manual)');
-            return null;
-        }
+    try {
+        const formData = new FormData();
+        formData.append('file', Buffer.from(imageBuffer), 'slip.jpg');
 
-        try {
-            const formData = new FormData();
-            formData.append('file', Buffer.from(imageBuffer), 'slip.jpg');
+        const response = await axios.post('https://api.easyslip.com/v1/verify', formData, {
+            headers: {
+                'Authorization': `Bearer ${cleanEasySlipToken}`,
+                ...formData.getHeaders()
+            },
+            timeout: 15000
+        });
 
-            const response = await axios.post('https://api.easyslip.com/v1/verify', formData, {
-                headers: {
-                    'Authorization': `Bearer ${cleanEasySlipToken}`,
-                    ...formData.getHeaders()
+        if (response.data && response.data.status === 200 && response.data.data) {
+            const d = response.data.data;
+            const normalizedData = {
+                amount: Number(d.amount?.amount !== undefined ? d.amount.amount : (d.amount || 0)),
+                transRef: d.transRef || d.payload || `EASY_${Date.now()}`,
+                receiver: {
+                    displayName: d.receiver?.account?.name?.th || d.receiver?.account?.name?.en || d.receiver?.name || '',
+                    name: d.receiver?.account?.name?.th || d.receiver?.name || ''
                 },
-                timeout: 15000
-            });
-
-            if (response.data && response.data.status === 200 && response.data.data) {
-                const d = response.data.data;
-                const normalizedData = {
-                    amount: Number(d.amount?.amount !== undefined ? d.amount.amount : (d.amount || 0)),
-                    transRef: d.transRef || d.payload || `EASY_${Date.now()}`,
-                    receiver: {
-                        displayName: d.receiver?.account?.name?.th || d.receiver?.account?.name?.en || d.receiver?.name || '',
-                        name: d.receiver?.account?.name?.th || d.receiver?.name || ''
-                    },
-                    transDate: d.date ? d.date.split('T')[0].replace(/-/g, '') : getTodayString(),
-                    transTime: d.date && d.date.includes('T') ? d.date.split('T')[1].substring(0, 8) : getLocalTimeString()
-                };
-                addLog('SUCCESS', `EasySlip ตรวจสอบสลิปสำเร็จ: ยอดเงิน ${normalizedData.amount} บาท (${normalizedData.transRef})`);
-                return { success: true, data: normalizedData };
-            } else {
-                addLog('WARN', 'EasySlip ตอบกลับแต่ไม่พบข้อมูลสลิปที่ถูกต้อง', JSON.stringify(response.data));
-                return null;
-            }
-        } catch (error) {
-            handleProviderQuotaExhaustion('easyslip', error);
-            const errData = error.response ? JSON.stringify(error.response.data) : error.message;
-            addLog('ERROR', 'EasySlip ยืนยันสลิปไม่สำเร็จ (สลิปอาจไม่ถูกต้อง หรือเครดิตหมด)', errData);
+                transDate: d.date ? d.date.split('T')[0].replace(/-/g, '') : getTodayString(),
+                transTime: d.date && d.date.includes('T') ? d.date.split('T')[1].substring(0, 8) : getLocalTimeString()
+            };
+            addLog('SUCCESS', `EasySlip ตรวจสอบสลิปสำเร็จ: ยอดเงิน ${normalizedData.amount} บาท (${normalizedData.transRef})`);
+            return { success: true, data: normalizedData };
+        } else {
+            addLog('WARN', 'EasySlip ตอบกลับแต่ไม่พบข้อมูลสลิปที่ถูกต้อง', JSON.stringify(response.data));
             return null;
         }
+    } catch (error) {
+        handleProviderQuotaExhaustion('easyslip', error);
+        const errData = error.response ? JSON.stringify(error.response.data) : error.message;
+        addLog('ERROR', 'EasySlip ยืนยันสลิปไม่สำเร็จ (สลิปอาจไม่ถูกต้อง หรือเครดิตหมด)', errData);
+        return null;
+    }
+}
+
+async function verifyWithThunder(imageBuffer) {
+    const cleanThunderToken = process.env.THUNDER_TOKEN ? process.env.THUNDER_TOKEN.replace(/["'\r\n ]/g, '').trim() : "";
+    if (!cleanThunderToken) {
+        addLog('WARN', 'ไม่ได้ระบุ Thunder API Token ระบบจะรับสลิปเข้าคิวแบบตรวจภาพเอง (Manual)');
+        return null;
     }
 
-    // 3. โหมด Thunder Solution API
-    if (provider === 'thunder') {
-        const cleanThunderToken = process.env.THUNDER_TOKEN ? process.env.THUNDER_TOKEN.replace(/["'\r\n ]/g, '').trim() : "";
-        if (!cleanThunderToken) {
-            addLog('WARN', 'ไม่ได้ระบุ Thunder API Token ระบบจะรับสลิปเข้าคิวแบบตรวจภาพเอง (Manual)');
-            return null;
-        }
+    try {
+        const formData = new FormData();
+        formData.append('file', Buffer.from(imageBuffer), 'slip.jpg');
 
-        try {
-            const formData = new FormData();
-            formData.append('file', Buffer.from(imageBuffer), 'slip.jpg');
+        const response = await axios.post('https://api.thundersolution.com/v1/verify', formData, {
+            headers: {
+                'Authorization': `Bearer ${cleanThunderToken}`,
+                ...formData.getHeaders()
+            },
+            timeout: 15000
+        });
 
-            const response = await axios.post('https://api.thundersolution.com/v1/verify', formData, {
-                headers: {
-                    'Authorization': `Bearer ${cleanThunderToken}`,
-                    ...formData.getHeaders()
+        const resData = response.data;
+        if (resData && (resData.success || resData.status === 200 || resData.status === 'success') && (resData.data || resData.result)) {
+            const d = resData.data || resData.result;
+            const normalizedData = {
+                amount: Number(d.amount?.amount !== undefined ? d.amount.amount : (d.amount || 0)),
+                transRef: d.transRef || d.refId || d.transactionId || `THUNDER_${Date.now()}`,
+                receiver: {
+                    displayName: d.receiver?.name || d.receiver?.accountName || d.receiverAccountName || '',
+                    name: d.receiver?.name || d.receiverAccountName || ''
                 },
-                timeout: 15000
-            });
-
-            const resData = response.data;
-            if (resData && (resData.success || resData.status === 200 || resData.status === 'success') && (resData.data || resData.result)) {
-                const d = resData.data || resData.result;
-                const normalizedData = {
-                    amount: Number(d.amount?.amount !== undefined ? d.amount.amount : (d.amount || 0)),
-                    transRef: d.transRef || d.refId || d.transactionId || `THUNDER_${Date.now()}`,
-                    receiver: {
-                        displayName: d.receiver?.name || d.receiver?.accountName || d.receiverAccountName || '',
-                        name: d.receiver?.name || d.receiverAccountName || ''
-                    },
-                    transDate: d.date ? d.date.replace(/[-/]/g, '').substring(0, 8) : getTodayString(),
-                    transTime: d.time || getLocalTimeString()
-                };
-                addLog('SUCCESS', `Thunder Solution ตรวจสอบสลิปสำเร็จ: ยอดเงิน ${normalizedData.amount} บาท (${normalizedData.transRef})`);
-                return { success: true, data: normalizedData };
-            } else {
-                addLog('WARN', 'Thunder ตอบกลับแต่รูปแบบข้อมูลไม่ตรง', JSON.stringify(resData));
-                return null;
-            }
-        } catch (error) {
-            handleProviderQuotaExhaustion('thunder', error);
-            const errData = error.response ? JSON.stringify(error.response.data) : error.message;
-            addLog('ERROR', 'Thunder Solution ยืนยันสลิปไม่สำเร็จ', errData);
+                transDate: d.date ? d.date.replace(/[-/]/g, '').substring(0, 8) : getTodayString(),
+                transTime: d.time || getLocalTimeString()
+            };
+            addLog('SUCCESS', `Thunder Solution ตรวจสอบสลิปสำเร็จ: ยอดเงิน ${normalizedData.amount} บาท (${normalizedData.transRef})`);
+            return { success: true, data: normalizedData };
+        } else {
+            addLog('WARN', 'Thunder ตอบกลับแต่รูปแบบข้อมูลไม่ตรง', JSON.stringify(resData));
             return null;
         }
+    } catch (error) {
+        handleProviderQuotaExhaustion('thunder', error);
+        const errData = error.response ? JSON.stringify(error.response.data) : error.message;
+        addLog('ERROR', 'Thunder Solution ยืนยันสลิปไม่สำเร็จ', errData);
+        return null;
+    }
+}
+
+async function verifyWithSlipVerify(imageBuffer) {
+    const cleanSlipVerifyKey = process.env.SLIPVERIFY_KEY ? process.env.SLIPVERIFY_KEY.replace(/["'\r\n ]/g, '').trim() : "";
+    if (!cleanSlipVerifyKey) {
+        addLog('WARN', 'ไม่ได้ระบุ SlipVerify API Key ระบบจะรับสลิปเข้าคิวแบบตรวจภาพเอง (Manual)');
+        return null;
     }
 
-    // 4. โหมด SlipVerify API
-    if (provider === 'slipverify') {
-        const cleanSlipVerifyKey = process.env.SLIPVERIFY_KEY ? process.env.SLIPVERIFY_KEY.replace(/["'\r\n ]/g, '').trim() : "";
-        if (!cleanSlipVerifyKey) {
-            addLog('WARN', 'ไม่ได้ระบุ SlipVerify API Key ระบบจะรับสลิปเข้าคิวแบบตรวจภาพเอง (Manual)');
-            return null;
-        }
+    try {
+        const formData = new FormData();
+        formData.append('file', Buffer.from(imageBuffer), 'slip.jpg');
 
-        try {
-            const formData = new FormData();
-            formData.append('file', Buffer.from(imageBuffer), 'slip.jpg');
+        const response = await axios.post('https://api.slipverify.com/api/v1/verify', formData, {
+            headers: {
+                'x-api-key': cleanSlipVerifyKey,
+                ...formData.getHeaders()
+            },
+            timeout: 15000
+        });
 
-            const response = await axios.post('https://api.slipverify.com/api/v1/verify', formData, {
-                headers: {
-                    'x-api-key': cleanSlipVerifyKey,
-                    ...formData.getHeaders()
+        const resData = response.data;
+        if (resData && (resData.success || resData.status === 'success') && (resData.data || resData.payload)) {
+            const d = resData.data || resData.payload;
+            const normalizedData = {
+                amount: Number(d.amount || 0),
+                transRef: d.transRef || d.refId || `SLIPVERIFY_${Date.now()}`,
+                receiver: {
+                    displayName: d.receiver?.displayName || d.receiver?.name || '',
+                    name: d.receiver?.name || ''
                 },
-                timeout: 15000
-            });
-
-            const resData = response.data;
-            if (resData && (resData.success || resData.status === 'success') && (resData.data || resData.payload)) {
-                const d = resData.data || resData.payload;
-                const normalizedData = {
-                    amount: Number(d.amount || 0),
-                    transRef: d.transRef || d.refId || `SLIPVERIFY_${Date.now()}`,
-                    receiver: {
-                        displayName: d.receiver?.displayName || d.receiver?.name || '',
-                        name: d.receiver?.name || ''
-                    },
-                    transDate: d.transDate || getTodayString(),
-                    transTime: d.transTime || getLocalTimeString()
-                };
-                addLog('SUCCESS', `SlipVerify ตรวจสอบสลิปสำเร็จ: ยอดเงิน ${normalizedData.amount} บาท (${normalizedData.transRef})`);
-                return { success: true, data: normalizedData };
-            } else {
-                addLog('WARN', 'SlipVerify ตอบกลับแต่ไม่พบข้อมูล', JSON.stringify(resData));
-                return null;
-            }
-        } catch (error) {
-            handleProviderQuotaExhaustion('slipverify', error);
-            const errData = error.response ? JSON.stringify(error.response.data) : error.message;
-            addLog('ERROR', 'SlipVerify ยืนยันสลิปไม่สำเร็จ', errData);
+                transDate: d.transDate || getTodayString(),
+                transTime: d.transTime || getLocalTimeString()
+            };
+            addLog('SUCCESS', `SlipVerify ตรวจสอบสลิปสำเร็จ: ยอดเงิน ${normalizedData.amount} บาท (${normalizedData.transRef})`);
+            return { success: true, data: normalizedData };
+        } else {
+            addLog('WARN', 'SlipVerify ตอบกลับแต่ไม่พบข้อมูล', JSON.stringify(resData));
             return null;
         }
+    } catch (error) {
+        handleProviderQuotaExhaustion('slipverify', error);
+        const errData = error.response ? JSON.stringify(error.response.data) : error.message;
+        addLog('ERROR', 'SlipVerify ยืนยันสลิปไม่สำเร็จ', errData);
+        return null;
+    }
+}
+
+async function verifyWithCustom(imageBuffer) {
+    const apiUrl = (process.env.CUSTOM_API_URL || '').trim();
+    const headerName = (process.env.CUSTOM_API_HEADER || 'Authorization').trim();
+    const headerKey = (process.env.CUSTOM_API_KEY || '').trim();
+
+    if (!apiUrl) {
+        addLog('WARN', 'ไม่ได้ระบุ Custom API URL ระบบจะรับสลิปเข้าคิวแบบตรวจภาพเอง (Manual)');
+        return null;
     }
 
-    // 5. โหมด Custom REST API (กำหนด URL & Headers เอง)
-    if (provider === 'custom') {
-        const apiUrl = (process.env.CUSTOM_API_URL || '').trim();
-        const headerName = (process.env.CUSTOM_API_HEADER || 'Authorization').trim();
-        const headerKey = (process.env.CUSTOM_API_KEY || '').trim();
+    try {
+        const formData = new FormData();
+        formData.append('file', Buffer.from(imageBuffer), 'slip.jpg');
+        formData.append('files', Buffer.from(imageBuffer), 'slip.jpg');
+        formData.append('image', Buffer.from(imageBuffer), 'slip.jpg');
 
-        if (!apiUrl) {
-            addLog('WARN', 'ไม่ได้ระบุ Custom API URL ระบบจะรับสลิปเข้าคิวแบบตรวจภาพเอง (Manual)');
-            return null;
+        const headers = { ...formData.getHeaders() };
+        if (headerName && headerKey) {
+            headers[headerName] = headerKey.startsWith('Bearer ') || headerName !== 'Authorization' ? headerKey : `Bearer ${headerKey}`;
         }
 
-        try {
-            const formData = new FormData();
-            formData.append('file', Buffer.from(imageBuffer), 'slip.jpg');
-            formData.append('files', Buffer.from(imageBuffer), 'slip.jpg'); // เผื่อ endpoint รับชื่อ files
-            formData.append('image', Buffer.from(imageBuffer), 'slip.jpg'); // เผื่อ endpoint รับชื่อ image
+        const response = await axios.post(apiUrl, formData, { headers, timeout: 18000 });
+        const resData = response.data;
 
-            const headers = { ...formData.getHeaders() };
-            if (headerName && headerKey) {
-                headers[headerName] = headerKey.startsWith('Bearer ') || headerName !== 'Authorization' ? headerKey : `Bearer ${headerKey}`;
-            }
+        const d = resData.data || resData.result || resData.payload || resData;
+        const amountVal = Number(d.amount?.amount !== undefined ? d.amount.amount : (d.amount || d.total || d.price || 0));
+        const transRefVal = d.transRef || d.trans_ref || d.refId || d.transactionId || d.ref || `CUSTOM_${Date.now()}`;
+        const receiverVal = d.receiver?.displayName || d.receiver?.name || d.receiverName || d.receiver_name || d.receiver?.accountName || '';
 
-            const response = await axios.post(apiUrl, formData, { headers, timeout: 18000 });
-            const resData = response.data;
-
-            // ค้นหาข้อมูล amount, transRef, receiver แบบ Smart Auto-Discovery
-            const d = resData.data || resData.result || resData.payload || resData;
-            const amountVal = Number(d.amount?.amount !== undefined ? d.amount.amount : (d.amount || d.total || d.price || 0));
-            const transRefVal = d.transRef || d.trans_ref || d.refId || d.transactionId || d.ref || `CUSTOM_${Date.now()}`;
-            const receiverVal = d.receiver?.displayName || d.receiver?.name || d.receiverName || d.receiver_name || d.receiver?.accountName || '';
-
-            if (amountVal > 0 || transRefVal) {
-                const normalizedData = {
-                    amount: amountVal,
-                    transRef: transRefVal,
-                    receiver: { displayName: receiverVal, name: receiverVal },
-                    transDate: d.transDate || d.date ? String(d.transDate || d.date).replace(/[-/]/g, '').substring(0, 8) : getTodayString(),
-                    transTime: d.transTime || d.time || getLocalTimeString()
-                };
-                addLog('SUCCESS', `Custom API ตรวจสอบสลิปสำเร็จ: ยอดเงิน ${normalizedData.amount} บาท (${normalizedData.transRef})`);
-                return { success: true, data: normalizedData };
-            } else {
-                addLog('WARN', 'Custom API ตอบกลับแต่ไม่พบยอดเงินหรือรหัสสลิป', JSON.stringify(resData));
-                return null;
-            }
-        } catch (error) {
-            handleProviderQuotaExhaustion('custom', error);
-            const errData = error.response ? JSON.stringify(error.response.data) : error.message;
-            addLog('ERROR', 'Custom API ตอบกลับข้อผิดพลาด', errData);
+        if (amountVal > 0 || transRefVal) {
+            const normalizedData = {
+                amount: amountVal,
+                transRef: transRefVal,
+                receiver: { displayName: receiverVal, name: receiverVal },
+                transDate: d.transDate || d.date ? String(d.transDate || d.date).replace(/[-/]/g, '').substring(0, 8) : getTodayString(),
+                transTime: d.transTime || d.time || getLocalTimeString()
+            };
+            addLog('SUCCESS', `Custom API ตรวจสอบสลิปสำเร็จ: ยอดเงิน ${normalizedData.amount} บาท (${normalizedData.transRef})`);
+            return { success: true, data: normalizedData };
+        } else {
+            addLog('WARN', 'Custom API ตอบกลับแต่ไม่พบยอดเงินหรือรหัสสลิป', JSON.stringify(resData));
             return null;
         }
+    } catch (error) {
+        handleProviderQuotaExhaustion('custom', error);
+        const errData = error.response ? JSON.stringify(error.response.data) : error.message;
+        addLog('ERROR', 'Custom API ตอบกลับข้อผิดพลาด', errData);
+        return null;
     }
+}
 
-    // 6. โหมด SlipOK API (ค่ามาตรฐานเดิม)
+async function verifyWithSlipOK(imageBuffer) {
     try {
         const formData = new FormData();
         formData.append('files', Buffer.from(imageBuffer), 'slip.jpg');
@@ -1784,8 +2274,89 @@ async function verifySlipWithProvider(imageBuffer) {
     }
 }
 
+// 🔄 ระบบสลับผู้ให้บริการสำรองอัตโนมัติเมื่อโควตาหลักหมด (Secondary Failover Provider)
+async function attemptSecondaryProviderFailover(failedProvider, imageBuffer) {
+    const cleanEasySlip = process.env.EASYSLIP_TOKEN ? process.env.EASYSLIP_TOKEN.replace(/["'\r\n ]/g, '').trim() : '';
+    if (failedProvider !== 'easyslip' && cleanEasySlip) {
+        addLog('WARN', '🔄 โควตาหลักหมด! กำลังสลับไปใช้ EasySlip (Secondary Failover) อัตโนมัติ...');
+        const res = await verifyWithEasySlip(imageBuffer);
+        if (res && res.success) {
+            addLog('SUCCESS', `✅ EasySlip (ระบบสำรอง) ตรวจสอบสลิปสำเร็จ: ยอดเงิน ${res.data?.amount} บาท`);
+            reportSelfHealingToDiscord({
+                category: 'SLIP_PROVIDER_FAILOVER',
+                title: 'สลับผู้ให้บริการสำรอง (EasySlip) สำเร็จ',
+                issue: `โควตาตรวจสลิปของผู้ให้บริการหลัก (${failedProvider.toUpperCase()}) หมดลงระหว่างการรับยอด`,
+                actionDetails: `ระบบสลับไปใช้ EasySlip และตรวจสอบสลิปยอด ฿${res.data?.amount} สำเร็จเรียบร้อย ออเดอร์ไม่สะดุด`
+            }).catch(() => {});
+            return res;
+        }
+    }
+
+    const cleanThunder = process.env.THUNDER_TOKEN ? process.env.THUNDER_TOKEN.replace(/["'\r\n ]/g, '').trim() : '';
+    if (failedProvider !== 'thunder' && cleanThunder) {
+        addLog('WARN', '🔄 โควตาหลักหมด! กำลังสลับไปใช้ Thunder Solution (Secondary Failover) อัตโนมัติ...');
+        const res = await verifyWithThunder(imageBuffer);
+        if (res && res.success) {
+            addLog('SUCCESS', `✅ Thunder (ระบบสำรอง) ตรวจสอบสลิปสำเร็จ: ยอดเงิน ${res.data?.amount} บาท`);
+            reportSelfHealingToDiscord({
+                category: 'SLIP_PROVIDER_FAILOVER',
+                title: 'สลับผู้ให้บริการสำรอง (Thunder) สำเร็จ',
+                issue: `โควตาตรวจสลิปของผู้ให้บริการหลัก (${failedProvider.toUpperCase()}) หมดลงระหว่างการรับยอด`,
+                actionDetails: `ระบบสลับไปใช้ Thunder Solution และตรวจสอบสลิปยอด ฿${res.data?.amount} สำเร็จเรียบร้อย ออเดอร์ไม่สะดุด`
+            }).catch(() => {});
+            return res;
+        }
+    }
+    return null;
+}
+
+// 🛡️ ADAPTER: ตรวจสอบสลิปผ่านผู้ให้บริการที่เลือก (SlipOK, EasySlip, Thunder, SlipVerify, Custom หรือ Manual)
+async function verifySlipWithProvider(imageBuffer) {
+    const provider = (process.env.SLIP_PROVIDER || 'slipok').toLowerCase();
+
+    // 1. โหมดตรวจสลิปเอง 100% ฟรี (Manual)
+    if (provider === 'manual') {
+        addLog('INFO', 'ระบบตั้งค่าเป็น "ตรวจสลิปเอง (Manual)" สลิปจะถูกส่งเข้าคิวรอตรวจภาพโดยตรง');
+        return null; // เมื่อคืนค่า null ระบบจะนำรูปเข้ากระดานสลิปผิดปกติ/รอตรวจเช็คภาพเองทันที
+    }
+
+    // หากผู้ให้บริการหลักถูกบันทึกว่าเครดิตหมด ให้พยายามสลับใช้ผู้ให้บริการสำรองทันที
+    if (providerQuotaState.status === 'exhausted' && providerQuotaState.provider === provider) {
+        const failover = await attemptSecondaryProviderFailover(provider, imageBuffer);
+        if (failover) return failover;
+        addLog('WARN', `⚠️ โควตา ${provider.toUpperCase()} หมด และไม่มีผู้ให้บริการสำรอง ระบบส่งสลิปเข้าคิวตรวจภาพเอง (Manual)`);
+        return null;
+    }
+
+    let result = null;
+    if (provider === 'easyslip') {
+        result = await verifyWithEasySlip(imageBuffer);
+    } else if (provider === 'thunder') {
+        result = await verifyWithThunder(imageBuffer);
+    } else if (provider === 'slipverify') {
+        result = await verifyWithSlipVerify(imageBuffer);
+    } else if (provider === 'custom') {
+        result = await verifyWithCustom(imageBuffer);
+    } else {
+        result = await verifyWithSlipOK(imageBuffer);
+    }
+
+    // หากตรวจสอบสำเร็จ หรือเป็นกรณีสลิปซ้ำ (Code 1012) ให้ส่งกลับผลลัพธ์
+    if (result && (result.success || result.data?.transRef)) {
+        return result;
+    }
+
+    // หากเกิด Quota Exhaustion ระหว่างการตรวจสอบ ให้พยายามสลับหา Secondary Failover ทันที
+    if (providerQuotaState.status === 'exhausted' && providerQuotaState.provider === provider) {
+        const failover = await attemptSecondaryProviderFailover(provider, imageBuffer);
+        if (failover) return failover;
+    }
+
+    return result;
+}
+
 // 🇹🇭 ระบบวิเคราะห์ที่อยู่ภาษาไทยสำรองด้วย Regular Expression (ทำงานได้ 100% แม้ไม่มีเน็ตหรือ AI ไม่ว่าง)
-function parseThaiAddressFallback(text) {
+function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE') {
     if (!text || typeof text !== 'string') return null;
 
     // 1. สกัดเบอร์โทรศัพท์ (0XXXXXXXXX หรือ +66...)
@@ -1882,7 +2453,7 @@ async function parseThaiAddressWithAI(text, defaultName = 'ลูกค้า LI
             const res = await axios.post(url, {
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: { responseMimeType: 'application/json' }
-            }, { timeout: 10000 });
+            }, { timeout: 4000 });
 
             const rawJson = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
             if (rawJson) {
@@ -1925,13 +2496,34 @@ setInterval(() => {
 }, 60000);
 
 app.post('/webhook', async (req, res) => {
+    // 🛡️ ตรวจสอบ LINE Webhook Signature (HMAC-SHA256) ป้องกัน Webhook Spoofing
+    const channelSecret = (process.env.LINE_CHANNEL_SECRET || '').trim();
+    const signature = req.headers['x-line-signature'];
+
+    if (channelSecret) {
+        if (!signature || typeof signature !== 'string') {
+            addLog('WARN', '🚨 ปฏิเสธ Webhook: ไม่พบลายเซ็น x-line-signature (Security Guard)');
+            return res.status(401).send('Unauthorized: Missing signature');
+        }
+        const raw = req.rawBody || Buffer.from(JSON.stringify(req.body));
+        const expected = Buffer.from(crypto.createHmac('sha256', channelSecret).update(raw).digest('base64'));
+        const got = Buffer.from(signature);
+        if (got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) {
+            addLog('WARN', '🚨 ปฏิเสธ Webhook: ลายเซ็นดิจิทัล x-line-signature ไม่ถูกต้อง (x-line-signature mismatch)');
+            return res.status(401).send('Unauthorized: Invalid signature');
+        }
+    }
+
     res.status(200).send("OK");
     try {
         const events = req.body.events;
-        if (!events || events.length === 0) return;
-        const event = events[0];
-        const replyToken = event.replyToken;
-        const userId = event.source.userId;
+        if (!events || !Array.isArray(events) || events.length === 0) return;
+
+        for (const event of events) {
+            try {
+                const replyToken = event.replyToken;
+                const userId = event.source?.userId;
+                if (!userId) continue;
 
         // 🛡️ ตรวจสอบ Message Deduplication
         if (event.type === 'message' && event.message?.id) {
@@ -1939,7 +2531,7 @@ app.post('/webhook', async (req, res) => {
             if (processedMessageIds.has(msgId)) {
                 addLog('INFO', `บล็อกข้อความซ้ำ (Deduplication): Message ID ${msgId}`);
                 console.log(`⚠️ ข้อความซ้ำถูกบล็อก (Duplicate Webhook Drop): ${msgId}`);
-                return;
+                continue;
             }
             processedMessageIds.set(msgId, Date.now());
         }
@@ -1948,20 +2540,21 @@ app.post('/webhook', async (req, res) => {
             const text = event.message.text.trim();
             if (text.startsWith('#แทรกคิว')) {
                 const { data: isAdmin } = await supabase.from('admins').select('line_id').eq('line_id', userId).single();
-                if (!isAdmin) return; 
+                if (!isAdmin) continue; 
 
                 const parts = text.split(' ');
                 if (parts.length >= 3) {
                     const amount = parseFloat(parts[1]); const customerName = parts.slice(2).join(' ');
                     
                     let result = calculateBestDraws(amount, 0); 
-                    if (result.draws === 0) { await replyLineMessage(replyToken, `ผักกาดขอโทษน้าา 🥺 ยอดเงินที่โอนมายังไม่พอสำหรับค่าสินค้าเลยค่ะ รบกวนเช็คยอดอีกทีน้า`, userId); return; }
+                    if (result.draws === 0) { await replyLineMessage(replyToken, `ผักกาดขอโทษน้าา 🥺 ยอดเงินที่โอนมายังไม่พอสำหรับค่าสินค้าเลยค่ะ รบกวนเช็คยอดอีกทีน้า`, userId); continue; }
                     
                     let breakdownStr = result.breakdown.join(', ');
                     const fakeTransRef = `manual-${Date.now()}|${breakdownStr}`;
 
                     const { data: inserted, error: insertErr } = await supabase.from('slips').insert([{
                         amount, draws: result.draws, sender_name: `Manual - ${customerName}`, line_name: `Admin`, line_id: null,
+                        session_id: activeLiveSession ? activeLiveSession.id : null,
                         trans_date: getTodayString(), trans_time: getLocalTimeString(), 
                         qr_payload: fakeTransRef, status: 'waiting'
                     }]).select().single();
@@ -2014,7 +2607,7 @@ app.post('/webhook', async (req, res) => {
         else if (event.type === 'message' && event.message.type === 'image') {
             const messageId = event.message.id;
             const imageBuffer = await downloadImageFromLine(messageId);
-            if (!imageBuffer) return;
+            if (!imageBuffer) continue;
 
             const slipResult = await verifySlipWithProvider(imageBuffer);
             // ✅ ดึงชื่อ LINE จากโปรไฟล์ผู้ใช้อย่างถูกต้อง 100%
@@ -2031,34 +2624,33 @@ app.post('/webhook', async (req, res) => {
                     if (!actualName.includes(searchName)) {
                         addLog('WARN', `ตรวจพบสลิปโอนผิดบัญชี: ลูกค้า "${lineName}" โอนเข้าบัญชี "${receiverName}" (ไม่ใช่ "${merchantAccountName}")`);
                         await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้โอนไปที่บัญชี "${receiverName || 'ไม่ทราบชื่อ'}" นะคะ ซึ่งไม่ใช่บัญชีของผักกาดน้า รบกวนคุณลูกค้าเช็คบัญชีผู้รับอีกทีนะคะ 🙏`, userId);
-                        return;
+                        continue;
                     }
                 }
 
                 const transRef = slipData.transRef; 
                 const amount = slipData.amount;
 
-                // 🛡️ ป้องกันสลิปซ้ำ: เช็กว่ารหัสสลิปนี้เคยส่งเข้ามาในระบบแล้วหรือยัง
-                const { data: existingSlip } = await supabase
-                    .from('slips')
-                    .select('id, trans_date')
-                    .like('qr_payload', `${transRef}%`)
-                    .limit(1);
-
-                if (existingSlip && existingSlip.length > 0) {
+                // 🛡️ ป้องกันสลิปซ้ำระดับ B-Tree Index: เช็กว่ารหัสสลิปนี้เคยส่งเข้ามาในระบบแล้วหรือยัง
+                const existingSlip = supabase.db.prepare('SELECT id, trans_date FROM slips WHERE trans_ref = ? LIMIT 1').get(transRef);
+                if (existingSlip) {
                     addLog('WARN', `ตรวจพบสลิปซ้ำ: ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ที่เคยบันทึกไปแล้ว`);
                     console.log(`⚠️ ตรวจพบสลิปซ้ำ: ${transRef}`);
                     await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId);
-                    return;
+                    continue;
                 }
 
-                let { data: customer } = await supabase.from('customers').select('*').eq('line_id', userId).single();
+                let customer = supabase.db.prepare('SELECT * FROM customers WHERE line_id = ?').get(userId);
                 let currentBalance = (customer ? customer.balance : 0) + amount; 
 
-                const { data: todaySlips } = await supabase.from('slips').select('draws').eq('line_id', userId).eq('trans_date', getTodayString());
+                let pastSlipsRows = [];
+                if (activeLiveSession) {
+                    pastSlipsRows = supabase.db.prepare('SELECT draws FROM slips WHERE line_id = ? AND session_id = ?').all(userId, activeLiveSession.id);
+                } else {
+                    pastSlipsRows = supabase.db.prepare('SELECT draws FROM slips WHERE line_id = ? AND trans_date = ?').all(userId, getTodayString());
+                }
 
-                let pastDrawsToday = 0;
-                if (todaySlips) pastDrawsToday = todaySlips.reduce((sum, slip) => sum + (slip.draws || 0), 0);
+                let pastDrawsToday = pastSlipsRows.reduce((sum, slip) => sum + (slip.draws || 0), 0);
 
                 let hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
                 let virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
@@ -2067,27 +2659,47 @@ app.post('/webhook', async (req, res) => {
                 let draws = result.draws;
                 let remainingBalance = result.remainder;
 
-                if (customer) await supabase.from('customers').update({ balance: remainingBalance, name: lineName }).eq('line_id', userId);
-                else await supabase.from('customers').insert([{ line_id: userId, name: lineName, balance: remainingBalance }]);
-
                 const status = draws > 0 ? 'waiting' : 'accumulated';
                 let breakdownStr = result.breakdown.join(', ');
                 const payloadRef = `${transRef}|${breakdownStr}`; 
                 
-                // ✅ บันทึกชื่อ LINE ลงใน sender_name และ line_name ให้แสดงผลบนการ์ด Dashboard อย่างชัดเจน
-                const { data: inserted, error: insertErr } = await supabase.from('slips').insert([{
-                    amount: amount, 
-                    draws: draws, 
-                    line_id: userId, 
-                    sender_name: lineName, 
-                    line_name: lineName, 
-                    trans_date: getTodayString(), 
-                    trans_time: slipData.transTime || getLocalTimeString(), 
-                    qr_payload: payloadRef, 
-                    status: status 
-                }]).select().single();
+                // 🔒 Atomic Transaction: รวมการบันทึกยอดเงินลูกค้าและสลิปเป็น Atomic Unit เพื่อป้องกัน Race Condition 100%
+                let inserted = null;
+                try {
+                    inserted = supabase.runTransaction(() => {
+                        // Double check ป้องกัน race condition ในระดับ transaction
+                        const dup = supabase.db.prepare('SELECT id FROM slips WHERE trans_ref = ? LIMIT 1').get(transRef);
+                        if (dup) throw new Error('DUPLICATE_SLIP');
 
-                if (!insertErr) {
+                        if (customer) {
+                            supabase.db.prepare('UPDATE customers SET balance = ?, name = ? WHERE line_id = ?').run(remainingBalance, lineName, userId);
+                        } else {
+                            supabase.db.prepare('INSERT INTO customers (line_id, name, balance) VALUES (?, ?, ?)').run(userId, lineName, remainingBalance);
+                        }
+
+                        const stmt = supabase.db.prepare(`
+                            INSERT INTO slips (amount, draws, line_id, sender_name, line_name, session_id, trans_date, trans_time, trans_ref, qr_payload, status)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        `);
+                        const info = stmt.run(
+                            amount, draws, userId, lineName, lineName,
+                            activeLiveSession ? activeLiveSession.id : null,
+                            getTodayString(), slipData.transTime || getLocalTimeString(),
+                            transRef, payloadRef, status
+                        );
+                        return { id: info.lastInsertRowid };
+                    });
+                } catch (txErr) {
+                    if (txErr.message === 'DUPLICATE_SLIP' || (txErr.message && txErr.message.includes('UNIQUE constraint failed'))) {
+                        addLog('WARN', `ตรวจพบสลิปซ้ำ (Atomic Unique Lock): ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ซ้ำ`);
+                        console.log(`⚠️ ตรวจพบสลิปซ้ำ (Atomic Block): ${transRef}`);
+                        await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId);
+                        continue;
+                    }
+                    throw txErr;
+                }
+
+                if (inserted) {
                     if (draws > 0) {
                         io.emit('play_sound');
                         const latestStats = await broadcastTodayStats();
@@ -2103,24 +2715,22 @@ app.post('/webhook', async (req, res) => {
                             }
                         }
                         
-                        let replyMsg = `✅ ได้รับยอดแล้วน้า \n🎁 คุณลูกค้าได้รับเพิ่มอีก ${draws} ชิ้นนะคะ\n📦 [ ${breakdownStr} ]`;
-                        if (isExistingMerged) {
-                            replyMsg += `\n\n🎟️ ผักกาดรวมยอดเข้า "คิวที่ ${currentQ}" เดิมของคุณลูกค้าให้แล้วนะคะ ไม่ต้องต่อคิวใหม่ค่า! รอลุ้นได้เลย 🤩`;
+                        let replyMsg = `ผักกาดขอบคุณสำหรับคำสั่งซื้อมากๆ เลยน้าา 🙏💖\nอย่าลืมพิมพ์ชื่อ ที่อยู่ เบอร์โทรส่งมาให้ผักกาดในแชทนี้ด้วยนะคะ จะได้รีบแพ็คของส่งให้ค่า 📦✨`;
+                        if (openchatLink && openchatLink.trim() !== "") {
+                            replyMsg += `\n\n💬 ผักกาดแจ้งเลขพัสดุในโอเพ่นแชทนี้น้า จิ้มเข้ากลุ่มไว้ได้เลยค่า👇\n${openchatLink}`;
                         } else {
-                            replyMsg += `\n🎫 ลำดับคิวของคุณลูกค้าคือ: ${currentQ} ค่ะ\nรอลุ้นหน้าไลฟ์ได้เลยน้าา 🤩`;
+                            replyMsg += `\n\n💬 ผักกาดจะแจ้งเลขพัสดุใน LINE OpenChat นะคะ`;
                         }
-                        
-                        if (openchatLink && openchatLink.trim() !== "") replyMsg += `\n\n💬 อย่าลืมเข้ากลุ่มเพื่อติดตามเลขพัสดุนะคะ👇\n${openchatLink}`;
                         await replyLineMessage(replyToken, replyMsg, userId);
                     } else {
                         broadcastTodayStats(); 
-                        await replyLineMessage(replyToken, `✅ ได้รับยอดแล้วน้า\n(ยอดรวมตอนนี้ยังไม่พอสำหรับสินค้านะคะ รบกวนโอนเพิ่มอีกนิดนึงน้าา 😉)`, userId);
+                        await replyLineMessage(replyToken, `ผักกาดได้รับยอดแล้วน้าา\n(แต่ยอดรวมตอนนี้ยังไม่พอสำหรับสินค้านะคะ รบกวนโอนเพิ่มอีกนิดนึงน้าา 😉)`, userId);
                     }
                 }
             } else {
                 const fileName = `manual_${Date.now()}_${userId}.jpg`;
                 const filePath = path.join(uploadsDir, fileName);
-                fs.writeFileSync(filePath, Buffer.from(imageBuffer));
+                await fs.promises.writeFile(filePath, Buffer.from(imageBuffer));
                 const imageUrl = `/uploads/${fileName}`;
 
                 const payloadRef = `manual_image|${imageUrl}`; 
@@ -2131,6 +2741,7 @@ app.post('/webhook', async (req, res) => {
                     line_id: userId, 
                     sender_name: lineName, // ใช้ชื่อ LINE จริงเช่นกัน
                     line_name: lineName, 
+                    session_id: activeLiveSession ? activeLiveSession.id : null,
                     trans_date: getTodayString(), 
                     trans_time: getLocalTimeString(), 
                     qr_payload: payloadRef, 
@@ -2140,15 +2751,23 @@ app.post('/webhook', async (req, res) => {
                 if (inserted) {
                     io.emit('play_sound');
                     broadcastTodayStats();
-                    const currentQ = await getCurrentQueueNumber();
                     
-                    let replyMsg = `✅ ได้รับรูปสลิปแล้วน้า\n(สแกนคิวอาร์โค้ดไม่ติด แต่ผักกาดนำเข้าคิวให้ก่อนจ้า เดี๋ยวแอดมินเช็กยอดให้นะคะ)\n🎫 ลำดับคิวคือ: ${currentQ} ค่ะ`;
-                    if (openchatLink && openchatLink.trim() !== "") replyMsg += `\n\n💬 อย่าลืมเข้ากลุ่มเพื่อติดตามเลขพัสดุนะคะ👇\n${openchatLink}`;
+                    let replyMsg = `ผักกาดขอบคุณสำหรับคำสั่งซื้อมากๆ เลยน้าา 🙏💖\nอย่าลืมพิมพ์ชื่อ ที่อยู่ เบอร์โทรส่งมาให้ผักกาดในแชทนี้ด้วยนะคะ จะได้รีบแพ็คของส่งให้ค่า 📦✨`;
+                    if (openchatLink && openchatLink.trim() !== "") {
+                        replyMsg += `\n\n💬 ผักกาดแจ้งเลขพัสดุในโอเพ่นแชทนี้น้า จิ้มเข้ากลุ่มไว้ได้เลยค่า👇\n${openchatLink}`;
+                    } else {
+                        replyMsg += `\n\n💬 ผักกาดจะแจ้งเลขพัสดุใน LINE OpenChat นะคะ`;
+                    }
                     await replyLineMessage(replyToken, replyMsg, userId);
                 }
             }
         }
-    } catch (error) { console.error("Webhook Error:", error.message); }
+    } catch (eventErr) {
+        console.error("Event Processing Error:", eventErr.message);
+        addLog('ERROR', `เกิดข้อผิดพลาดในการประมวลผล Webhook Event: ${eventErr.message}`);
+    }
+}
+} catch (error) { console.error("Webhook Error:", error.message); }
 });
 
 const PORT = process.env.PORT || 3000;
@@ -2162,6 +2781,7 @@ app.get('/api/provider/quota', async (req, res) => {
 // 🌐 API ตรวจสอบสถานะ Tunnel & Webhook (แก้ Risk 1)
 let activeTunnelType = null;
 let currentPublicUrl = null;
+sentinel.setTunnelUrlGetter(() => currentPublicUrl);
 let cloudflareProcess = null;
 let localtunnelInstance = null;
 let webhookSyncStatus = { synced: false, url: null, error: null, lastTested: null, testResult: null };
@@ -2426,25 +3046,24 @@ function downloadCloudflaredInBackground() {
     });
 }
 
-// ปิด process tunnel ให้เรียบร้อยเมื่อโปรแกรมปิด
-process.on('exit', () => { 
-    if (cloudflareProcess) cloudflareProcess.kill(); 
-    if (localtunnelInstance) localtunnelInstance.close();
-});
-process.on('SIGINT', () => { 
-    if (cloudflareProcess) cloudflareProcess.kill(); 
-    if (localtunnelInstance) localtunnelInstance.close();
-    process.exit(); 
-});
+// 🔒 ฟังก์ชันปิดโปรแกรมอย่างปลอดภัย (Graceful Shutdown)
+let shuttingDown = false;
+function gracefulShutdown(code = 0) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try { if (cloudflareProcess) cloudflareProcess.kill('SIGINT'); } catch (e) {}
+    try { if (localtunnelInstance) localtunnelInstance.close(); } catch (e) {}
+    try { if (typeof supabase.closeDb === 'function') supabase.closeDb(); } catch (e) {}
+    process.exit(code);
+}
+['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'].forEach(sig => process.on(sig, () => gracefulShutdown(0)));
+process.on('exit', () => gracefulShutdown(0));
 
 // 🛑 API สำหรับให้ผู้ใช้งานกด "ปิดโปรแกรม" จากหน้า Dashboard ได้โดยตรง
 app.post('/api/system/shutdown', (req, res) => {
     res.json({ success: true, message: 'กำลังปิดระบบและเซิร์ฟเวอร์...' });
     setTimeout(() => {
-        if (cloudflareProcess) {
-            try { cloudflareProcess.kill('SIGINT'); } catch(e) {}
-        }
-        process.exit(0);
+        gracefulShutdown(0);
     }, 500);
 });
 
@@ -2531,7 +3150,8 @@ app.get('/api/system/check_update', async (req, res) => {
             title: manifestData.title || `AutoQueueforLive v${manifestData.version}`,
             changelog: Array.isArray(manifestData.changelog) ? manifestData.changelog : [manifestData.changelog],
             downloadUrl: manifestData.downloadUrl || '',
-            fileSizeKB: manifestData.fileSizeKB || null
+            fileSizeKB: manifestData.fileSizeKB || null,
+            sha256: manifestData.sha256 || null
         });
     } catch (err) {
         addLog('WARN', 'ตรวจสอบการอัปเดตไม่สำเร็จ', err.message);
@@ -2544,12 +3164,48 @@ app.get('/api/system/check_update', async (req, res) => {
     }
 });
 
+// 🛡️ SEC-01: ป้องกัน Arbitrary URL Download / Remote Code Execution (RCE)
+// อนุญาตให้ดาวน์โหลดแพตช์อัปเดตได้เฉพาะจาก GitHub Releases ของ Repository ทางการเท่านั้น (ตัด Local Path Bypass 100%)
+function isUpdateUrlAllowed(url) {
+    if (!url || typeof url !== 'string') return false;
+    const trimmed = url.trim();
+
+    // บังคับต้องเป็น HTTPS จากโดเมนทางการของ GitHub Repository เท่านั้น
+    if (!trimmed.startsWith('https://')) return false;
+
+    try {
+        const parsed = new URL(trimmed);
+        const hostname = parsed.hostname.toLowerCase();
+        const pathname = parsed.pathname;
+
+        // อนุญาตเฉพาะโดเมนทางการของ GitHub และต้องเป็น Repository AutoQueueforLive เท่านั้น
+        const isOfficialGitHub = (
+            (hostname === 'github.com' && pathname.startsWith('/Napat-Newbie/AutoQueueforLive/')) ||
+            (hostname === 'raw.githubusercontent.com' && pathname.startsWith('/Napat-Newbie/AutoQueueforLive/')) ||
+            (hostname === 'objects.githubusercontent.com' && pathname.includes('AutoQueueforLive'))
+        );
+
+        return isOfficialGitHub;
+    } catch (e) {
+        return false;
+    }
+}
+
 // 3. เริ่มกระบวนการดาวน์โหลดและติดตั้งอัปเดต (1-Click Apply)
 app.post('/api/system/apply_update', async (req, res) => {
     try {
-        const { downloadUrl, latestVersion, changelog } = req.body;
+        const { downloadUrl, latestVersion, changelog, sha256 } = req.body;
         if (!downloadUrl) {
-            return res.status(400).json({ success: false, message: 'ไม่พบ URL หรือพาธสำหรับดาวน์โหลดอัปเดต' });
+            return res.status(400).json({ success: false, message: 'ไม่พบ URL สำหรับดาวน์โหลดอัปเดต' });
+        }
+
+        // 🛡️ SEC-01: ตรวจสอบความปลอดภัยของ URL ก่อนอนุญาตให้ดาวน์โหลด
+        if (!isUpdateUrlAllowed(downloadUrl)) {
+            addLog('WARN', `🚨 สกัดกั้นความพยายามอัปเดตจากแหล่งที่ไม่ปลอดภัย (SEC-01 Blocked): ${downloadUrl}`);
+            return res.status(403).json({
+                success: false,
+                message: 'การติดตั้งถูกปฏิเสธ: ลิงก์ดาวน์โหลดไม่อยู่ใน WhiteList ทางการของโปรเจกต์ (SEC-01 Security Protection)'
+            });
         }
 
         const updatesDir = path.join(__dirname, 'updates');
@@ -2562,35 +3218,71 @@ app.post('/api/system/apply_update', async (req, res) => {
 
         addLog('INFO', `กำลังเตรียมแพตช์อัปเดต v${latestVersion || 'ใหม่'}...`);
 
-        if (downloadUrl.startsWith('http://') || downloadUrl.startsWith('https://')) {
-            // ดาวน์โหลดผ่านเน็ต
-            const writer = fs.createWriteStream(targetZipPath);
-            const response = await axios({
-                url: downloadUrl,
-                method: 'GET',
-                responseType: 'stream',
-                timeout: 30000
-            });
-            response.data.pipe(writer);
-
-            await new Promise((resolve, reject) => {
-                writer.on('finish', resolve);
-                writer.on('error', reject);
-            });
-        } else {
-            // โลคอลพาธ
-            let resolvedPath = path.isAbsolute(downloadUrl) ? downloadUrl : path.join(__dirname, downloadUrl);
-            if (!fs.existsSync(resolvedPath)) {
-                return res.status(404).json({ success: false, message: `ไม่พบไฟล์อัปเดตที่: ${resolvedPath}` });
+        // ดาวน์โหลดผ่าน HTTPS พร้อมตรวจตราการ Redirect (MitM / Open Redirect Guard)
+        const writer = fs.createWriteStream(targetZipPath);
+        const response = await axios({
+            url: downloadUrl,
+            method: 'GET',
+            responseType: 'stream',
+            timeout: 30000,
+            maxRedirects: 5,
+            beforeRedirect: (options) => {
+                const redirectUrl = options.href;
+                if (!isUpdateUrlAllowed(redirectUrl)) {
+                    throw new Error(`ไม่อนุญาตให้ Redirect ไปยังปลายทางที่ไม่ปลอดภัย: ${redirectUrl}`);
+                }
             }
-            fs.copyFileSync(resolvedPath, targetZipPath);
-        }
+        });
+        response.data.pipe(writer);
+
+        await new Promise((resolve, reject) => {
+            writer.on('finish', resolve);
+            writer.on('error', reject);
+        });
 
         // ตรวจสอบขนาดไฟล์
         const stat = fs.statSync(targetZipPath);
         if (stat.size < 500) {
+            try { fs.unlinkSync(targetZipPath); } catch(e) {}
             return res.status(400).json({ success: false, message: 'ไฟล์อัปเดตไม่สมบูรณ์หรือมีขนาดเล็กเกินไป' });
         }
+
+        // 🛡️ SEC-01 Checksum Hardening: บังคับตรวจสอบความถูกต้องของไฟล์อัปเดต (Mandatory SHA-256 Validation)
+        let expectedSha256 = (sha256 || '').trim().toLowerCase();
+        if (!expectedSha256) {
+            try {
+                const manifestUrl = process.env.UPDATE_MANIFEST_URL || DEFAULT_MANIFEST_URL;
+                if (manifestUrl && manifestUrl.startsWith('https://')) {
+                    const mResp = await axios.get(manifestUrl, { timeout: 4000 });
+                    if (mResp.data && (mResp.data.sha256 || mResp.data.checksum)) {
+                        expectedSha256 = String(mResp.data.sha256 || mResp.data.checksum).trim().toLowerCase();
+                    }
+                }
+            } catch(e) {}
+        }
+
+        if (!expectedSha256) {
+            try { fs.unlinkSync(targetZipPath); } catch(e) {}
+            addLog('ERROR', '🚨 ปฏิเสธการติดตั้ง: ไม่พบค่า SHA-256 Checksum สำหรับยืนยันความปลอดภัยของไฟล์อัปเดต');
+            return res.status(400).json({
+                success: false,
+                message: 'การติดตั้งถูกปฏิเสธ: ต้องมีค่า Checksum (SHA-256) สำหรับตรวจสอบความถูกต้องของไฟล์แพตช์'
+            });
+        }
+
+        const computedSha256 = await new Promise((resolve, reject) => {
+            const h = crypto.createHash('sha256');
+            fs.createReadStream(targetZipPath).on('data', d => h.update(d)).on('end', () => resolve(h.digest('hex').toLowerCase())).on('error', reject);
+        });
+        if (computedSha256 !== expectedSha256) {
+            try { fs.unlinkSync(targetZipPath); } catch(e) {}
+            addLog('ERROR', `🚨 ตรวจพบไฟล์อัปเดตไม่ตรงกับต้นฉบับ (SHA-256 Mismatch): คาดหวัง ${expectedSha256} แต่ได้รับ ${computedSha256}`);
+            return res.status(400).json({
+                success: false,
+                message: 'การติดตั้งถูกปฏิเสธ: ค่า Checksum (SHA-256) ไม่ตรงกับต้นทาง อาจเป็นไฟล์ไม่สมบูรณ์หรือถูกดัดแปลง'
+            });
+        }
+        addLog('SUCCESS', `🛡️ ตรวจสอบความถูกต้องของไฟล์อัปเดตสำเร็จ (SHA-256 Verified): ${computedSha256}`);
 
         // บันทึกบันทึกการอัปเดตไว้ เพื่อให้แจ้งเตือน Changelog เมื่อรีสตาร์ทกลับมา (ดึงจาก version.json เพื่อให้ภาษาไทยถูกต้อง 100%)
         let safeChangelog = changelog || [];
@@ -2632,12 +3324,9 @@ app.post('/api/system/apply_update', async (req, res) => {
             message: 'กำลังติดตั้งอัปเดตและรีสตาร์ทระบบอัตโนมัติ...'
         });
 
-        // รอ 1 วินาทีแล้วปิด node
+        // รอ 1 วินาทีแล้วปิด node อย่างปลอดภัย
         setTimeout(() => {
-            if (cloudflareProcess) {
-                try { cloudflareProcess.kill('SIGINT'); } catch(e) {}
-            }
-            process.exit(0);
+            gracefulShutdown(0);
         }, 1000);
 
     } catch (err) {
@@ -2646,20 +3335,24 @@ app.post('/api/system/apply_update', async (req, res) => {
     }
 });
 
-// 4. บันทึก Update Manifest URL ลง .env
+// 4. บันทึก Update Manifest URL ลง .env (พร้อมตรวจสอบความปลอดภัย ป้องกัน CRLF Injection)
 app.post('/api/system/save_update_url', (req, res) => {
     try {
-        const { manifestUrl } = req.body;
+        let { manifestUrl } = req.body || {};
+        manifestUrl = String(manifestUrl || '').trim();
+        if (manifestUrl && (!isUpdateUrlAllowed(manifestUrl) || /[\r\n"\\]/.test(manifestUrl))) {
+            return res.status(400).json({ success: false, message: 'URL อัปเดตไม่ถูกต้อง ไม่อยู่ใน WhiteList หรือมีอักขระต้องห้าม' });
+        }
+
         const envPath = path.join(__dirname, '.env');
         let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
 
-        if (envContent.includes('UPDATE_MANIFEST_URL=')) {
-            envContent = envContent.replace(/UPDATE_MANIFEST_URL=.*/g, `UPDATE_MANIFEST_URL="${manifestUrl || ''}"`);
-        } else {
-            envContent += `\nUPDATE_MANIFEST_URL="${manifestUrl || ''}"\n`;
-        }
+        const line = `UPDATE_MANIFEST_URL="${manifestUrl}"`;
+        const regex = /^UPDATE_MANIFEST_URL=.*$/m;
+        envContent = regex.test(envContent) ? envContent.replace(regex, () => line) : `${envContent}\n${line}`;
+
         fs.writeFileSync(envPath, envContent, 'utf8');
-        process.env.UPDATE_MANIFEST_URL = manifestUrl || '';
+        process.env.UPDATE_MANIFEST_URL = manifestUrl;
 
         addLog('SUCCESS', 'บันทึก URL ตรวจสอบอัปเดตเรียบร้อย');
         res.json({ success: true, message: 'บันทึก URL สำเร็จ' });
