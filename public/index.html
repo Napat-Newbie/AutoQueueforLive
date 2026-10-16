@@ -588,6 +588,14 @@
             <h2 style="color: #f57f17; margin: 0;">📝 สลิปผิดปกติ (รอตรวจสอบหลังไลฟ์)</h2>
         </div>
         <div id="abnormal-queue-list"></div>
+
+        <!-- 🧾 ยอดโอนล่าสุดของลูกค้าทุกคนที่ส่งสลิปในรอบนี้ (ล่างสุดของหน้า) -->
+        <div id="recent-box" style="display:none; margin-top: 50px;">
+            <div class="queue-header" style="border-left: 6px solid #607d8b; padding-left: 10px;">
+                <h2 style="color: #607d8b; margin: 0;">🧾 ยอดโอนล่าสุด (30 รายการ)</h2>
+            </div>
+            <div id="recent-list"></div>
+        </div>
     </div>
 
     <!-- Modal พื้นฐาน -->
@@ -1385,7 +1393,7 @@
         }
 
         function renumberQueues() {
-            const waitingCards = document.querySelectorAll('#queue-list .queue-card');
+            const waitingCards = document.querySelectorAll('#queue-list .queue-card:not(.topup-card)');
             waitingCards.forEach((card, index) => {
                 const numberEl = card.querySelector('.queue-number');
                 if (numberEl) numberEl.innerText = `#${index + 1}`;
@@ -1466,6 +1474,7 @@
             
             const el = document.createElement('div');
             el.className = 'queue-card'; el.id = `queue-${data.id}`;
+            el.dataset.sort = String(data.sortId || data.id);
             el.style.borderLeft = `6px solid ${borderColor}`;
             el.innerHTML = innerContent;
             
@@ -1475,9 +1484,62 @@
             else document.getElementById('queue-list').append(el);
         }
 
+        // 💬 แสดงรายชื่อลูกค้าที่รอโอนเพิ่ม (ไม่เข้าคิว) ให้แม่ค้าทักได้ทัน
+        // 🟠 การ์ดคิวสีส้ม: ลูกค้าโอนยอดไม่ครบ ต่อคิวรอไว้ตามลำดับที่ส่งสลิป (ยังไม่ได้สิทธิ์จนกว่าจะโอนเพิ่ม)
+        function buildTopupCard(t) {
+            const el = document.createElement('div');
+            el.className = 'queue-card topup-card';
+            el.id = `topup-${t.id}`;
+            el.dataset.sort = String(t.id);
+            el.style.borderLeft = '6px solid #ff9800';
+            el.style.background = 'rgba(255,152,0,0.10)';
+            const reason = t.held ? 'ยอดไม่พอ: ลืมโอนค่าส่ง' : 'ยอดไม่พอ: โอนยอดไม่ครบ';
+            const amt = Number(t.amount) > 0 ? Number(t.amount).toLocaleString('en-US') : '?';
+            el.innerHTML = `
+                <div class="queue-number" style="color:#ff9800;">⏳</div>
+                <div class="queue-info">
+                    <div class="name">👤 <span>${escapeHtml(t.name || 'ลูกค้า')}</span></div>
+                    <div style="font-size: 0.85em; color:#777; margin-top:5px;">ยอดโอน: ${escapeHtml(amt)} บาท • เวลา ${escapeHtml(t.time || '')}</div>
+                    <div style="font-size: 0.95em; color:#e65100; margin-top:6px; font-weight:600;">⚠️ ${reason} ต้องโอนเพิ่มอีก ${escapeHtml(String(t.need))} บาท</div>
+                    <div style="font-size: 0.8em; color:#777; margin-top:3px;">ระบบแจ้งลูกค้าในแชท LINE แล้ว โอนครบเมื่อไหร่จะเปลี่ยนเป็นคิวปกติเอง</div>
+                </div>
+                <div class="queue-actions">
+                    <div class="draws-badge" style="background-color:#ff9800; color:#fff;">⏳ รอโอนเพิ่ม</div>
+                </div>`;
+            return el;
+        }
+
+        // 🧾 รายการยอดโอนล่าสุด: แสดงทุกสลิปที่ลูกค้าส่งมา พร้อมผล (ได้กี่ชิ้น / ยอดไม่พอต้องโอนเพิ่มเท่าไหร่)
+        function renderRecent(list) {
+            const box = document.getElementById('recent-box');
+            const wrap = document.getElementById('recent-list');
+            if (!box || !wrap) return;
+            wrap.innerHTML = '';
+            if (!Array.isArray(list) || list.length === 0) { box.style.display = 'none'; return; }
+            box.style.display = 'block';
+            const colors = { ok: '#2e7d32', warn: '#e65100', info: '#1a73e8', bad: '#c62828' };
+            const icons = { ok: '✅', warn: '⚠️', info: 'ℹ️', bad: '❌' };
+            list.forEach(r => {
+                const c = colors[r.tone] || '#555';
+                const el = document.createElement('div');
+                el.className = 'queue-card';
+                el.style.borderLeft = `6px solid ${c}`;
+                if (r.tone === 'warn') el.style.background = 'rgba(255,152,0,0.08)';
+                const amt = r.amount > 0 ? Number(r.amount).toLocaleString('en-US') + ' บาท' : '? บาท';
+                el.innerHTML = `
+                    <div class="queue-info">
+                        <div class="name">👤 <span>${escapeHtml(r.name || 'ลูกค้า')}</span> <span style="font-weight:600;">• โอน ${escapeHtml(amt)}</span></div>
+                        <div style="font-size: 0.9em; color:${c}; margin-top:4px; font-weight:500;">${icons[r.tone] || ''} ${escapeHtml(r.label || '')}</div>
+                        <div style="font-size: 0.8em; color:#777; margin-top:2px;">เวลา ${escapeHtml(r.time || '')}</div>
+                    </div>`;
+                wrap.append(el);
+            });
+        }
+
         // ✅ ฟังก์ชันใหม่: ทำหน้าที่วาดหน้าจอทันทีที่มีข้อมูลเข้ามา
         function renderDashboard(data) {
             updateStatsUI(data.stats);
+            renderRecent(data.recentSlips || []);
             document.getElementById('queue-list').innerHTML = '';
             document.getElementById('active-queue-list').innerHTML = '';
             document.getElementById('skipped-queue-list').innerHTML = '';
@@ -1485,6 +1547,13 @@
             
             if(data.queues.called) data.queues.called.forEach(q => addQueueToScreen(q));
             if(data.queues.waiting) data.queues.waiting.forEach(q => addQueueToScreen(q));
+            // 🟠 แทรกการ์ดสีส้ม (ยอดไม่พอ) เข้าคิวรอตามลำดับเวลาที่ส่งสลิป
+            (data.topups || []).slice().sort((a, b) => a.id - b.id).forEach(t => {
+                const list = document.getElementById('queue-list');
+                const card = buildTopupCard(t);
+                const after = Array.from(list.children).find(c => Number(c.dataset.sort) > t.id);
+                if (after) list.insertBefore(card, after); else list.append(card);
+            });
             if(data.queues.skipped) data.queues.skipped.forEach(q => addQueueToScreen(q));
             if(data.queues.abnormal_pending) data.queues.abnormal_pending.forEach(q => addQueueToScreen(q));
             renumberQueues();
@@ -1534,6 +1603,24 @@
                 lastKnownDateStr = currentDateStr;
             }
         }, 30000);
+
+        // 💬 เสียงเตือนเบาๆ เมื่อมีลูกค้าโอนไม่ครบ (สร้างเสียงเอง ไม่พึ่งอินเทอร์เน็ต)
+        socket.on('topup_needed', () => {
+            try {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                if (!Ctx) return;
+                const ctx = new Ctx();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine'; osc.frequency.value = 660;
+                gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.03);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+                osc.connect(gain); gain.connect(ctx.destination);
+                osc.start(); osc.stop(ctx.currentTime + 0.55);
+                osc.onended = () => { try { ctx.close(); } catch (e) {} };
+            } catch (e) { /* เสียงถูกบล็อกก็ไม่เป็นไร กล่องรายชื่อยังแสดงตามปกติ */ }
+        });
 
         socket.on('play_sound', () => {
             const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');

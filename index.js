@@ -1518,8 +1518,41 @@ function getLocalTimeString() {
     return `${hh}:${mm}:${ss}`;
 }
 
+// v1.0.11: นับจำนวนชิ้นที่ลูกค้าได้ไปแล้ว เพื่อตัดสินว่าจ่ายค่าส่งไปแล้วหรือยัง
+// ระหว่างไลฟ์: นับสลิปของรอบไลฟ์นี้ + สลิปของวันนี้ที่โอนก่อนกดเริ่มไลฟ์ (session_id ว่าง) กันเก็บค่าส่งซ้ำ
+// สลิปของไลฟ์รอบอื่นในวันเดียวกันยังไม่นับ (ลูกค้าเริ่มนับใหม่ในรอบใหม่ เหมือนเดิม) / ไม่ได้ไลฟ์: นับตามวันที่ เหมือนเดิม
+function countPastDraws(lineId, opts = {}) {
+    const today = getTodayString();
+    let sql = 'SELECT COALESCE(SUM(draws), 0) AS n FROM slips WHERE line_id = ?';
+    const params = [lineId];
+    if (opts.excludeRejected) sql += " AND status != 'rejected'";
+    if (opts.excludeId !== undefined && opts.excludeId !== null) { sql += ' AND id != ?'; params.push(opts.excludeId); }
+    if (activeLiveSession) {
+        sql += ' AND (session_id = ? OR (session_id IS NULL AND trans_date = ?))';
+        params.push(activeLiveSession.id, today);
+    } else {
+        sql += ' AND trans_date = ?';
+        params.push(today);
+    }
+    const row = supabase.db.prepare(sql).get(...params);
+    return (row && Number(row.n)) || 0;
+}
+
 const MAX_DP_BUDGET = 500000; // เพดานคำนวณอัตโนมัติ 500,000 บาท (คำนวณในหน่วยความจำ <3MB, เวลา <10ms ป้องกัน Event Loop ค้าง)
-function calculateBestDraws(virtualBalance, pastDraws) {
+// opts.holdExactPrice: ถ้าลูกค้ายังไม่เคยได้ของในรอบนี้ และยอดรวมเท่ากับราคาสินค้าชิ้นใดชิ้นหนึ่งพอดี
+// แปลว่าลูกค้าน่าจะลืมโอนค่าส่ง -> ให้รอค่าส่งก่อน แทนที่จะให้สินค้าชิ้นอื่นที่ราคาถูกกว่า (เช่น โอน 189 ลืมค่าส่ง แต่ระบบให้ 149+ค่าส่ง)
+function calculateBestDraws(virtualBalance, pastDraws, opts = {}) {
+    const best = calculateBestDrawsCore(virtualBalance, pastDraws);
+    if (opts.holdExactPrice && best.draws > 0 && best.appliedShipping && !(pastDraws > 0) && Array.isArray(priceList)) {
+        const exact = priceList.some(p => Math.abs(p.price - virtualBalance) < 0.005);
+        if (exact) {
+            addLog('INFO', `ยอด ${virtualBalance}฿ เท่าราคาสินค้าพอดี ยังไม่ได้ค่าส่ง ${shippingFee}฿ -- พักยอดรอค่าส่ง`);
+            return { draws: 0, remainder: virtualBalance, cost: 0, isFreeShip: false, appliedShipping: false, breakdown: [], heldForShipping: true };
+        }
+    }
+    return best;
+}
+function calculateBestDrawsCore(virtualBalance, pastDraws) {
     let best = { draws: 0, remainder: virtualBalance, cost: 0, isFreeShip: false, appliedShipping: false, breakdown: [] };
     if (!priceList || priceList.length === 0) return best;
 
@@ -1632,6 +1665,31 @@ function calculateBestDraws(virtualBalance, pastDraws) {
     return best;
 }
 
+function describeTopup(balance, pastDraws) {
+    // บอกว่าลูกค้าที่ยอดยังไม่พอ ต้องโอนเพิ่มอีกเท่าไหร่ (ใช้แจ้งแม่ค้าและลูกค้า ไม่ใช้ตัดสินสิทธิ์)
+    if (!priceList || priceList.length === 0) return null;
+    const prices = priceList.map(p => Number(p.price)).filter(p => p > 0);
+    if (prices.length === 0) return null;
+    const minPrice = Math.min(...prices);
+    const hasPaidShipping = (pastDraws > 0 && pastDraws < freeShippingThreshold);
+    const virtual = balance + (hasPaidShipping ? shippingFee : 0);
+    const feeCharged = (pastDraws + 1) < freeShippingThreshold;
+    const held = pastDraws === 0 && feeCharged && prices.some(p => Math.abs(p - virtual) < 0.005);
+    const need = held ? shippingFee : Math.max(0, minPrice + (feeCharged ? shippingFee : 0) - virtual);
+    return { need: Math.round(need * 100) / 100, held, virtual };
+}
+// 💰 ยอดที่ต้องเก็บเข้ากระเป๋าลูกค้าหลังคำนวณสิทธิ์
+// ถ้าได้ชิ้น: ใช้เศษที่คำนวณได้ (รวมการคืนค่าส่งเมื่อครบจำนวนส่งฟรีตามที่ออกแบบไว้)
+// ถ้าไม่ได้ชิ้น: เก็บเฉพาะเงินที่ลูกค้าโอนจริง (กระเป๋าเดิม + สลิปนี้) ห้ามรวมค่าส่งที่บวกเพิ่มชั่วคราวตอนคำนวณ
+// (แก้บั๊ก v1.0.7-v1.0.10: ลูกค้าที่จ่ายค่าส่งไปแล้ว โอนเพิ่มไม่พอซื้อ จะถูกบวกค่าส่งเข้ากระเป๋าเกินจริง)
+function walletAfter(result, currentBalance) {
+    return result.draws > 0 ? result.remainder : currentBalance;
+}
+function fmtBaht(n) {
+    const v = Math.round(Number(n) * 100) / 100;
+    return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
+
 function mergeBreakdowns(breakdownList) {
     let counts = {};
     breakdownList.forEach(bStr => {
@@ -1720,8 +1778,78 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
         queues.called = processGroup(groupMap.called);
         queues.skipped = processGroup(groupMap.skipped);
         queues.abnormal_pending = processGroup(groupMap.abnormal_pending);
+
+        // 📍 ลูกค้าที่เคยโอนไม่ครบ (การ์ดสีส้ม) แล้วโอนเพิ่มจนครบ: ครองตำแหน่งคิวเดิมตามเวลาที่ส่งสลิปใบแรกที่ยังไม่ครบ
+        try {
+            if (dailySlips && dailySlips.length > 0) {
+                const byCustomer = new Map();
+                dailySlips.slice().sort((a, b) => a.id - b.id).forEach(s => {
+                    if (!s.line_id || s.status === 'rejected') return;
+                    if (!byCustomer.has(s.line_id)) byCustomer.set(s.line_id, []);
+                    byCustomer.get(s.line_id).push(s);
+                });
+                const lineIdBySlip = new Map(queueData.map(s => [s.id, s.line_id]));
+                queues.waiting.forEach(q => {
+                    q.sortId = q.id;
+                    if (q.isPendingAmount) return;
+                    const list = byCustomer.get(lineIdBySlip.get(q.id));
+                    if (!list) return;
+                    let idx = list.findIndex(s => s.id === q.id);
+                    while (idx > 0 && list[idx - 1].status === 'accumulated') { idx--; q.sortId = list[idx].id; }
+                });
+                queues.waiting.sort((a, b) => a.sortId - b.sortId);
+            }
+        } catch (e) { /* ลำดับคิวสำรอง: ตามเลขสลิปเดิม */ }
     }
-    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.length }, queues };
+    // 💬 รายชื่อลูกค้าที่ "รอโอนเพิ่ม" (สลิปล่าสุดยังไม่พอ/พักรอค่าส่ง) แสดงให้แม่ค้าเห็นบนหน้าจอหลัก ไม่เข้าคิว ไม่กระทบการนับยอด
+    let topups = [];
+    const topupByCustomer = new Map();
+    try {
+        const isCurrentScope = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
+        if (isCurrentScope && dailySlips && dailySlips.length > 0) {
+            const latestByCustomer = new Map();
+            dailySlips.forEach(s => {
+                if (!s.line_id || s.status === 'rejected') return;
+                const prev = latestByCustomer.get(s.line_id);
+                if (!prev || s.id > prev.id) latestByCustomer.set(s.line_id, s);
+            });
+            latestByCustomer.forEach((s, lineId) => {
+                if (s.status !== 'accumulated') return;
+                const cust = supabase.db.prepare('SELECT balance FROM customers WHERE line_id = ?').get(lineId);
+                if (!cust || !(Number(cust.balance) > 0)) return;
+                const pd = countPastDraws(lineId);
+                const tp = describeTopup(Number(cust.balance), pd);
+                if (tp && tp.need > 0) {
+                    topups.push({ id: s.id, name: s.line_name || s.sender_name || 'ลูกค้า', amount: Number(s.amount) || 0, balance: pd === 0 ? Number(cust.balance) : null, need: tp.need, held: tp.held, time: s.trans_time });
+                    topupByCustomer.set(s.id, tp);
+                }
+            });
+        }
+    } catch (e) { topups = []; topupByCustomer.clear(); }
+
+    // 🧾 รายการยอดโอนล่าสุดของลูกค้าทุกคนที่ส่งสลิปในรอบนี้ (แสดงเสมอ ไม่ว่าเข้าคิวหรือยอดไม่พอ)
+    let recentSlips = [];
+    try {
+        if (dailySlips && dailySlips.length > 0) {
+            recentSlips = dailySlips.slice().sort((a, b) => b.id - a.id).slice(0, 30).map(s => {
+                const isManualImage = s.qr_payload && String(s.qr_payload).startsWith('manual_image');
+                const bd = isManualImage ? (String(s.qr_payload).split('|')[2] || '') : (String(s.qr_payload || '').split('|')[1] || '');
+                let label = ''; let tone = 'ok';
+                if (s.status === 'rejected') { label = 'ปัดตก (ไม่นับยอด)'; tone = 'bad'; }
+                else if (s.status === 'abnormal_pending') { label = 'สลิปผิดปกติ รอตรวจสอบ'; tone = 'info'; }
+                else if (isManualImage && !(Number(s.amount) > 0)) { label = 'รอเช็คสลิปและใส่ยอด'; tone = 'info'; }
+                else if (s.status === 'accumulated') {
+                    const tp = topupByCustomer.get(s.id);
+                    if (tp) { label = tp.held ? `ยอดไม่พอ ยังไม่ได้โอนค่าส่ง ต้องโอนเพิ่มอีก ${fmtBaht(tp.need)} บาท` : `ยอดไม่พอ ต้องโอนเพิ่มอีก ${fmtBaht(tp.need)} บาท`; tone = 'warn'; }
+                    else { label = 'สะสมยอด (ลูกค้าโอนเพิ่มต่อแล้ว)'; tone = 'info'; }
+                }
+                else if (Number(s.draws) > 0) { label = `ได้ ${s.draws} ชิ้น${bd ? ' • ' + bd : ''}`; tone = 'ok'; }
+                else { label = 'ยอดไม่พอ'; tone = 'warn'; }
+                return { id: s.id, name: s.line_name || s.sender_name || 'ลูกค้า', amount: Number(s.amount) || 0, time: s.trans_time, label, tone };
+            });
+        }
+    } catch (e) { recentSlips = []; }
+    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.length }, queues, topups, recentSlips };
 }
 
 let broadcastTimer = null;
@@ -2305,22 +2433,14 @@ app.post('/api/test/simulate_slip', async (req, res) => {
         let currentBalance = (customer ? customer.balance : 0) + amount;
 
         // คำนวณจำนวนชิ้นเดิมที่เคยได้ในรอบนี้ (ผูก session_id กรณีไลฟ์ข้ามเที่ยงคืน)
-        let pastSlipsQuery = supabase.from('slips').select('draws').eq('line_id', fakeUserId);
-        if (activeLiveSession) {
-            pastSlipsQuery = pastSlipsQuery.eq('session_id', activeLiveSession.id);
-        } else {
-            pastSlipsQuery = pastSlipsQuery.eq('trans_date', getTodayString());
-        }
-        const { data: todaySlips } = await pastSlipsQuery;
-        let pastDrawsToday = 0;
-        if (todaySlips) pastDrawsToday = todaySlips.reduce((sum, slip) => sum + (slip.draws || 0), 0);
+        let pastDrawsToday = countPastDraws(fakeUserId);
 
         let hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
         let virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
 
-        let result = calculateBestDraws(virtualBalance, pastDrawsToday);
+        let result = calculateBestDraws(virtualBalance, pastDrawsToday, { holdExactPrice: true });
         let draws = result.draws;
-        let remainingBalance = result.remainder;
+        let remainingBalance = walletAfter(result, currentBalance);
 
         // อัปเดตกระเป๋าเงินลูกค้า
         if (customer) await supabase.from('customers').update({ balance: remainingBalance, name: randomName }).eq('line_id', fakeUserId);
@@ -2333,7 +2453,9 @@ app.post('/api/test/simulate_slip', async (req, res) => {
         const defaultName = priceList.length > 0 ? priceList[0].name : 'สินค้า';
         const neededForOne = minPrice + (pastDrawsToday >= freeShippingThreshold ? 0 : shippingFee);
 
-        if (!breakdownStr && draws === 0) {
+        if (!breakdownStr && draws === 0 && result.heldForShipping) {
+            breakdownStr = `สะสมยอด ${amount}฿ (รอค่าส่ง ${shippingFee}฿)`;
+        } else if (!breakdownStr && draws === 0) {
             const shortAmount = Math.max(0, neededForOne - virtualBalance);
             breakdownStr = `สะสมยอด ${amount}฿ (ขาดอีก ${shortAmount}฿ ถึงจะได้ ${defaultName})`;
         }
@@ -2439,24 +2561,11 @@ app.post('/api/queue/manual_amount', async (req, res) => {
         let { data: customer } = await supabase.from('customers').select('*').eq('line_id', slip.line_id).single();
         let currentBalance = (customer ? customer.balance : 0) + amount; 
 
-        let pastSlipsQuery = supabase.from('slips')
-            .select('draws')
-            .eq('line_id', slip.line_id)
-            .neq('status', 'rejected')
-            .neq('id', slipId);
-
-        if (activeLiveSession) {
-            pastSlipsQuery = pastSlipsQuery.eq('session_id', activeLiveSession.id);
-        } else {
-            pastSlipsQuery = pastSlipsQuery.eq('trans_date', getTodayString());
-        }
-        const { data: todaySlips } = await pastSlipsQuery;
-        
-        let pastDrawsToday = todaySlips ? todaySlips.reduce((sum, s) => sum + (s.draws || 0), 0) : 0;
+        let pastDrawsToday = countPastDraws(slip.line_id, { excludeId: slipId, excludeRejected: true });
         let hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
         let virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
         
-        let result = calculateBestDraws(virtualBalance, pastDrawsToday);
+        let result = calculateBestDraws(virtualBalance, pastDrawsToday, { holdExactPrice: true });
         let breakdownStr = result.breakdown.join(', ');
         
         const parts = (slip.qr_payload || '').split('|');
@@ -2466,14 +2575,15 @@ app.post('/api/queue/manual_amount', async (req, res) => {
             amount: amount, draws: result.draws, qr_payload: payloadRef
         }).eq('id', slipId);
 
+        const finalBalance = walletAfter(result, currentBalance);
         if (customer) {
-            await supabase.from('customers').update({ balance: result.remainder }).eq('line_id', slip.line_id);
+            await supabase.from('customers').update({ balance: finalBalance }).eq('line_id', slip.line_id);
         } else if (slip.line_id) {
-            await supabase.from('customers').insert([{ line_id: slip.line_id, name: slip.line_name || 'ลูกค้า LINE', balance: result.remainder }]);
+            await supabase.from('customers').insert([{ line_id: slip.line_id, name: slip.line_name || 'ลูกค้า LINE', balance: finalBalance }]);
         }
 
         broadcastTodayStats(); 
-        res.json({ success: true, draws: result.draws, remainder: result.remainder });
+        res.json({ success: true, draws: result.draws, remainder: finalBalance });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 
@@ -3407,21 +3517,14 @@ app.post('/webhook', async (req, res) => {
                 let customer = supabase.db.prepare('SELECT * FROM customers WHERE line_id = ?').get(userId);
                 let currentBalance = (customer ? customer.balance : 0) + amount; 
 
-                let pastSlipsRows = [];
-                if (activeLiveSession) {
-                    pastSlipsRows = supabase.db.prepare('SELECT draws FROM slips WHERE line_id = ? AND session_id = ?').all(userId, activeLiveSession.id);
-                } else {
-                    pastSlipsRows = supabase.db.prepare('SELECT draws FROM slips WHERE line_id = ? AND trans_date = ?').all(userId, getTodayString());
-                }
-
-                let pastDrawsToday = pastSlipsRows.reduce((sum, slip) => sum + (slip.draws || 0), 0);
+                let pastDrawsToday = countPastDraws(userId);
 
                 let hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
                 let virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
                 
-                let result = calculateBestDraws(virtualBalance, pastDrawsToday);
+                let result = calculateBestDraws(virtualBalance, pastDrawsToday, { holdExactPrice: true });
                 let draws = result.draws;
-                let remainingBalance = result.remainder;
+                let remainingBalance = walletAfter(result, currentBalance);
 
                 const status = draws > 0 ? 'waiting' : 'accumulated';
                 let breakdownStr = result.breakdown.join(', ');
@@ -3522,7 +3625,20 @@ app.post('/webhook', async (req, res) => {
                         await replyLineMessage(replyToken, replyMsg, userId);
                     } else {
                         broadcastTodayStats(); 
-                        // await replyLineMessage(replyToken, `ผักกาดได้รับยอดแล้วน้าา\n(แต่ยอดรวมตอนนี้ยังไม่พอสำหรับสินค้านะคะ รบกวนโอนเพิ่มอีกนิดนึงน้าา 😉)`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด (ข้อ 4)
+                        // 💬 ยอดยังไม่พอ/พักรอค่าส่ง: แจ้งแม่ค้าบนหน้าจอ (เสียงเตือน + กล่อง "รอโอนเพิ่ม") และตอบลูกค้าให้โอนเพิ่ม (v1.0.11)
+                        try {
+                            const tp = describeTopup(remainingBalance, pastDrawsToday);
+                            if (tp && tp.need > 0) {
+                                io.emit('topup_needed', { name: lineName, need: tp.need, held: tp.held });
+                                addLog('INFO', `ลูกค้า "${lineName}" ยอดยังไม่พอ ต้องโอนเพิ่มอีก ${fmtBaht(tp.need)}฿${tp.held ? ' (ค่าส่ง)' : ''}`);
+                                const topupMsg = tp.held
+                                    ? `ผักกาดได้รับยอด ${fmtBaht(remainingBalance)} บาทแล้วน้าา 💖\nยอดนี้เท่ากับราคาสินค้าพอดี แต่ยังไม่รวมค่าส่ง ${fmtBaht(shippingFee)} บาทนะคะ\nรบกวนโอนค่าส่งเพิ่มอีก ${fmtBaht(tp.need)} บาท ผักกาดจะรีบเข้าคิวให้ค่า 🙏\n(ถ้าต้องการสินค้าชิ้นอื่น พิมพ์บอกผักกาดในแชทนี้ได้เลยน้า)`
+                                    : `ผักกาดได้รับยอดแล้วน้าา 💖\nแต่ตอนนี้ยอดรวม (รวมค่าส่งแล้ว) ยังไม่พอสำหรับสินค้านะคะ\nรบกวนโอนเพิ่มอีก ${fmtBaht(tp.need)} บาท ผักกาดจะรีบเข้าคิวให้ค่า 🙏`;
+                                await replyLineMessage(replyToken, topupMsg, userId);
+                            }
+                        } catch (topupErr) {
+                            addLog('WARN', `แจ้งเตือนรอโอนเพิ่มของ "${lineName}" ไม่สำเร็จ: ${topupErr.message}`);
+                        }
                     }
                 }
             } else {
