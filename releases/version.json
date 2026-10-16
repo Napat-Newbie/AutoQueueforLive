@@ -1,18 +1,12 @@
 {
-  "version": "1.0.9",
+  "version": "1.0.10",
   "releaseDate": "2026-10-16",
-  "title": "AutoQueueforLive v1.0.9",
+  "title": "AutoQueueforLive v1.0.10",
   "changelog": [
-    "เลือกรอบไลฟ์ย้อนหลังในหน้า Export Kerry (30 รอบล่าสุด รวมรอบไลฟ์จากเวอร์ชันเก่า)",
-    "ส่งออก Kerry ดึงเฉพาะที่อยู่ลูกค้าในรอบนั้น",
-    "เตือนเมื่อยังมีคิวค้างตอนจบไลฟ์",
-    "เก็บรูปสลิป 30 วัน",
-    "โปรแกรมหยุดผิดปกติเปิดใหม่อัตโนมัติ",
-    "ฐานข้อมูลไม่ว่างลองบันทึกใหม่เอง",
-    "พื้นที่เครื่องใกล้เต็มลบไฟล์เก่าให้เอง",
-    "บันทึกการใช้งานและรายงานข้อผิดพลาดถึงผู้พัฒนา"
+    "ผู้พัฒนาเข้าสู่ระบบเครื่องร้านได้อีกครั้ง",
+    "ปุ่มอัปเดตดาวน์โหลดไฟล์จาก GitHub ได้หลัง GitHub เปลี่ยนที่เก็บไฟล์"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/31d5a001ca9ebb07cf2a02a4b94962a4a472d679/releases/update_v1.0.9.zip",
-  "fileSizeKB": 373.1,
-  "sha256": "c6987d27344076cde9ec6273b5ca3845bd91f9bd7ebecf463b00fd436c4d461a"
+  "downloadUrl": "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/dac0e818afbb39d25aec0a516bd3921c215802c6/releases/update_v1.0.10.zip",
+  "fileSizeKB": 373.6,
+  "sha256": "b77b9f1c489f5195774d2356f0b4458b3a4837d6165ac5f261b8a21dd1cc215e"
 }
