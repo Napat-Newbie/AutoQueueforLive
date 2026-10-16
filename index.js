@@ -1807,20 +1807,25 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
     try {
         const isCurrentScope = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
         if (isCurrentScope && dailySlips && dailySlips.length > 0) {
-            const latestByCustomer = new Map();
-            dailySlips.forEach(s => {
+            const sortedAsc = dailySlips.slice().sort((a, b) => a.id - b.id);
+            const listByCustomer = new Map();
+            sortedAsc.forEach(s => {
                 if (!s.line_id || s.status === 'rejected') return;
-                const prev = latestByCustomer.get(s.line_id);
-                if (!prev || s.id > prev.id) latestByCustomer.set(s.line_id, s);
+                if (!listByCustomer.has(s.line_id)) listByCustomer.set(s.line_id, []);
+                listByCustomer.get(s.line_id).push(s);
             });
-            latestByCustomer.forEach((s, lineId) => {
+            listByCustomer.forEach((list, lineId) => {
+                const s = list[list.length - 1];
                 if (s.status !== 'accumulated') return;
+                // ตำแหน่งในคิว = สลิปแรกของช่วงที่ยังไม่ครบ (ตรงกับตอนโอนครบแล้วครองตำแหน่งเดิม)
+                let startIdx = list.length - 1;
+                while (startIdx > 0 && list[startIdx - 1].status === 'accumulated') startIdx--;
                 const cust = supabase.db.prepare('SELECT balance FROM customers WHERE line_id = ?').get(lineId);
                 if (!cust || !(Number(cust.balance) > 0)) return;
                 const pd = countPastDraws(lineId);
                 const tp = describeTopup(Number(cust.balance), pd);
                 if (tp && tp.need > 0) {
-                    topups.push({ id: s.id, name: s.line_name || s.sender_name || 'ลูกค้า', amount: Number(s.amount) || 0, balance: pd === 0 ? Number(cust.balance) : null, need: tp.need, held: tp.held, time: s.trans_time });
+                    topups.push({ id: list[startIdx].id, name: s.line_name || s.sender_name || 'ลูกค้า', amount: Number(s.amount) || 0, balance: pd === 0 ? Number(cust.balance) : null, need: tp.need, held: tp.held, time: s.trans_time });
                     topupByCustomer.set(s.id, tp);
                 }
             });
@@ -2572,7 +2577,9 @@ app.post('/api/queue/manual_amount', async (req, res) => {
         const payloadRef = `manual_image|${parts[1] || ''}|${breakdownStr}`; 
 
         await supabase.from('slips').update({
-            amount: amount, draws: result.draws, qr_payload: payloadRef
+            amount: amount, draws: result.draws, qr_payload: payloadRef,
+            // ยอดที่แม่ค้าใส่เองยังไม่พอ -> เป็น "สะสมยอด" (การ์ดสีส้ม) ไม่ใช่การ์ดคิวปกติที่ไม่มีชิ้น
+            status: result.draws > 0 ? slip.status : 'accumulated'
         }).eq('id', slipId);
 
         const finalBalance = walletAfter(result, currentBalance);

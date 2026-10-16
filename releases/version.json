@@ -9,9 +9,10 @@
                       "หน้าหลักแสดงยอดโอนล่าสุด 30 รายการ",
                       "ลูกค้าที่โอนก่อนกดเริ่มไลฟ์ไม่ถูกเก็บค่าส่งซ้ำ",
                       "โอนเท่าราคาสินค้าพอดีแต่ลืมค่าส่ง ระบบรอค่าส่ง",
-                      "ยอดในกระเป๋าลูกค้าไม่ถูกบวกค่าส่งเกินจริง"
+                      "ยอดในกระเป๋าลูกค้าไม่ถูกบวกค่าส่งเกินจริง",
+                      "แม่ค้าใส่ยอดเองจากรูปสลิปแล้วยอดยังไม่พอ ขึ้นการ์ดสีส้มรอโอนเพิ่ม"
                   ],
-    "downloadUrl":  "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/b8654be7b57f9669db49480be317f270be469478/releases/update_v1.0.11.zip",
-    "fileSizeKB":  378.2,
-    "sha256":  "7b3717736df1f6e8755ad2f8e67d03c6d68056f3522074d4c23a9166e6307ce5"
+    "downloadUrl":  "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/ed4d6148ffa10fb19e78c0bb4a46f8020b69aff9/releases/update_v1.0.11.zip",
+    "fileSizeKB":  378.5,
+    "sha256":  "7c88f7bd981c34f3fe3827a2d68f9f71af46b39f8b014fd0ab3aced30ad2f318"
 }
