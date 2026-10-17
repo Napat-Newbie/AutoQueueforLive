@@ -1207,10 +1207,15 @@ app.post('/api/auth/login', async (req, res) => {
     // 1. เช็คสิทธิ์ Dreamdev (Master Developer) - ไม่ใช้ Hardcoded fallback
     let isDreamdevMatch = false;
     const isDreamdevUser = (username === DREAMDEV_USERNAME);
-    if (DREAMDEV_PASSWORD_HASH && isDreamdevUser) {
-        isDreamdevMatch = verifyPassword(password, DREAMDEV_PASSWORD_HASH);
-    } else if (DREAMDEV_PASSWORD && isDreamdevUser) {
-        isDreamdevMatch = verifyPassword(password, DREAMDEV_PASSWORD);
+    // v1.0.12: หน้าต่างล็อกอินเป็นแบบเดียวกับแม่ค้า (ไม่มีช่องชื่อผู้ใช้) จึงยอมให้ "ไม่ระบุชื่อผู้ใช้" แล้วรหัสตรงกับรหัส Dev ก็เข้าเป็น Dev ได้
+    // ถ้ารหัสไม่ตรง ให้ไหลต่อไปตรวจเป็นรหัสแม่ค้าตามเดิม (ไม่เปลี่ยนพฤติกรรมของแม่ค้า)
+    const noUsername = (typeof username !== 'string' || username.trim() === '');
+    if (isDreamdevUser || noUsername) {
+        if (DREAMDEV_PASSWORD_HASH) {
+            isDreamdevMatch = verifyPassword(password, DREAMDEV_PASSWORD_HASH);
+        } else if (DREAMDEV_PASSWORD) {
+            isDreamdevMatch = verifyPassword(password, DREAMDEV_PASSWORD);
+        }
     }
 
     if (isDreamdevMatch) {
