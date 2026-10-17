@@ -1,11 +1,13 @@
 {
-  "version": "1.0.12",
+  "version": "1.0.13",
   "releaseDate": "2026-10-17",
-  "title": "AutoQueueforLive v1.0.12",
+  "title": "AutoQueueforLive v1.0.13",
   "changelog": [
-    "ปรับปรุงระบบเข้าสู่ระบบหน้าตั้งค่า ให้ใช้หน้าต่างล็อกอินเดียวกันได้ทุกสิทธิ์ (วิธีใช้งานของแม่ค้าไม่เปลี่ยน)"
+    "การ์ดสีส้ม (รอลูกค้าโอนเพิ่ม) มีปุ่ม \"ลบ\" ลบออกจากหน้าจอได้ทีละใบ ยอดโอนรวมไม่เปลี่ยน",
+    "กด \"เริ่มไลฟ์\" รอบใหม่ ระบบรีเซ็ตเงินค้างของลูกค้าทุกคนเป็น 0 (ไฟล์สำรองยังเก็บยอดเดิมไว้)",
+    "เตือนก่อนเริ่มไลฟ์ ถ้ายังมีลูกค้าที่มีเงินค้าง แสดงรายชื่อและยอดให้ยืนยันก่อน"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/9be244c35fa5bcf0f3354d9e6c1241127cdb574a/releases/update_v1.0.12.zip",
-  "fileSizeKB": 378.8,
-  "sha256": "3922efaed240be1001ab3b4be5b6818838bd535a09b035c12c5b89d66017439e"
+  "downloadUrl": "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/184be994c6cc68c761c892898cd2d95cdc84dd6f/releases/update_v1.0.13.zip",
+  "fileSizeKB": 380.6,
+  "sha256": "fc8f08b66190f2c8f38d2eca605d8925a5dab4e03b11da70b617ad6f532d7848"
 }
