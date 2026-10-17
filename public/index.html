@@ -1505,7 +1505,16 @@
                 </div>
                 <div class="queue-actions">
                     <div class="draws-badge" style="background-color:#ff9800; color:#fff;">⏳ รอโอนเพิ่ม</div>
+                    <button type="button" class="btn-danger-outline topup-dismiss-btn" title="ลบการ์ดนี้ออกจากหน้าจอ (ยอดรวมไม่เปลี่ยน)">🗑️ ลบ</button>
                 </div>`;
+            const dismissBtn = el.querySelector('.topup-dismiss-btn');
+            if (dismissBtn) {
+                dismissBtn.addEventListener('click', () => {
+                    openModal('🗑️', `ลบการ์ดรอโอนเพิ่มของ "${t.name || 'ลูกค้า'}" ?\n(ลบออกจากหน้าจอเท่านั้น ยอดโอนรวมไม่เปลี่ยน ถ้าลูกค้าโอนเพิ่มภายหลัง ระบบจะคิดยอดเดิมรวมให้)`, () => {
+                        notifyIfActionFailed(fetch('/api/queue/dismiss_topup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: t.id }) }));
+                    });
+                });
+            }
             return el;
         }
 
@@ -2283,7 +2292,25 @@
             });
         }
 
+        // v1.0.13: เริ่มไลฟ์ใหม่จะรีเซ็ตเงินค้างของลูกค้าทุกคน จึงเตือนแม่ค้าก่อนถ้ายังมีเงินค้าง
         function proceedStartLive() {
+            fetch('/api/queue/pending_balances')
+                .then(res => res.ok ? res.json() : null)
+                .catch(() => null)
+                .then(d => {
+                    if (d && d.success && d.count > 0) {
+                        const lines = (d.list || []).map(c => `• ${c.name}: ${Number(c.balance).toLocaleString('en-US')} บาท`);
+                        if (d.count > lines.length) lines.push(`• และอีก ${d.count - lines.length} คน`);
+                        const msg = `[เตือนก่อนเริ่มไลฟ์] ยังมีเงินค้างของลูกค้า ${d.count} คน รวม ${Number(d.total).toLocaleString('en-US')} บาท\n${lines.join('\n')}\n\nถ้ากดเริ่มไลฟ์ ยอดเหล่านี้จะถูกรีเซ็ตเป็น 0 ลูกค้าต้องโอนใหม่ทั้งหมด (ควรโอนคืนหรือแจ้งลูกค้าก่อน)\n\nยืนยันเริ่มไลฟ์และรีเซ็ตยอดเหล่านี้?`;
+                        // เปิดหน้าต่างใหม่หลังหน้าต่างเดิมปิดแล้ว (ไม่งั้นถูกปิดตามไปด้วย)
+                        setTimeout(() => openModal('⚠️', msg, () => doStartLive()), 0);
+                    } else {
+                        doStartLive();
+                    }
+                });
+        }
+
+        function doStartLive() {
             fetch('/api/live_session/start', { method: 'POST' })
                 .then(res => res.json())
                 .then(data => {

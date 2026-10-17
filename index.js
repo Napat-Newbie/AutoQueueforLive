@@ -845,6 +845,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const ACTION_LOG_LABELS = {
     'POST /api/queue/action': (b) => ({ called: 'เรียกคิว', skipped: 'ข้ามคิว', completed: 'จบคิว', cancelled: 'ยกเลิกคิว' }[b && b.action] || `จัดการคิว (${(b && b.action) || '-'})`) + ` ${Array.isArray(b && b.slipIds) ? b.slipIds.length : 0} สลิป`,
     'POST /api/queue/clear': () => 'ล้างคิว',
+    'POST /api/queue/dismiss_topup': () => 'ลบการ์ดรอโอนเพิ่ม',
     'POST /api/live_session/start': () => 'กดเริ่มไลฟ์',
     'POST /api/live_session/end': () => 'กดจบไลฟ์',
     'POST /api/queue/manual_amount': (b) => `ใส่ยอดสลิปเอง${b && b.amount !== undefined ? ` ${Number(b.amount) || 0} บาท` : ''}`,
@@ -1853,6 +1854,7 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
                     if (tp) { label = tp.held ? `ยอดไม่พอ ยังไม่ได้โอนค่าส่ง ต้องโอนเพิ่มอีก ${fmtBaht(tp.need)} บาท` : `ยอดไม่พอ ต้องโอนเพิ่มอีก ${fmtBaht(tp.need)} บาท`; tone = 'warn'; }
                     else { label = 'สะสมยอด (ลูกค้าโอนเพิ่มต่อแล้ว)'; tone = 'info'; }
                 }
+                else if (s.status === 'cleared' && !(Number(s.draws) > 0)) { label = 'แม่ค้าลบออกจากรายการรอโอนเพิ่มแล้ว'; tone = 'info'; }
                 else if (Number(s.draws) > 0) { label = `ได้ ${s.draws} ชิ้น${bd ? ' • ' + bd : ''}`; tone = 'ok'; }
                 else { label = 'ยอดไม่พอ'; tone = 'warn'; }
                 return { id: s.id, name: s.line_name || s.sender_name || 'ลูกค้า', amount: Number(s.amount) || 0, time: s.trans_time, label, tone };
@@ -1976,6 +1978,42 @@ app.post('/api/queue/clear', async (req, res) => {
     broadcastTodayStats(); res.json({ success: true });
 });
 
+// ⚠️ ลูกค้าที่ยังมีเงินค้างในกระเป๋า (ใช้เตือนแม่ค้าก่อนกดเริ่มไลฟ์ เพราะเริ่มไลฟ์ใหม่จะรีเซ็ตยอดเหล่านี้เป็น 0)
+app.get('/api/queue/pending_balances', (req, res) => {
+    try {
+        const rows = supabase.db.prepare('SELECT name, line_id, balance FROM customers WHERE balance > 0 ORDER BY balance DESC, name ASC').all();
+        const total = rows.reduce((sum, c) => sum + (Number(c.balance) || 0), 0);
+        res.json({
+            success: true,
+            count: rows.length,
+            total,
+            list: rows.slice(0, 8).map(c => ({ name: c.name || c.line_id || 'ลูกค้า', balance: Number(c.balance) || 0 }))
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 🟠 ลบการ์ดสีส้ม (รอลูกค้าโอนเพิ่ม) ของลูกค้า 1 คนในรอบปัจจุบัน: ซ่อนการ์ดเท่านั้น ไม่แตะยอดสลิป/ยอดรวม และไม่แตะเงินในกระเป๋าลูกค้า
+app.post('/api/queue/dismiss_topup', async (req, res) => {
+    try {
+        const id = Number(req.body && req.body.id);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ success: false, message: 'รหัสการ์ดไม่ถูกต้อง' });
+        const slip = supabase.db.prepare('SELECT line_id FROM slips WHERE id = ?').get(id);
+        if (!slip || !slip.line_id) return res.status(404).json({ success: false, message: 'ไม่พบการ์ดนี้' });
+        // ขอบเขตเดียวกับที่หน้าจอใช้แสดงการ์ด: รอบไลฟ์ที่กำลังไลฟ์ หรือวันนี้ถ้าไม่ได้ไลฟ์
+        let sql = "UPDATE slips SET status = 'cleared' WHERE line_id = ? AND status = 'accumulated'";
+        const params = [slip.line_id];
+        if (activeLiveSession) { sql += ' AND session_id = ?'; params.push(activeLiveSession.id); }
+        else { sql += ' AND trans_date = ?'; params.push(getTodayString()); }
+        const r = supabase.db.prepare(sql).run(...params);
+        await broadcastTodayStats();
+        res.json({ success: true, cleared: r.changes });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 // 🔴 LIVE SESSION API -----------------------------------------
 app.get('/api/live_session/current', (req, res) => {
     res.json({ success: true, session: activeLiveSession });
@@ -1996,11 +2034,26 @@ app.post('/api/live_session/start', async (req, res) => {
         await supabase.from('configs').upsert([{ key: 'active_live_session', value: JSON.stringify(newSession) }]);
         
         // 💾 สำรองฐานข้อมูล SQLite อัตโนมัติก่อนเริ่มไลฟ์ ด้วย Online Backup API (รองรับ WAL ครบถ้วน 100%)
+        // v1.0.13: รอให้สำรองเสร็จก่อน แล้วค่อยรีเซ็ตยอดสะสมลูกค้า เพื่อให้ไฟล์สำรองยังมียอดเดิมไว้ย้อนดูได้
         if (typeof supabase.performBackup === 'function') {
-            supabase.performBackup('data_backup_live').then(r => {
+            try {
+                const r = await supabase.performBackup('data_backup_live');
                 if (r && r.success) addLog('INFO', `สำรองฐานข้อมูลก่อนเริ่มไลฟ์สดเรียบร้อย: ${path.basename(r.file)}`);
                 else if (r && r.error) addLog('ERROR', `สำรองฐานข้อมูลก่อนเริ่มไลฟ์ล้มเหลว: ${r.error}`);
-            }).catch(bkErr => console.error('Auto Backup Error:', bkErr.message));
+            } catch (bkErr) { console.error('Auto Backup Error:', bkErr.message); }
+        }
+
+        // 🔄 v1.0.13: เริ่มไลฟ์รอบใหม่ = รีเซ็ตยอดโอนสะสม (เศษเงินในกระเป๋า) ของลูกค้าทุกคนเป็น 0
+        try {
+            const owed = supabase.db.prepare('SELECT name, line_id, balance FROM customers WHERE balance != 0').all();
+            if (owed.length > 0) {
+                supabase.db.prepare('UPDATE customers SET balance = 0 WHERE balance != 0').run();
+                const total = owed.reduce((sum, c) => sum + (Number(c.balance) || 0), 0);
+                const detail = owed.slice(0, 20).map(c => `${c.name || c.line_id}: ${c.balance}฿`).join(', ');
+                addLog('INFO', `เริ่มไลฟ์รอบใหม่: รีเซ็ตยอดสะสมของลูกค้า ${owed.length} คน รวม ${total} บาท (${detail}${owed.length > 20 ? ', ...' : ''})`);
+            }
+        } catch (resetErr) {
+            addLog('ERROR', `รีเซ็ตยอดสะสมลูกค้าตอนเริ่มไลฟ์ไม่สำเร็จ: ${resetErr.message}`);
         }
 
         // บันทึกลง live_sessions history ใน config ด้วย
