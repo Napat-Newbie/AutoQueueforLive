@@ -1,18 +1,11 @@
 {
-    "version":  "1.0.11",
-    "releaseDate":  "2026-10-17",
-    "title":  "AutoQueueforLive v1.0.11",
-    "changelog":  [
-                      "ลูกค้าโอนยอดไม่พอ ขึ้นการ์ดสีส้มในคิวรอ บอกว่าลืมค่าส่งหรือโอนไม่ครบ และยอดที่ต้องโอนเพิ่ม",
-                      "ลูกค้าโอนเพิ่มจนครบ การ์ดเปลี่ยนเป็นคิวปกติในตำแหน่งเดิม",
-                      "บอทแจ้งลูกค้าใน LINE เมื่อยอดยังไม่พอ",
-                      "หน้าหลักแสดงยอดโอนล่าสุด 30 รายการ",
-                      "ลูกค้าที่โอนก่อนกดเริ่มไลฟ์ไม่ถูกเก็บค่าส่งซ้ำ",
-                      "โอนเท่าราคาสินค้าพอดีแต่ลืมค่าส่ง ระบบรอค่าส่ง",
-                      "ยอดในกระเป๋าลูกค้าไม่ถูกบวกค่าส่งเกินจริง",
-                      "แม่ค้าใส่ยอดเองจากรูปสลิปแล้วยอดยังไม่พอ ขึ้นการ์ดสีส้มรอโอนเพิ่ม"
-                  ],
-    "downloadUrl":  "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/ed4d6148ffa10fb19e78c0bb4a46f8020b69aff9/releases/update_v1.0.11.zip",
-    "fileSizeKB":  378.5,
-    "sha256":  "7c88f7bd981c34f3fe3827a2d68f9f71af46b39f8b014fd0ab3aced30ad2f318"
+  "version": "1.0.12",
+  "releaseDate": "2026-10-17",
+  "title": "AutoQueueforLive v1.0.12",
+  "changelog": [
+    "ปรับปรุงระบบเข้าสู่ระบบหน้าตั้งค่า ให้ใช้หน้าต่างล็อกอินเดียวกันได้ทุกสิทธิ์ (วิธีใช้งานของแม่ค้าไม่เปลี่ยน)"
+  ],
+  "downloadUrl": "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/9be244c35fa5bcf0f3354d9e6c1241127cdb574a/releases/update_v1.0.12.zip",
+  "fileSizeKB": 378.8,
+  "sha256": "3922efaed240be1001ab3b4be5b6818838bd535a09b035c12c5b89d66017439e"
 }
