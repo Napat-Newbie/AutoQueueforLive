@@ -336,6 +336,9 @@ function assessErrorForDevReport(category, text) {
         { test: /system_crash|uncaught|unhandled|เก็บสลิปสำรองไม่สำเร็จ/, severity: 'CRITICAL',
           cause: 'โค้ดเกิดข้อผิดพลาดที่ไม่มีการดักไว้ หรือสลิปของลูกค้าอาจตกหล่น',
           fix: 'ดู Stack ใน "บันทึกระบบ" ของร้าน หาบรรทัดที่พัง เพิ่มการตรวจค่าว่าง/try-catch ตรงจุดนั้น แล้วเขียนทดสอบกรณีนี้ก่อนออกเวอร์ชันถัดไป' },
+        { test: /เน็ตสะดุด|etimedout|econnreset|econnaborted|enotfound|eai_again|socket hang up/, severity: 'HIGH',
+          cause: 'อินเทอร์เน็ตของร้านสะดุด หรือเชื่อมต่อเซิร์ฟเวอร์ LINE ไม่ได้ชั่วคราว (ไม่ใช่ปัญหา Token หรือโควตา)',
+          fix: 'ระบบลองดาวน์โหลดซ้ำอัตโนมัติแล้วแต่ยังไม่สำเร็จ ให้ตรวจเน็ตร้าน/เราเตอร์ในช่วงเวลานั้น และให้แม่ค้าเปิดดูรูปสลิปของลูกค้าในแชท LINE OA แล้วใส่ยอดเอง' },
         { test: /บันทึกสลิปอัตโนมัติ|sqlite|database|ฐานข้อมูล/, severity: 'HIGH',
           cause: 'ฐานข้อมูลบันทึกไม่สำเร็จ (ไฟล์ถูกล็อก ดิสก์เต็ม หรือข้อมูลผิดรูปแบบ)',
           fix: 'ตรวจพื้นที่ดิสก์และขนาดไฟล์ WAL ของร้าน ถ้าเกิดซ้ำให้ลดงานเขียนพร้อมกัน หรือย้ายงานเขียนเข้าคิวเดียว' },
@@ -846,6 +849,7 @@ const ACTION_LOG_LABELS = {
     'POST /api/queue/action': (b) => ({ called: 'เรียกคิว', skipped: 'ข้ามคิว', completed: 'จบคิว', cancelled: 'ยกเลิกคิว' }[b && b.action] || `จัดการคิว (${(b && b.action) || '-'})`) + ` ${Array.isArray(b && b.slipIds) ? b.slipIds.length : 0} สลิป`,
     'POST /api/queue/clear': () => 'ล้างคิว',
     'POST /api/queue/dismiss_topup': () => 'ลบการ์ดรอโอนเพิ่ม',
+    'POST /api/queue/dismiss_image_fail': () => 'รับทราบการ์ดโหลดรูปสลิปไม่สำเร็จ',
     'POST /api/live_session/start': () => 'กดเริ่มไลฟ์',
     'POST /api/live_session/end': () => 'กดจบไลฟ์',
     'POST /api/queue/manual_amount': (b) => `ใส่ยอดสลิปเอง${b && b.amount !== undefined ? ` ${Number(b.amount) || 0} บาท` : ''}`,
@@ -1861,7 +1865,12 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
             });
         }
     } catch (e) { recentSlips = []; }
-    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.length }, queues, topups, recentSlips };
+    let imageFails = [];
+    try {
+        const scopeIsCurrent = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
+        if (scopeIsCurrent) imageFails = currentLineImageFailures();
+    } catch (e) { imageFails = []; }
+    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.length }, queues, topups, recentSlips, imageFails };
 }
 
 let broadcastTimer = null;
@@ -2009,6 +2018,21 @@ app.post('/api/queue/dismiss_topup', async (req, res) => {
         const r = supabase.db.prepare(sql).run(...params);
         await broadcastTodayStats();
         res.json({ success: true, cleared: r.changes });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 🔴 แม่ค้ากดรับทราบการ์ดแดง "โหลดรูปสลิปไม่สำเร็จ": ซ่อนการ์ดเท่านั้น ไม่แตะสลิป ยอด หรือเงินกระเป๋าลูกค้า
+app.post('/api/queue/dismiss_image_fail', async (req, res) => {
+    try {
+        const id = Number(req.body && req.body.id);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ success: false, message: 'รหัสการ์ดไม่ถูกต้อง' });
+        const before = lineImageFailures.length;
+        lineImageFailures = lineImageFailures.filter(f => f.id !== id);
+        if (lineImageFailures.length === before) return res.status(404).json({ success: false, message: 'ไม่พบการ์ดนี้' });
+        await broadcastTodayStats();
+        res.json({ success: true });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -2732,14 +2756,56 @@ async function replyLineMessage(replyToken, text, userId = null) {
     }
 }
 
-async function downloadImageFromLine(messageId) {
-    try { 
-        const res = await axios({ method: 'get', url: `https://api-data.line.me/v2/bot/message/${messageId}/content`, headers: { 'Authorization': `Bearer ${process.env.LINE_ACCESS_TOKEN}` }, responseType: 'arraybuffer' }); 
-        return res.data; 
-    } catch (error) { 
-        addLog('ERROR', `ดาวน์โหลดรูปภาพสลิปจาก LINE ไม่สำเร็จ (Message ID: ${messageId})`, error.response?.data?.message || error.message);
-        return null; 
+// 🔁 ดาวน์โหลดรูปสลิปจาก LINE: ลองซ้ำอัตโนมัติเมื่อเน็ตสะดุด (หมดเวลา/เชื่อมต่อหลุด/LINE ตอบ 5xx/429)
+// ไม่ลองซ้ำเมื่อเป็นความผิดถาวร (4xx เช่น Token ผิด หรือรูปหมดอายุ) เพราะลองกี่ครั้งก็ไม่หาย
+const LINE_IMG_ATTEMPTS = 3;
+const LINE_IMG_TIMEOUT_MS = 10000;
+const LINE_IMG_RETRY_DELAYS_MS = [1000, 2000];
+function isRetryableLineError(error) {
+    if (!error) return false;
+    if (error.response) {
+        const st = Number(error.response.status);
+        return st >= 500 || st === 429;
     }
+    return true; // ไม่มีคำตอบจาก LINE เลย = ปัญหาเครือข่าย (ETIMEDOUT, ECONNRESET, ENOTFOUND, ฯลฯ)
+}
+async function downloadImageFromLine(messageId, opts = {}) {
+    const attempts = opts.attempts || LINE_IMG_ATTEMPTS;
+    const delays = opts.delays || LINE_IMG_RETRY_DELAYS_MS;
+    const timeout = opts.timeout || LINE_IMG_TIMEOUT_MS;
+    const http = opts.http || axios;
+    let lastError = null;
+    for (let i = 1; i <= attempts; i++) {
+        try {
+            const res = await http({ method: 'get', url: `https://api-data.line.me/v2/bot/message/${messageId}/content`, headers: { 'Authorization': `Bearer ${process.env.LINE_ACCESS_TOKEN}` }, responseType: 'arraybuffer', timeout });
+            if (i > 1) addLog('INFO', `ดาวน์โหลดรูปสลิปจาก LINE สำเร็จหลังลองซ้ำ (ครั้งที่ ${i}) Message ID: ${messageId}`);
+            return res.data;
+        } catch (error) {
+            lastError = error;
+            if (!isRetryableLineError(error) || i >= attempts) break;
+            await new Promise(r => setTimeout(r, delays[Math.min(i - 1, delays.length - 1)] || 1000));
+        }
+    }
+    const networkFail = lastError && !lastError.response;
+    const reason = networkFail ? ` (เน็ตสะดุด ลองแล้ว ${attempts} ครั้ง)` : '';
+    addLog('ERROR', `ดาวน์โหลดรูปภาพสลิปจาก LINE ไม่สำเร็จ${reason} (Message ID: ${messageId})`, lastError?.response?.data?.message || lastError?.message);
+    return null;
+}
+
+// 🔴 รูปสลิปที่โหลดจาก LINE ไม่สำเร็จ (เก็บในหน่วยความจำ แสดงเป็นการ์ดสีแดงให้แม่ค้ารับทราบ ไม่แตะยอด/สลิป/ฐานข้อมูล)
+let lineImageFailures = [];
+let lineImageFailSeq = 0;
+function recordLineImageFailure(name, messageId) {
+    const item = { id: ++lineImageFailSeq, name: name || 'ลูกค้า (ไม่ทราบชื่อ)', messageId, time: new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Bangkok', hour12: false }), sid: activeLiveSession ? activeLiveSession.id : null, date: getTodayString() };
+    lineImageFailures.push(item);
+    if (lineImageFailures.length > 50) lineImageFailures.shift();
+    return item;
+}
+function currentLineImageFailures() {
+    const today = getTodayString();
+    return lineImageFailures
+        .filter(f => activeLiveSession ? f.sid === activeLiveSession.id : (!f.sid && f.date === today))
+        .map(f => ({ id: f.id, name: f.name, time: f.time }));
 }
 
 // ⚡ ระบบติดตามและตรวจสอบโควตาเครดิต API ตรวจสลิป (ป้องกัน Risk 2)
@@ -3525,8 +3591,17 @@ app.post('/webhook', async (req, res) => {
             const imageBuffer = await downloadImageFromLine(messageId);
             if (!imageBuffer) {
                 // 🛡️ อย่าทิ้งเงียบ: บันทึก Log ให้แม่ค้า/แอดมินรู้ว่ามีลูกค้าส่งรูปมาแต่ดาวน์โหลดจาก LINE ไม่สำเร็จ
-                const failName = await getLineProfile(userId).catch(() => '') || userId;
+                const failName = await Promise.race([
+                    getLineProfile(userId).catch(() => ''),
+                    new Promise(r => setTimeout(() => r(''), 5000))
+                ]) || userId;
                 addLog('WARN', `ดาวน์โหลดรูปจาก LINE ไม่สำเร็จ (ลูกค้า "${failName}") กรุณาตรวจสอบสลิปในแชท LINE OA ด้วยตนเอง`);
+                // 🔴 แสดงการ์ดสีแดงบนหน้าจอหลัก + เสียงเตือน ให้แม่ค้ารู้ทันทีระหว่างไลฟ์ (ไม่ต้องเปิดหน้าบันทึกระบบ)
+                try {
+                    recordLineImageFailure(failName === userId || failName === 'ไม่ทราบชื่อ LINE' ? null : failName, messageId);
+                    io.emit('image_failed');
+                    await broadcastTodayStats();
+                } catch (notifyErr) { /* การแจ้งเตือนหน้าจอล้มเหลวต้องไม่ทำให้ Webhook พัง */ }
                 continue;
             }
 

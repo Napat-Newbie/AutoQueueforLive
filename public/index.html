@@ -566,6 +566,9 @@
             </div>
         </div>
 
+        <!-- 🔴 รูปสลิปที่โหลดจาก LINE ไม่สำเร็จ (เน็ตสะดุด) ต้องให้แม่ค้าเช็กในแชท LINE OA เอง -->
+        <div id="imgfail-box" style="display:none; margin-bottom: 20px;"></div>
+
         <!-- 🎮 กระดานคิวหลัก -->
         <div class="queue-header" style="border-left: 6px solid #1a73e8; padding-left: 10px; margin-top: 0;">
             <h2 style="color: #1a73e8; margin: 0;">🎮 คิวที่กำลังเล่นกิจกรรม (Active)</h2>
@@ -1518,6 +1521,35 @@
             return el;
         }
 
+        // 🔴 การ์ดแดง: รูปสลิปโหลดจาก LINE ไม่สำเร็จ แม่ค้าต้องเปิดดูรูปในแชท LINE OA แล้วใส่ยอด/แทรกคิวเอง
+        function renderImageFails(list) {
+            const box = document.getElementById('imgfail-box');
+            if (!box) return;
+            box.innerHTML = '';
+            if (!Array.isArray(list) || list.length === 0) { box.style.display = 'none'; return; }
+            box.style.display = 'block';
+            list.forEach(f => {
+                const el = document.createElement('div');
+                el.className = 'queue-card';
+                el.style.borderLeft = '6px solid #c62828';
+                el.style.background = 'rgba(198,40,40,0.08)';
+                el.innerHTML = `
+                    <div class="queue-number" style="color:#c62828;">❗</div>
+                    <div class="queue-info">
+                        <div class="name">👤 <span>${escapeHtml(f.name || 'ลูกค้า')}</span></div>
+                        <div style="font-size: 0.95em; color:#c62828; margin-top:6px; font-weight:600;">❌ โหลดรูปสลิปไม่สำเร็จ (เน็ตสะดุด) เวลา ${escapeHtml(f.time || '')}</div>
+                        <div style="font-size: 0.85em; color:#777; margin-top:3px;">สลิปนี้ยังไม่เข้าคิวและยังไม่นับยอด กรุณาเปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง หรือบอกลูกค้าให้ส่งรูปใหม่</div>
+                    </div>
+                    <div class="queue-actions">
+                        <button type="button" class="btn-danger-outline imgfail-ack-btn" title="ซ่อนการ์ดนี้ (ไม่กระทบยอดหรือสลิปใดๆ)">✔ รับทราบ</button>
+                    </div>`;
+                el.querySelector('.imgfail-ack-btn').addEventListener('click', () => {
+                    notifyIfActionFailed(fetch('/api/queue/dismiss_image_fail', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: f.id }) }));
+                });
+                box.append(el);
+            });
+        }
+
         // 🧾 รายการยอดโอนล่าสุด: แสดงทุกสลิปที่ลูกค้าส่งมา พร้อมผล (ได้กี่ชิ้น / ยอดไม่พอต้องโอนเพิ่มเท่าไหร่)
         function renderRecent(list) {
             const box = document.getElementById('recent-box');
@@ -1549,6 +1581,7 @@
         function renderDashboard(data) {
             updateStatsUI(data.stats);
             renderRecent(data.recentSlips || []);
+            renderImageFails(data.imageFails || []);
             document.getElementById('queue-list').innerHTML = '';
             document.getElementById('active-queue-list').innerHTML = '';
             document.getElementById('skipped-queue-list').innerHTML = '';
@@ -1629,6 +1662,27 @@
                 osc.start(); osc.stop(ctx.currentTime + 0.55);
                 osc.onended = () => { try { ctx.close(); } catch (e) {} };
             } catch (e) { /* เสียงถูกบล็อกก็ไม่เป็นไร กล่องรายชื่อยังแสดงตามปกติ */ }
+        });
+
+        // 🔴 เสียงเตือนเมื่อโหลดรูปสลิปจาก LINE ไม่สำเร็จ (โทนต่ำ 2 ครั้ง แยกจากเสียงโอนไม่ครบ)
+        socket.on('image_failed', () => {
+            try {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                if (!Ctx) return;
+                const ctx = new Ctx();
+                [0, 0.35].forEach(offset => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = 'sine'; osc.frequency.value = 440;
+                    const t0 = ctx.currentTime + offset;
+                    gain.gain.setValueAtTime(0.0001, t0);
+                    gain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.03);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.28);
+                    osc.connect(gain); gain.connect(ctx.destination);
+                    osc.start(t0); osc.stop(t0 + 0.3);
+                });
+                setTimeout(() => { try { ctx.close(); } catch (e) {} }, 1000);
+            } catch (e) { /* เสียงถูกบล็อกก็ไม่เป็นไร การ์ดแดงยังแสดงตามปกติ */ }
         });
 
         socket.on('play_sound', () => {
