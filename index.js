@@ -851,7 +851,8 @@ const ACTION_LOG_LABELS = {
     'POST /api/queue/dismiss_topup': () => 'ลบการ์ดรอโอนเพิ่ม',
     'POST /api/queue/dismiss_image_fail': () => 'รับทราบการ์ดโหลดรูปสลิปไม่สำเร็จ',
     'POST /api/live_session/start': () => 'กดเริ่มไลฟ์',
-    'POST /api/live_session/end': () => 'กดจบไลฟ์',
+    'POST /api/live_session/end': (b) => 'กดจบไลฟ์' + (b && b.holdMerge === true ? ' (รอรวมกับรอบหน้า)' : ''),
+    'POST /api/live_session/hold': (b) => (b && b.hold === true) ? 'ตั้งรอบไลฟ์เป็นรอรวมบิลกับรอบหน้า' : 'ยกเลิกการรอรวมบิล',
     'POST /api/queue/manual_amount': (b) => `ใส่ยอดสลิปเอง${b && b.amount !== undefined ? ` ${Number(b.amount) || 0} บาท` : ''}`,
     'POST /api/queue/verify_abnormal': () => 'ยืนยันสลิปผิดปกติ',
     'POST /api/queue/reject_slip': () => 'ปัดตกรูปที่ไม่ใช่สลิป',
@@ -1147,7 +1148,7 @@ app.use((req, res, next) => {
         (p === '/api/config' && method === 'POST') ||
         p.startsWith('/api/kerry/') ||
         p.startsWith('/api/queue/') ||
-        (p.startsWith('/api/live_session/') && (p === '/api/live_session/start' || p === '/api/live_session/end')) ||
+        (p.startsWith('/api/live_session/') && (p === '/api/live_session/start' || p === '/api/live_session/end' || p === '/api/live_session/hold' || p === '/api/live_session/pending_merge')) ||
         p === '/api/history_data'
     );
     if (isTierA) {
@@ -1528,6 +1529,52 @@ function getLocalTimeString() {
     return `${hh}:${mm}:${ss}`;
 }
 
+// v1.0.15: รวมบิล 2 รอบไลฟ์ (รอบ A กด "รอรวมกับรอบหน้า" -> รอบ B ถัดไปรวมบิลกับ A)
+// เก็บสถานะไว้ในข้อมูลรอบไลฟ์เดิม (configs: session_hist_<id> / active_live_session) ไม่แตะตารางสลิปหรือลูกค้า
+//   holdMerge: true  = รอบนี้ยังไม่ส่งของ รอรวมกับรอบถัดไป
+//   mergedInto: id   = รอบ B ที่รวมบิลด้วยแล้ว (ตั้งตอนกดเริ่มไลฟ์รอบ B)
+//   mergeFrom: id    = (อยู่ที่รอบ B) รอบ A ที่รวมบิลด้วย -> รอบ B กดพักต่อไม่ได้ (รวมได้สูงสุด 2 รอบ)
+const LIVE_ID_RE = /^LIVE_\d+$/;
+function getSessionRecord(id) {
+    if (!id || !LIVE_ID_RE.test(String(id))) return null;
+    if (activeLiveSession && activeLiveSession.id === id) return activeLiveSession;
+    try {
+        const row = supabase.db.prepare('SELECT value FROM configs WHERE key = ?').get(`session_hist_${id}`);
+        return row && row.value ? JSON.parse(row.value) : null;
+    } catch (e) { return null; }
+}
+function saveSessionRecord(rec) {
+    if (!rec || !rec.id || !LIVE_ID_RE.test(String(rec.id))) return;
+    if (activeLiveSession && activeLiveSession.id === rec.id) {
+        supabase.db.prepare('INSERT OR REPLACE INTO configs (key, value) VALUES (?, ?)').run('active_live_session', JSON.stringify(rec));
+        return;
+    }
+    supabase.db.prepare('INSERT OR REPLACE INTO configs (key, value) VALUES (?, ?)').run(`session_hist_${rec.id}`, JSON.stringify(rec));
+}
+// กลุ่มรอบที่ต้องส่งของพร้อมกัน (เรียงเก่า -> ใหม่) ถ้าไม่ได้รวมบิล คืนรอบเดียว
+function resolveMergeGroup(id) {
+    const rec = getSessionRecord(id);
+    if (rec && rec.mergeFrom && LIVE_ID_RE.test(String(rec.mergeFrom))) return [rec.mergeFrom, id];
+    if (rec && rec.mergedInto && LIVE_ID_RE.test(String(rec.mergedInto))) return [id, rec.mergedInto];
+    return [id];
+}
+function hasLaterSession(rec) {
+    if (activeLiveSession && activeLiveSession.startTime > rec.startTime) return true;
+    try {
+        const rows = supabase.db.prepare("SELECT value FROM configs WHERE key LIKE 'session_hist_%'").all();
+        for (const r of rows) {
+            try { const s = JSON.parse(r.value); if (s && s.startTime > rec.startTime) return true; } catch (e) {}
+        }
+    } catch (e) {}
+    return false;
+}
+// ตั้ง "รอรวมกับรอบหน้า" ได้เมื่อ: รอบจบแล้ว, ยังไม่มีรอบที่ใหม่กว่า, ไม่ได้รวมบิลอยู่แล้ว (รวมได้สูงสุด 2 รอบ)
+function canHoldSession(rec) {
+    if (!rec || !rec.endTime) return false;
+    if (rec.holdMerge || rec.mergeFrom || rec.mergedInto) return false;
+    return !hasLaterSession(rec);
+}
+
 // v1.0.11: นับจำนวนชิ้นที่ลูกค้าได้ไปแล้ว เพื่อตัดสินว่าจ่ายค่าส่งไปแล้วหรือยัง
 // ระหว่างไลฟ์: นับสลิปของรอบไลฟ์นี้ + สลิปของวันนี้ที่โอนก่อนกดเริ่มไลฟ์ (session_id ว่าง) กันเก็บค่าส่งซ้ำ
 // สลิปของไลฟ์รอบอื่นในวันเดียวกันยังไม่นับ (ลูกค้าเริ่มนับใหม่ในรอบใหม่ เหมือนเดิม) / ไม่ได้ไลฟ์: นับตามวันที่ เหมือนเดิม
@@ -1538,8 +1585,14 @@ function countPastDraws(lineId, opts = {}) {
     if (opts.excludeRejected) sql += " AND status != 'rejected'";
     if (opts.excludeId !== undefined && opts.excludeId !== null) { sql += ' AND id != ?'; params.push(opts.excludeId); }
     if (activeLiveSession) {
-        sql += ' AND (session_id = ? OR (session_id IS NULL AND trans_date = ?))';
-        params.push(activeLiveSession.id, today);
+        if (activeLiveSession.mergeFrom && LIVE_ID_RE.test(String(activeLiveSession.mergeFrom))) {
+            // v1.0.15: รอบนี้รวมบิลกับรอบก่อนหน้า -> นับชิ้นของรอบก่อนด้วย (ไม่เก็บค่าส่งซ้ำ และนับรวมเพื่อส่งฟรี)
+            sql += ' AND (session_id = ? OR session_id = ? OR (session_id IS NULL AND trans_date = ?))';
+            params.push(activeLiveSession.id, activeLiveSession.mergeFrom, today);
+        } else {
+            sql += ' AND (session_id = ? OR (session_id IS NULL AND trans_date = ?))';
+            params.push(activeLiveSession.id, today);
+        }
     } else {
         sql += ' AND trans_date = ?';
         params.push(today);
@@ -1948,9 +2001,50 @@ app.get('/api/history_data', async (req, res) => {
             
             let safeRef = `${transRef}|${breakdownStr}`;
 
-            return { id: slip.id, date: slip.trans_date, time: slip.trans_time, name: slip.sender_name, lineName: slip.line_name, amount: slip.amount, draws: slip.draws || 0, status: slip.status, ref: safeRef };
+            return { id: slip.id, date: slip.trans_date, time: slip.trans_time, name: slip.sender_name, lineName: slip.line_name, amount: slip.amount, draws: slip.draws || 0, status: slip.status, ref: safeRef, sessionId: slip.session_id || null };
         });
-        res.json({ success: true, history });
+
+        // v1.0.15: สรุปยอดโอนแยกตามรอบไลฟ์ (นับทั้งรอบ แม้ไลฟ์ข้ามเที่ยงคืน / ไม่นับสลิปที่ปัดตก)
+        // สลิปที่ไม่มีรหัสรอบ (ไม่ได้กดเริ่มไลฟ์ หรือข้อมูลเก่าก่อน v1.0.8) รวมเป็นกลุ่ม "นอกรอบไลฟ์" เฉพาะที่อยู่ในช่วงวันที่เลือก
+        let rounds = [];
+        try {
+            const sessionIds = [...new Set((data || []).map(s => s.session_id).filter(id => id && LIVE_ID_RE.test(String(id))))];
+            for (let i = 0; i < sessionIds.length; i += 400) {
+                const chunk = sessionIds.slice(i, i + 400);
+                const ph = chunk.map(() => '?').join(',');
+                const sums = supabase.db.prepare(
+                    `SELECT session_id, COALESCE(SUM(amount), 0) AS amount, COALESCE(SUM(draws), 0) AS draws, COUNT(*) AS slips, COUNT(DISTINCT line_id) AS customers
+                     FROM slips WHERE status != 'rejected' AND session_id IN (${ph}) GROUP BY session_id`
+                ).all(...chunk);
+                sums.forEach(r => {
+                    const rec = getSessionRecord(r.session_id);
+                    rounds.push({
+                        sessionId: r.session_id,
+                        startTime: (rec && rec.startTime) || Number(String(r.session_id).slice(5)) || null,
+                        endTime: (rec && rec.endTime) || null,
+                        active: !!(activeLiveSession && activeLiveSession.id === r.session_id),
+                        merged: !!(rec && (rec.mergeFrom || rec.mergedInto)),
+                        holdMerge: !!(rec && rec.holdMerge && !rec.mergedInto),
+                        amount: Number(r.amount) || 0, draws: Number(r.draws) || 0, slips: Number(r.slips) || 0, customers: Number(r.customers) || 0
+                    });
+                });
+            }
+            rounds.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+            const outside = (data || []).filter(s => !s.session_id && s.status !== 'rejected');
+            if (outside.length > 0) {
+                rounds.push({
+                    sessionId: null, outside: true, startTime: null, endTime: null, active: false, merged: false, holdMerge: false,
+                    amount: outside.reduce((a, s) => a + (Number(s.amount) || 0), 0),
+                    draws: outside.reduce((a, s) => a + (Number(s.draws) || 0), 0),
+                    slips: outside.length,
+                    customers: new Set(outside.map(s => s.line_id).filter(Boolean)).size
+                });
+            }
+        } catch (roundErr) {
+            addLog('WARN', `สรุปยอดแยกรอบไลฟ์ไม่สำเร็จ (ประวัติสลิปยังแสดงปกติ): ${roundErr.message}`);
+            rounds = [];
+        }
+        res.json({ success: true, history, rounds });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
 
@@ -2046,6 +2140,29 @@ app.get('/api/live_session/current', (req, res) => {
 app.post('/api/live_session/start', async (req, res) => {
     try {
         const sessionId = `LIVE_${Date.now()}`;
+
+        // v1.0.15: ถ้ารอบก่อนหน้ากด "รอรวมกับรอบหน้า" ไว้และยังไม่ถูกรวม -> รอบนี้รวมบิลกับรอบนั้น
+        let mergeFrom = null;
+        try {
+            if (activeLiveSession) {
+                // กดเริ่มซ้ำขณะไลฟ์ค้างอยู่ ให้คงการรวมบิลเดิมไว้
+                if (activeLiveSession.mergeFrom && LIVE_ID_RE.test(String(activeLiveSession.mergeFrom))) mergeFrom = activeLiveSession.mergeFrom;
+            } else {
+                const row = supabase.db.prepare("SELECT value FROM configs WHERE key = 'last_ended_live_session'").get();
+                const last = row && row.value ? JSON.parse(row.value) : null;
+                const prev = last && last.id ? getSessionRecord(last.id) : null;
+                if (prev && prev.holdMerge && !prev.mergedInto && !prev.mergeFrom) mergeFrom = prev.id;
+            }
+            if (mergeFrom) {
+                const prev = getSessionRecord(mergeFrom);
+                if (prev) { prev.mergedInto = sessionId; saveSessionRecord(prev); }
+                addLog('INFO', `เริ่มไลฟ์รอบใหม่: รวมบิลกับรอบก่อนหน้า (${mergeFrom}) ลูกค้าที่ซื้อรอบก่อนไม่ถูกเก็บค่าส่งซ้ำ`);
+            }
+        } catch (mergeErr) {
+            mergeFrom = null;
+            addLog('ERROR', `ตรวจการรวมบิลรอบก่อนตอนเริ่มไลฟ์ไม่สำเร็จ (เริ่มไลฟ์แบบปกติ): ${mergeErr.message}`);
+        }
+
         const newSession = {
             id: sessionId,
             startTime: Date.now(),
@@ -2054,6 +2171,7 @@ app.post('/api/live_session/start', async (req, res) => {
             endTime: null,
             endTimeStr: null
         };
+        if (mergeFrom) newSession.mergeFrom = mergeFrom;
         activeLiveSession = newSession;
         await supabase.from('configs').upsert([{ key: 'active_live_session', value: JSON.stringify(newSession) }]);
         
@@ -2098,6 +2216,12 @@ app.post('/api/live_session/end', async (req, res) => {
             endTime: Date.now(),
             endTimeStr: getLocalTimeString()
         };
+        // v1.0.15: แม่ค้าเลือก "รอรวมกับรอบหน้า" ตอนจบไลฟ์ -- ตั้งได้เฉพาะรอบที่ยังไม่ได้รวมบิลกับรอบก่อน (รวมได้สูงสุด 2 รอบ)
+        const wantHold = !!(req.body && req.body.holdMerge === true) && !activeLiveSession.mergeFrom;
+        if (wantHold) {
+            endedSession.holdMerge = true;
+            addLog('INFO', `จบไลฟ์: ตั้งรอบนี้ "รอรวมกับรอบหน้า" (${endedSession.id}) ยังไม่ส่งของ`);
+        }
         
         // เซฟประวัติเซสชันที่จบแล้ว
         const historyKey = `session_hist_${endedSession.id}`;
@@ -2112,7 +2236,47 @@ app.post('/api/live_session/end', async (req, res) => {
         
         io.emit('live_session_changed', null);
         await broadcastTodayStats();
-        res.json({ success: true, endedSession: endedSession });
+        res.json({ success: true, endedSession: endedSession, held: wantHold });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// v1.0.15: มีรอบก่อนหน้าที่ตั้ง "รอรวมกับรอบหน้า" ไว้หรือไม่ (ใช้เตือนแม่ค้าตอนกดเริ่มไลฟ์)
+app.get('/api/live_session/pending_merge', (req, res) => {
+    try {
+        if (activeLiveSession) return res.json({ success: true, pending: false });
+        const row = supabase.db.prepare("SELECT value FROM configs WHERE key = 'last_ended_live_session'").get();
+        const last = row && row.value ? JSON.parse(row.value) : null;
+        const prev = last && last.id ? getSessionRecord(last.id) : null;
+        if (!prev || !prev.holdMerge || prev.mergedInto || prev.mergeFrom) return res.json({ success: true, pending: false });
+        const c = supabase.db.prepare("SELECT COUNT(DISTINCT line_id) AS n FROM slips WHERE session_id = ? AND status != 'rejected' AND draws > 0").get(prev.id);
+        res.json({ success: true, pending: true, sessionId: prev.id, customers: (c && Number(c.n)) || 0 });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// v1.0.15: ตั้ง/ยกเลิก "รอรวมกับรอบหน้า" ของรอบที่จบแล้ว (ตั้งได้เฉพาะรอบล่าสุดที่ยังไม่มีรอบใหม่กว่า / ยกเลิกได้จนกว่ารอบถัดไปจะเริ่ม)
+app.post('/api/live_session/hold', (req, res) => {
+    try {
+        const { sessionId, hold } = req.body || {};
+        const rec = getSessionRecord(sessionId);
+        if (!rec) return res.status(404).json({ success: false, error: 'ไม่พบรอบไลฟ์นี้' });
+        if (!rec.endTime) return res.status(400).json({ success: false, error: 'ไลฟ์รอบนี้ยังไม่จบ' });
+        if (hold === true) {
+            if (!canHoldSession(rec)) return res.status(400).json({ success: false, error: 'รอบนี้ตั้งรอรวมบิลไม่ได้ (มีรอบใหม่กว่าแล้ว หรือรวมบิลครบ 2 รอบแล้ว)' });
+            rec.holdMerge = true;
+            saveSessionRecord(rec);
+            addLog('INFO', `ตั้งรอบ ${rec.id} เป็น "รอรวมกับรอบหน้า"`);
+        } else {
+            if (!rec.holdMerge) return res.json({ success: true, session: rec });
+            if (rec.mergedInto) return res.status(400).json({ success: false, error: 'รอบนี้ถูกรวมบิลกับรอบถัดไปแล้ว ยกเลิกไม่ได้' });
+            delete rec.holdMerge;
+            saveSessionRecord(rec);
+            addLog('INFO', `ยกเลิก "รอรวมกับรอบหน้า" ของรอบ ${rec.id} (ส่งของรอบนี้แยก)`);
+        }
+        res.json({ success: true, session: rec });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -2148,6 +2312,15 @@ async function getOrdersForKerry(options = {}) {
         } catch (e) { /* ไม่มีประวัติไลฟ์ล่าสุด ใช้การกรองตามวันที่แบบเดิม */ }
     }
     
+    // v1.0.15: รอบที่รวมบิลกัน (A + B) ต้องส่งของพร้อมกัน -> ส่งออกเป็นไฟล์เดียว ลูกค้าที่ซื้อทั้ง 2 รอบเป็นแถวเดียว
+    let mergeGroup = [];
+    // ไม่ได้ระบุรอบ/วันที่ แต่กำลังไลฟ์อยู่ = ดูรอบที่กำลังไลฟ์ (ใช้ตรวจการรวมบิลด้วย โดยไม่เปลี่ยนวิธีดึงสลิปเดิม)
+    const groupBaseId = sessionId || ((!date && activeLiveSession) ? activeLiveSession.id : null);
+    if (groupBaseId) {
+        try { mergeGroup = resolveMergeGroup(groupBaseId); } catch (e) { mergeGroup = [groupBaseId]; }
+    }
+    const extraSessionIds = mergeGroup.filter(id => id !== groupBaseId);
+
     // ดึงสลิปที่สำเร็จหรือมีของ (completed, waiting, called, skipped) โดยไม่นับ rejected
     let query = supabase.from('slips').select('*').neq('status', 'rejected');
     if (sessionId && options.__unionDate) {
@@ -2165,13 +2338,21 @@ async function getOrdersForKerry(options = {}) {
     if (error) throw error;
     let slips = slipsFound || [];
 
+    for (const xid of extraSessionIds) {
+        const { data: more, error: moreErr } = await supabase.from('slips').select('*').neq('status', 'rejected').eq('session_id', xid);
+        if (moreErr) throw moreErr;
+        const haveIds = new Set(slips.map(s => s.id));
+        (more || []).forEach(s => { if (!haveIds.has(s.id)) slips.push(s); });
+    }
+
     // 📦 รอบไลฟ์ที่บันทึกตั้งแต่ v1.0.7 ลงไป: สลิปยังไม่มีรหัสรอบไลฟ์ (session_id ว่าง)
     // ให้นับสลิปที่ไม่มีรหัสรอบ ซึ่งเวลาโอนอยู่ในช่วงเริ่ม-จบของไลฟ์นั้นด้วย เพื่อให้เลือกรอบไลฟ์เก่าได้ลูกค้าครบ
-    if (sessionId) {
+    const legacyIds = sessionId ? [sessionId, ...extraSessionIds] : [...extraSessionIds];
+    for (const legacySid of legacyIds) {
         try {
-            let sess = (activeLiveSession && activeLiveSession.id === sessionId) ? activeLiveSession : null;
+            let sess = (activeLiveSession && activeLiveSession.id === legacySid) ? activeLiveSession : null;
             if (!sess) {
-                const { data: hist } = await supabase.from('configs').select('value').eq('key', `session_hist_${sessionId}`).single();
+                const { data: hist } = await supabase.from('configs').select('value').eq('key', `session_hist_${legacySid}`).single();
                 sess = hist && hist.value ? JSON.parse(hist.value) : null;
             }
             if (sess && sess.startTime) {
@@ -2289,6 +2470,9 @@ async function getOrdersForKerry(options = {}) {
         return 0;
     });
 
+    // v1.0.15: ส่งข้อมูลกลุ่มรอบที่รวมบิลกลับไปให้หน้าสรุป/ส่งออก (เป็นคุณสมบัติเสริมของ array ไม่กระทบโค้ดเดิมที่ใช้ orders)
+    orders.mergeGroup = mergeGroup;
+    orders.exportSessionId = groupBaseId || null;
     return orders;
 }
 
@@ -2300,11 +2484,11 @@ app.get('/api/kerry/sessions', async (req, res) => {
         (rows || []).forEach(r => {
             try {
                 const s = JSON.parse(r.value);
-                if (s && s.id && s.startTime) sessions.push({ id: s.id, startTime: s.startTime, endTime: s.endTime || null, active: false });
+                if (s && s.id && s.startTime) sessions.push({ id: s.id, startTime: s.startTime, endTime: s.endTime || null, active: false, holdMerge: !!s.holdMerge, mergeFrom: s.mergeFrom || null, mergedInto: s.mergedInto || null });
             } catch (e) {}
         });
         if (activeLiveSession && activeLiveSession.id) {
-            sessions.push({ id: activeLiveSession.id, startTime: activeLiveSession.startTime, endTime: null, active: true });
+            sessions.push({ id: activeLiveSession.id, startTime: activeLiveSession.startTime, endTime: null, active: true, holdMerge: false, mergeFrom: activeLiveSession.mergeFrom || null, mergedInto: null });
         }
         sessions.sort((a, b) => b.startTime - a.startTime);
         res.json({ success: true, sessions: sessions.slice(0, 30) });
@@ -2320,7 +2504,18 @@ app.get('/api/kerry/summary', async (req, res) => {
         const totalCustomers = orders.length;
         const readyCustomers = orders.filter(o => o.hasAddress).length;
         const missingCustomers = orders.filter(o => !o.hasAddress).map(o => o.lineName);
-        res.json({ success: true, totalCustomers, readyCustomers, missingCustomers, orders });
+        // v1.0.15: ข้อมูลรวมบิล / รอรวมบิล สำหรับแสดงในหน้าต่าง Export Kerry
+        const group = orders.mergeGroup || [];
+        const sid = orders.exportSessionId || null;
+        let merge = null, held = null, canHold = null;
+        if (group.length > 1) {
+            merge = { sessions: group.map(id => { const r = getSessionRecord(id); return { id, startTime: r ? r.startTime : null, endTime: r ? r.endTime : null }; }) };
+        } else if (sid) {
+            const r = getSessionRecord(sid);
+            if (r && r.holdMerge && !r.mergedInto) held = { sessionId: sid };
+            else if (r && canHoldSession(r)) canHold = { sessionId: sid };
+        }
+        res.json({ success: true, totalCustomers, readyCustomers, missingCustomers, orders: [...orders], merge, held, canHold });
     } catch(e) {
         res.status(500).json({ success: false, error: e.message });
     }
