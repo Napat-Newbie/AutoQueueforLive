@@ -67,7 +67,6 @@ pre-check `trans_ref` → double-check ใน atomic transaction → partial UNI
 
 ขนาดวัดจาก commit นี้ (v1.0.15):
 - `index.js` 4,699 บรรทัด และ `public/index.html` 3,506 บรรทัด: อ่านเป็นช่วง (offset/limit) หลังหาตำแหน่งด้วย `grep -n "function ชื่อ"` หรือ `code get_document_symbols` (`public/index.html` ไม่มีบรรทัดยาวเกิน 474 ตัวอักษรแล้ว โลโก้ผู้ให้บริการอ้างผ่าน `/images/providers/*` แทน base64)
-- `public/images/providers/logos_base64.json` (329 KB, 6 บรรทัด มี 1 บรรทัดยาว 279,178 ตัวอักษร): ไม่มีโค้ดใน repo อ้างถึง (ตรวจด้วย `git grep`) อย่าเปิด
 - `public/manual_images/page_*.html` (ไฟล์ละ ~440 KB): สร้างจาก `node generate_staging_pages.js` ไม่อยู่ใน git (อยู่ใน `.gitignore`) ส่วนภาพ PNG ในโฟลเดอร์เดียวกันอยู่ใน git
 - `package-lock.json` (209 KB), `releases/*.zip` (12 ไฟล์ รวม ~4.2 MB), `*.docx` (3 ไฟล์): ไบนารี/ไฟล์สร้างอัตโนมัติ ไม่ต้องอ่านเว้นแต่ถูกสั่ง
 - ถ้าเพิ่มรูปใหม่ลง `public/index.html` ให้ใส่เป็นไฟล์ใน `public/images/` แล้วอ้างด้วย path ไม่ฝัง base64 (หน้าคู่มือ `generate_staging_pages.js` จะฝังกลับเองเฉพาะ `/images/providers/*`)

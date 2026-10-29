@@ -24,10 +24,10 @@
 * **Cloudflare Tunnel URL:** changes per session; the app auto-syncs the current URL to LINE Developers Console — do not hardcode
 * **Discord Alert Webhook:** `(เก็บไว้ใน .env -> DISCORD_WEBHOOK_URL เท่านั้น ห้ามใส่ลิงก์จริงในไฟล์นี้)`
 
-## 3. Audit Findings from v1.0.5 — ALL RESOLVED (verified in v1.0.15 code)
+## 3. Audit Findings from v1.0.5 — resolved, except one midnight edge case (item 3)
 1. ~~BUG-01~~ **Fixed:** webhook now iterates `for (const event of events)` — no dropped slips in a batch
 2. ~~SEC-01 & SEC-02~~ **Fixed:** update URLs restricted to allowlisted hosts; full 3-tier RBAC middleware (Tier A local/tunnel-login, Tier B merchant+dreamdev, Tier C dreamdev-only) + `/uploads` requires login
-3. ~~BUG-02 & BUG-03~~ **Fixed:** dashboard and Kerry export query by `session_id`; `last_ended_live_session` covers livestreams crossing midnight
+3. **BUG-02 & BUG-03 — fixed except one edge case:** broadcasts, `/api/stats/today`, slip inserts and Kerry export use `session_id`; `last_ended_live_session` covers livestreams crossing midnight. Also fixed after v1.0.15: reloading the page during a live now loads the live-round stats (it used to load per-date stats until the next broadcast), and `/api/kerry/summary` uses the same live-round rule as the Excel download. **Still open:** `countPastDraws()` counts slips paid before the live started (`session_id IS NULL`) only when `trans_date` is today, so in a live that crosses midnight they stop counting after 00:00 and the customer could be charged shipping again (found by reading the code, not reproduced; fix it together with unit tests)
 4. ~~DB-01~~ **Fixed:** indexes on `trans_date`, `status`, `line_id`, `session_id` + partial UNIQUE index on `trans_ref`; `busy_timeout = 10000`
 
 ## 4. Release History Milestones (post-v1.0.11)
