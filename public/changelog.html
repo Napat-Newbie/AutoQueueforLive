@@ -21,7 +21,7 @@
                 <div>
                     <div class="flex items-center space-x-2.5">
                         <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">Version History & Changelog</h1>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.15 (CURRENT)</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.16 (CURRENT)</span>
                     </div>
                     <p class="text-xs text-zinc-400 mt-0.5">บันทึกประวัติการปรับปรุง แก้ไขบั๊ก และฟีเจอร์ใหม่ของ AutoQueue for Live ทั้งหมด</p>
                 </div>
@@ -34,13 +34,40 @@
         <!-- Timeline Container -->
         <div class="space-y-6">
 
+            <!-- v1.0.16 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.16</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">29 ตุลาคม 2026</span>
+                </div>
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">✨ ใหม่:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>สลิปที่ลูกค้าโอนนอกรอบไลฟ์ (ก่อนกดเริ่มไลฟ์ หรือระหว่างสองรอบ) ถูกผูกเข้ารอบไลฟ์ใหม่อัตโนมัติเมื่อกดเริ่มไลฟ์ ไม่หายจากหน้าคิวอีกต่อไป นับยอดรวมของรอบครบ และออกในไฟล์ Kerry ให้ด้วย (กติกา ก: เงินที่รับก่อนเริ่มรอบถือเป็นของรอบนั้น)</li>
+                            <li>การ์ดแดงแจ้งเตือนสลิปที่ระบบไม่ได้บันทึก ให้แม่ค้าเห็นบนหน้าจอทันที: โอนเข้าบัญชีอื่น, สลิปซ้ำกับของลูกค้าอื่น, และส่งซ้ำใบที่ถูกปัดตกไปแล้ว (เดิมหายเงียบ เหลือแค่บรรทัดใน Logs)</li>
+                            <li>บันทึก Log ลงไฟล์ system.log ถาวร ไม่หายเมื่อปิดโปรแกรม หมุนไฟล์อัตโนมัติเมื่อเกิน 2MB ทำให้สืบปัญหาย้อนหลังได้</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">🔧 แก้ไข:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>หน้าประวัติและหน้าต่าง Kerry โหลดยอดของรอบไลฟ์ที่กำลังไลฟ์อยู่ถูกต้องเมื่อเปิดหน้าระหว่างไลฟ์ (เดิมแสดงเป็นยอดรายวัน) และตัวเลขจำนวนลูกค้าในหน้าต่าง Kerry ตรงกับไฟล์ที่ดาวน์โหลด</li>
+                            <li>เพิ่มชุดเทสต์อัตโนมัติ 48 ตัว ครอบคลุมตรรกะเงิน ค่าส่ง การรวมบิล 2 รอบ สลิปนอกรอบ และไฟล์ Kerry พร้อมระบบตรวจสอบอัตโนมัติ (CI) ทุกครั้งที่แก้โค้ด</li>
+                            <li>โลโกะผู้ให้บริการตรวจสลิปโหลดจากไฟล์แทนการฝังในโค้ด ทำให้แพ็กเกจอัปเดตเล็กลงกว่าครึ่ง</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
             <!-- v1.0.15 -->
             <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
                     <div class="flex items-center space-x-3">
                         <span class="text-lg font-bold text-white">🚀 Version 1.0.15</span>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
-                    </div>
+                                            </div>
                     <span class="text-xs text-zinc-400 font-mono">24 ตุลาคม 2026</span>
                 </div>
                 <div class="space-y-3 text-xs leading-relaxed">
