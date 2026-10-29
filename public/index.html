@@ -1764,12 +1764,29 @@
         function loadHistory() {
             const dateInput = document.getElementById('historyDateInput').value;
             if (dateInput) {
+                const reqNo = (window.__statsReqNo = (window.__statsReqNo || 0) + 1);
                 fetch(`/api/stats/history?date=${dateInput.replace(/-/g, '')}`)
                 .then(res => res.json()).then(data => {
+                    if (reqNo !== window.__statsReqNo) return; // มีคำขอที่ใหม่กว่าแล้ว (เช่น สถิติของรอบไลฟ์) ไม่วาดทับ
                     renderDashboard(data); // <--- วาดหน้าจอทันที ไม่ต้องพึ่ง socket 
                 })
                 .catch(err => console.error(err));
             }
+        }
+
+        // เปิด/รีโหลดหน้าระหว่างไลฟ์: loadHistory() ด้านบนดึงสถิติ "ตามวันที่" (ไลฟ์ข้ามเที่ยงคืนจะเห็นเฉพาะสลิปของวันใหม่)
+        // ถ้ากำลังไลฟ์อยู่และหน้าจอกำลังดูวันนี้ ให้ดึงสถิติ "ของรอบไลฟ์" แทน (ชุดเดียวกับที่เซิร์ฟเวอร์ส่งผ่าน full_sync)
+        function loadLiveStatsIfLive() {
+            const dateInput = document.getElementById('historyDateInput');
+            if (!dateInput || dateInput.value.replace(/-/g, '') !== getClientTodayStr()) return; // กำลังดูวันอื่น ไม่ทับ
+            const reqNo = (window.__statsReqNo = (window.__statsReqNo || 0) + 1);
+            fetch('/api/stats/today')
+                .then(res => res.ok ? res.json() : null)
+                .then(data => {
+                    if (!data || reqNo !== window.__statsReqNo) return;
+                    renderDashboard(data);
+                })
+                .catch(err => console.error(err));
         }
 
         loadHistory(); // ทำงานตอนเปิดหน้าเว็บครั้งแรก
@@ -2044,7 +2061,10 @@
             fetch('/api/live_session/current')
                 .then(res => res.json())
                 .then(data => {
-                    if (data.success) updateLiveUI(data.session);
+                    if (data.success) {
+                        updateLiveUI(data.session);
+                        if (data.session && data.session.startTime) loadLiveStatsIfLive();
+                    }
                 }).catch(e => console.error(e));
         }
         fetchLiveSessionStatus();
