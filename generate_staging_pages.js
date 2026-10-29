@@ -6,7 +6,22 @@ if (!fs.existsSync(baseDir)) {
     fs.mkdirSync(baseDir, { recursive: true });
 }
 
-const html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+// index.html อ้างโลโก้ผู้ให้บริการผ่าน /images/providers/* แต่หน้า staging เปิดด้วย file:/// (ไม่มี web server)
+// จึงต้องฝังรูปกลับเป็น data URI เพื่อให้ภาพหน้าจอคู่มือได้โลโก้ครบเหมือนเดิม
+function inlineProviderImages(src) {
+    const mimeByExt = { '.webp': 'image/webp', '.svg': 'image/svg+xml' };
+    return src.replace(/src="\/images\/providers\/([A-Za-z0-9_.-]+)"/g, (m, name) => {
+        const mime = mimeByExt[path.extname(name).toLowerCase()];
+        const file = path.join(__dirname, 'public', 'images', 'providers', name);
+        if (!mime || !fs.existsSync(file)) return m;
+        let buf = fs.readFileSync(file);
+        // svg ที่ checkout บน Windows อาจเป็น CRLF (core.autocrlf) ปรับกลับเป็น LF ให้ตรงกับไฟล์ต้นฉบับใน git
+        if (mime === 'image/svg+xml') buf = Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+        return `src="data:${mime};base64,${buf.toString('base64')}"`;
+    });
+}
+
+const html = inlineProviderImages(fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8'));
 
 // 1. Dashboard View (พร้อมคิวตัวอย่าง)
 let dashInjection = `
