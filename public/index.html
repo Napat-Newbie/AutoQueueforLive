@@ -2746,7 +2746,7 @@
                         if (data.outOfRoundCustomers && data.outOfRoundCustomers.length > 0) {
                             statusBox.innerHTML += `
                                 <div style="margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: #f3e5f5; color: #7b1fa2; font-weight: 600;">
-                                    🕒 โอนนอกรอบ (เงินมาหลังจบไลฟ์): ${data.outOfRoundCustomers.map(n => escapeHtml(n)).join(', ')} — ถ้าเป็นยอดจุ่มที่จ่ายของไปแล้ว อย่าส่งของซ้ำ (ในไฟล์ Excel จะมีโน้ตไว้ในช่อง Remark)
+                                    🕒 โอนนอกรอบ (เงินมาหลังจบไลฟ์): ${data.outOfRoundCustomers.map(n => escapeHtml(n)).join(', ')} — ถ้าเป็นยอดจุ่มที่จ่ายของไปแล้ว อย่าส่งของซ้ำ
                                 </div>
                             `;
                         }
