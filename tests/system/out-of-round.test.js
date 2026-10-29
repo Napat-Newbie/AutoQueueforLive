@@ -28,6 +28,28 @@ test('slip paid before pressing "start live" is still in the live queue afterwar
     assert.equal(live.claimedOutOfRound, 1, 'the start response tells how many were attached');
 }));
 
+test('a pre-live slip claimed into the round is in the Kerry summary AND the downloaded Excel file', () => withSandbox(async sb => {
+    await slipFor(sb, 'Ualice', 'Alice', 'm1', 'k1', 140, 'PREK1');   // A + 40 shipping, before the live
+    await sb.waitForSlips(1);
+    const live = await sb.startLive();
+    assert.equal(live.claimedOutOfRound, 1, 'precondition: the slip was attached to this round');
+
+    const summary = (await sb.get(`/api/kerry/summary?sessionId=${live.session.id}`)).json;
+    assert.equal(summary.success, true);
+    assert.equal(summary.totalCustomers, 1);
+    assert.deepEqual(summary.orders.map(o => o.lineName), ['Alice']);
+
+    // the Excel the Kerry window downloads for that round
+    const ExcelJS = sb.requireDep('exceljs');
+    const file = await sb.get(`/api/kerry/export_excel?sessionId=${live.session.id}`);
+    assert.equal(file.status, 200);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(file.buffer);
+    const text = [];
+    wb.eachSheet(ws => ws.eachRow(row => row.eachCell(c => text.push(String(c.value && c.value.richText ? c.value.richText.map(t => t.text).join('') : c.value)))));
+    assert.match(text.join('\n'), /Alice/, 'the claimed out-of-round customer must be shipped');
+}));
+
 test('two rounds on the same day: money received between them goes to round B, not round A', () => withSandbox(async sb => {
     const A = await sb.startLive();
     await slipFor(sb, 'Ualice', 'Alice', 'm1', 'k1', 140, 'A0001');
