@@ -28,6 +28,10 @@ test('ending a clean live sends one summary embed: correct stats, no errors, gre
     assert.match(field(e, 'ลูกค้า').value, /^1 คน$/);
     assert.match(field(e, 'ยอดรับรวม').value, /^140 บาท$/);
     assert.match(field(e, 'สิทธิ์ที่ออก').value, /^1 ชิ้น$/);
+    assert.match(field(e, 'สลิปที่ปัดตก').value, /^0 ใบ/);
+    const prod = field(e, 'สินค้าที่ออก');
+    assert.match(prod.name, /1 ชิ้น, 1 รายการ/);
+    assert.match(prod.value, /A ×1/);
     assert.match(field(e, 'Error').value, /ไม่พบ Error ในรอบนี้/);
     assert.equal(field(e, 'WARN'), undefined, 'no warn field on a clean round');
     assert.equal(e.color, 3066993, 'green when nothing went wrong');
@@ -45,8 +49,13 @@ test('warnings during the live (wrong-account slip) are counted in the summary; 
     assert.equal(sb.slips().length, 1, 'wrong-account slip is not recorded');
     assert.match(field(e, 'สลิปรอบนี้').value, /^1 ใบ$/);
     assert.match(field(e, 'Error').value, /ไม่พบ Error ในรอบนี้/);
-    assert.match(field(e, 'WARN').value, /1 รายการ/);
-    assert.match(e.footer.text, /v1\.0\.16/);
+    const w = field(e, 'WARN').value;
+    assert.match(w, /1 รายการ/);
+    assert.match(w, /สลิปโอนเข้าบัญชีที่ไม่ใช่ของร้าน/);
+    assert.match(w, /เกิดอะไรขึ้น: Bob → Somebody Else/, 'who paid whom, taken from the real log line');
+    assert.match(w, /> ควรทำ:/);
+    const version = require('../../package.json').version;
+    assert.ok(e.footer.text.includes('v' + version), 'footer carries the running version: ' + e.footer.text);
 }, null, DISCORD));
 
 test('a second live on the same day gets its own summary (ทุกครั้งที่จบไลฟ์) and stats do not bleed over', () => withSandbox(async sb => {
@@ -62,4 +71,19 @@ test('a second live on the same day gets its own summary (ทุกครั้�
     const second = await sb.waitFor(() => summaryEmbeds(sb)[1], 8000, 'second summary missing');
     assert.match(second.title, /🏁 สรุปหลังจบไลฟ์/);
     assert.match(field(second, 'สลิปรอบนี้').value, /^1 ใบ$/, 'claimed out-of-round slip counts in the new round only');
+}, null, DISCORD));
+
+test('rejected slips are counted separately and left out of the money, rights and product list', () => withSandbox(async sb => {
+    await sb.startLive();
+    await pay(sb, 'Ualice', 'Alice', 'm1', 'k1', 140, 'R1'); await sb.waitForSlips(1);
+    await pay(sb, 'Ubob', 'Bob', 'm2', 'k2', 140, 'R2'); await sb.waitForSlips(2);
+    const bob = sb.slips().find(s => s.line_name === 'Bob');
+    await sb.post('/api/queue/action', { action: 'rejected', slipIds: [bob.id] });
+    await sb.endLive();
+
+    const e = await sb.waitFor(() => summaryEmbeds(sb)[0], 8000, 'summary embed was not sent');
+    assert.match(field(e, 'สลิปรอบนี้').value, /^1 ใบ$/, 'rejected slip not counted');
+    assert.match(field(e, 'ยอดรับรวม').value, /^140 บาท$/);
+    assert.match(field(e, 'สลิปที่ปัดตก').value, /^1 ใบ/);
+    assert.match(field(e, 'สินค้าที่ออก').name, /1 ชิ้น/, 'rejected slip gives no product');
 }, null, DISCORD));
