@@ -107,8 +107,11 @@ test('history page data says which round an out-of-round payment belongs to', ()
 test('system.log + Discord activity channel get the out-of-round warning line', () => withSandbox(async sb => {
     await slipFor(sb, 'Ualice', 'Alice', 'm1', 'k1', 140, 'OORLOG');
     await sb.waitForSlips(1);
-    const log = fs.readFileSync(path.join(sb.dir, 'system.log'), 'utf8');
-    assert.match(log, /ลูกค้า "Alice" โอนนอกรอบ \(เงินเข้าตอนไม่มีไลฟ์ 140 บาท\)/);
+    // system.log เขียนแบบ async — รอ-อ่านซ้ำจนบรรทัดลงไฟล์จริง (กัน race บน Linux CI)
+    await sb.waitFor(
+        () => /ลูกค้า "Alice" โอนนอกรอบ \(เงินเข้าตอนไม่มีไลฟ์ 140 บาท\)/.test(fs.readFileSync(path.join(sb.dir, 'system.log'), 'utf8')),
+        8000, 'the out-of-round warning never landed in system.log'
+    );
 
     await sb.waitFor(() => sb.mock.discords.some(d => d.path.includes('aqactivitychanneltest000001')
         && (d.body.embeds || []).some(e => /"Alice" โอนนอกรอบ/.test(String(e.description || '')))

@@ -1,7 +1,7 @@
 // tests/system/merchant-actions-log.test.js
 // Every merchant action during a live must (1) leave a line in system.log and (2) reach the Discord
 // activity channel (the live monitor), so mistakes can be traced back afterwards. Before v1.0.16 the
-// queue action buttons (เรียกคิว/เสร็จสิ้น/...) wrote NO log line at all — they were invisible.
+// queue action buttons (เรียกคิว/เสร็จสิ้น/...) wrote NO detailed log line at all — only a generic audit row.
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -21,6 +21,13 @@ const slipFor = (sb, user, name, msg, key, amount, ref) => {
     return sb.sendSlip(user, msg, key);
 };
 
+// ระบบเขียน system.log แบบ async (ไม่บล็อกโปรแกรมหลัก) ดังนั้นเทสต์ต้องรอ-อ่านซ้ำจนกว่าบรรทัดจะลงไฟล์จริง
+// (บน Linux CI การเขียนไฟล์เสร็จช้ากว่าการตอบ HTTP กลับ ทำให้การอ่านครั้งเดียวแบบเดิมพบ race condition)
+const waitForLog = (sb, re, message) => sb.waitFor(
+    () => re.test(fs.readFileSync(path.join(sb.dir, 'system.log'), 'utf8')),
+    8000, message || `system.log never matched ${re}`
+);
+
 test('queue buttons during a live land in system.log AND the Discord activity channel', () => withSandbox(async sb => {
     await slipFor(sb, 'Ualice', 'Alice', 'm1', 'k1', 140, 'ACT1');
     await sb.waitForSlips(1);
@@ -31,11 +38,10 @@ test('queue buttons during a live land in system.log AND the Discord activity ch
     await sb.post('/api/queue/action', { action: 'completed', slipIds: [alice] });
     await sb.endLive();
 
-    const log = fs.readFileSync(path.join(sb.dir, 'system.log'), 'utf8');
-    assert.match(log, /เริ่มไลฟ์รอบใหม่ \(รหัสรอบ LIVE_/);
-    assert.match(log, /แม่ค้ากด "เรียกคิว" — Alice/);
-    assert.match(log, /แม่ค้ากด "เสร็จสิ้น" — Alice/);
-    assert.match(log, /จบไลฟ์ \(รหัสรอบ LIVE_/);
+    await waitForLog(sb, /เริ่มไลฟ์รอบใหม่ \(รหัสรอบ LIVE_/);
+    await waitForLog(sb, /แม่ค้ากด "เรียกคิว" — Alice/);
+    await waitForLog(sb, /แม่ค้ากด "เสร็จสิ้น" — Alice/);
+    await waitForLog(sb, /จบไลฟ์ \(รหัสรอบ LIVE_/);
 
     // Discord ช่องกิจกรรม (live monitor): การกระทำของแม่ค้าต้องมาถึงในสรุปฉบับที่ส่งเป็นชุด
     // (แต่ละ action อาจไปคนละชุดก็ได้ จึงรวมข้อความทุกชุดที่ส่งถึงช่องนี้แล้วตรวจรวมกัน)
@@ -56,27 +62,27 @@ test('manual amount entry, orange-card dismiss, image-fail dismiss and slip reje
     // แม่ค้ากรอกยอดสลิปเอง (รูปที่ระบบอ่านไม่ได้)
     const manualId = sb.insertSlip({ name: 'Manu', line_id: 'Umanu', amount: 0, draws: 0, trans_date: bkkDate(0), qr_payload: 'manual_image|abc|', status: 'abnormal_pending' });
     await sb.post('/api/queue/manual_amount', { slipId: manualId, amount: 140 });
-    assert.match(fs.readFileSync(path.join(sb.dir, 'system.log'), 'utf8'), /แม่ค้ากรอกยอดสลิปเอง 140 บาท — Manu/);
+    await waitForLog(sb, /แม่ค้ากรอกยอดสลิปเอง 140 บาท — Manu/);
 
     // ปิดการ์ดส้ม (รอโอนเพิ่ม)
     const oweId = sb.insertSlip({ name: 'Owe', line_id: 'Uowe', amount: 60, draws: 0, trans_date: bkkDate(0), status: 'accumulated' });
     await sb.post('/api/queue/dismiss_topup', { id: oweId });
-    assert.match(fs.readFileSync(path.join(sb.dir, 'system.log'), 'utf8'), /แม่ค้าปิดการ์ดส้ม "รอโอนเพิ่ม" ของ Owe \(1 ใบ\)/);
+    await waitForLog(sb, /แม่ค้าปิดการ์ดส้ม "รอโอนเพิ่ม" ของ Owe \(1 ใบ\)/);
 
     // ปัดตกรูปที่ไม่ใช่สลิป
     const rejId = sb.insertSlip({ name: 'Reject', line_id: 'Urej', amount: 0, draws: 0, trans_date: bkkDate(0) });
     await sb.post('/api/queue/reject_slip', { slipId: rejId });
-    assert.match(fs.readFileSync(path.join(sb.dir, 'system.log'), 'utf8'), /แม่ค้าปัดตกรูปที่ไม่ใช่สลิปการโอนเงิน — Reject \(สลิป #/);
+    await waitForLog(sb, /แม่ค้าปัดตกรูปที่ไม่ใช่สลิปการโอนเงิน — Reject \(สลิป #/);
 
     // อนุมัติ/ปัดตกสลิปรอตรวจหลังจบไลฟ์
     const abnormalId = sb.insertSlip({ name: 'LateCheck', line_id: 'Ulate', amount: 140, draws: 1, trans_date: bkkDate(0), status: 'abnormal_pending' });
     await sb.post('/api/queue/verify_abnormal', { slipIds: [abnormalId], isApproved: true });
-    assert.match(fs.readFileSync(path.join(sb.dir, 'system.log'), 'utf8'), /หลังจบไลฟ์ แม่ค้าอนุมัติสลิปรอตรวจภาพ 1 ใบ/);
+    await waitForLog(sb, /หลังจบไลฟ์ แม่ค้าอนุมัติสลิปรอตรวจภาพ 1 ใบ/);
 
     // เคลียร์คิวทั้งหมด
     sb.insertSlip({ name: 'Waiter', line_id: 'Uwait', amount: 140, draws: 1, trans_date: bkkDate(0), status: 'waiting' });
     await sb.post('/api/queue/clear', {});
-    assert.match(fs.readFileSync(path.join(sb.dir, 'system.log'), 'utf8'), /แม่ค้ากด "เคลียร์คิวทั้งหมด" \(1 รายการ\)/);
+    await waitForLog(sb, /แม่ค้ากด "เคลียร์คิวทั้งหมด" \(1 รายการ\)/);
 
     assert.deepEqual(sb.unexpectedCalls(), []);
 }, {}, ENV));
