@@ -1,10 +1,31 @@
 # 🧠 AutoQueue for Live — Project Persistent Memory
 
-> Last refreshed: 2026-10-29, at release **v1.0.15** (main branch synced).
-> Before touching code, read `AGENTS.md` — it has the file map, business invariants, and traps.
+> Last refreshed: 2026-10-29 (end of session). Code on main = **v1.0.16, tagged, packaged, sitting in a DRAFT release — NOT published yet** (merchant machines still run v1.0.15).
+> Before touching code, read `AGENTS.md` — file map, business invariants, traps, rule ก (out-of-round slips), and the test-suite guide.
+
+## 0. 🔖 CURRENT STATUS & WHAT THE NEXT SESSION MUST DO (handoff)
+
+**Done and verified this session (all pushed):**
+- main synced to latest release line; tag `v1.0.16` at commit `739d226`; draft GitHub Release "AutoQueueforLive v1.0.16" carries `update_v1.0.16.zip` (240 KB, sha256 `ba665083…`, verified byte-identical via the raw URL) + `version.json`
+- 56 automated tests, all green locally (Windows) and on CI (Linux): money rules, duplicates, shipping, merge-bills, out-of-round claim + Kerry file, silent-drop cards, end-of-live Discord report
+- CI: `.github/workflows/ci.yml` runs `npm test` on every push/PR (ubuntu-latest, Node 24)
+- `.gitattributes` locks `*.bat`/`*.vbs` to LF — REQUIRED because `updater.bat` overwrites itself while running; a CRLF-packed copy breaks cmd.exe mid-update (proven in a real experiment: the CRLF run executed garbage like `'py' is not recognized`). Every shipped zip v1.0.10–v1.0.16 contains LF `updater.bat` 2,168 bytes — keep it that way. Packing MUST be done from a fresh clone (`.gitattributes` guarantees LF even with `core.autocrlf=true`)
+- New feature: end-of-live Discord summary embed on every "จบไลฟ์" (round stats + every ERROR with per-error fix guidance + warn count)
+
+**Next session, in order:**
+1. **Manual test before publishing v1.0.16** (automation cannot cover these): follow `tests/MANUAL_TEST_CHECKLIST.md` on a NON-shop Windows machine that has a v1.0.15 install + a test LINE OA account: real LINE webhook, real SlipOK credit, tunnel, and one real update via `UPDATE_MANIFEST_URL = https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/739d226/releases/version.json` (set through the setup page or `POST /api/system/save_update_url`, then press update on the dashboard; clear it afterwards). Optional smoke test: set real Discord webhooks, start+end a live, check the summary embed arrives.
+2. **Publish when tests pass:** `gh release edit v1.0.16 --repo Napat-Newbie/AutoQueueforLive --draft=false --latest`, then verify `curl -sL https://github.com/Napat-Newbie/AutoQueueforLive/releases/latest/download/version.json` answers 1.0.16. Rollback if needed: `gh release edit v1.0.15 --latest` (machines already updated cannot be downgraded this way — `hasUpdate` only fires on newer versions).
+3. **Post-release backlog (agreed):**
+   - `pack_update.js`: make `--publish` exit non-zero on failure; add an option to generate the raw-URL manifest automatically (today the URL is rewritten by hand between commit A and commit B)
+   - Split `index.js` (~5,000 lines) into modules — now UNBLOCKED because the test suite exists; order agreed long ago: extract pure money logic first (`calculateBestDraws` etc. reference module-level `priceList/shippingFee/...`, so convert them to parameters when extracting), then split by domain. Tests must stay green after every move
+   - Long-term hardening: `updater.bat` self-overwrite is fragile by design (works only because shipped bytes are identical); consider a tiny stub that re-execs the new file
+
+**Release procedure that works (v1.0.11–v1.0.16 pattern):** fresh clone → `node pack_update.js <ver> "item1; item2"` (no `--publish`) → verify zip contents (no `tests/`, `.github/`, `*.md`; `updater.bat` = 2,168 B) → bump `installer.iss` → commit A (zip + package.json + installer.iss + changelog.html) → push → rewrite `releases/version.json` downloadUrl to `https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/<commit-A-sha>/releases/update_vX.zip` → verify sha256 of the downloaded file → commit B → tag vX at B → `gh release create vX <zip> <version.json> --draft --verify-tag` → test → `--draft=false --latest`. Merchant machines read the manifest from the **Release asset** (`releases/latest/download/version.json`, index.js DEFAULT_MANIFEST_URL), not from the repo file.
+
+**Machine-setup notes for a new dev PC:** `gh auth login` as Napat-Newbie (repo scope). Node 24 works, but `better-sqlite3@13` ships no prebuilt binary — if `npm install` fails at node-gyp, retry `npm install --no-save better-sqlite3@latest` (same version, succeeds). Tests need `node:sqlite` (built into Node 24, no flag). `.gitattributes` handles line endings; no special git config needed.
 
 ## 1. Project Overview & Architecture
-* **Name:** AutoQueue for Live (v1.0.15)
+* **Name:** AutoQueue for Live (v1.0.16 draft; merchant machines run v1.0.15)
 * **GitHub Repository:** `https://github.com/Napat-Newbie/AutoQueueforLive`
 * **Core Technology Stack:**
   * **Backend:** Node.js (CommonJS), Express 5, Socket.IO, `better-sqlite3` (local SQLite, WAL mode — the `supabase` variable in index.js is this local DB, not cloud Supabase)
@@ -14,9 +35,9 @@
   * **Address Extraction:** Gemini AI with regex-based Thai address fallback
   * **Logistics Export:** Kerry Express (KEX) EasyShip Excel via `exceljs`, per live-round or per date, merged rounds export as one file (v1.0.15)
   * **Tunneling & Inbound Webhook:** Cloudflare Quick Tunnel primary + LocalTunnel fallback, watchdog restart, auto-sync webhook URL to LINE Developers Console
-  * **Monitoring & Alerts:** Discord Webhook auto-diagnostics (activity + dev-report channels, rate-limit queue)
-  * **Self-healing:** SQLite busy retry, disk-space cleanup tiers, auto-backup every 6h + before each live, backup pruning
-  * **Auto-updater:** downloads self-hosted zips from `releases/` via raw.githubusercontent.com (NOT GitHub release-assets — old updaters block that redirect)
+  * **Monitoring & Alerts:** Discord — every `addLog` flows to the activity channel (batched 1/min) and ERRORs go to the dev-report channel immediately with fix guidance; end-of-live summary embed on every "จบไลฟ์" (v1.0.16); rate-limit queue
+  * **Self-healing:** SQLite busy retry, disk-space cleanup tiers, auto-backup every 6h + before each live, backup pruning, `system.log` file with rotation (v1.0.16)
+  * **Auto-updater:** downloads self-hosted zips committed to `releases/` via raw.githubusercontent.com; allowlist also permits github.com + release-assets for this repo (index.js `isUpdateUrlAllowed`)
 
 ## 2. Key Operational Details
 * **Installed Location on Merchant PC:** `D:\Users\napat\AppData\Local\Programs\AutoQueueforLive`
@@ -24,36 +45,33 @@
 * **Cloudflare Tunnel URL:** changes per session; the app auto-syncs the current URL to LINE Developers Console — do not hardcode
 * **Discord Alert Webhook:** `(เก็บไว้ใน .env -> DISCORD_WEBHOOK_URL เท่านั้น ห้ามใส่ลิงก์จริงในไฟล์นี้)`
 
-## 3. Audit Findings from v1.0.5 — resolved (the last midnight edge case is closed by the unreleased out-of-round work, see item 3)
-1. ~~BUG-01~~ **Fixed:** webhook now iterates `for (const event of events)` — no dropped slips in a batch
-2. ~~SEC-01 & SEC-02~~ **Fixed:** update URLs restricted to allowlisted hosts; full 3-tier RBAC middleware (Tier A local/tunnel-login, Tier B merchant+dreamdev, Tier C dreamdev-only) + `/uploads` requires login
-3. **BUG-02 & BUG-03 — fixed:** broadcasts, `/api/stats/today`, slip inserts and Kerry export use `session_id`; `last_ended_live_session` covers livestreams crossing midnight. Fixed after v1.0.15 (not released yet): reloading the page during a live loads the live-round stats (it used to load per-date stats until the next broadcast); `/api/kerry/summary` uses the same live-round rule as the Excel download; slips paid outside a live (before pressing start, or between two rounds) are attached to the next round at start (rule ก, AGENTS.md 4.5) and `countPastDraws()` also counts unattached slips of the live's start date, which closes the case where a customer who paid before the live was charged shipping again after midnight. Each of these has a test in `tests/` that fails on the previous code
-4. ~~DB-01~~ **Fixed:** indexes on `trans_date`, `status`, `line_id`, `session_id` + partial UNIQUE index on `trans_ref`; `busy_timeout = 10000`
+## 3. Audit Findings from v1.0.5 — ALL RESOLVED (verified in v1.0.16 code, each has a test)
+1. ~~BUG-01~~ webhook iterates all events in a batch
+2. ~~SEC-01 & SEC-02~~ update URLs allowlisted; 3-tier RBAC; `/uploads` requires login
+3. ~~BUG-02 & BUG-03~~ everything round-scoped by `session_id`; midnight-crossing covered; page reload during a live loads live-round stats; Kerry summary matches the file; out-of-round slips claimed into the next round (rule ก)
+4. ~~DB-01~~ indexes + partial UNIQUE on `trans_ref`; `busy_timeout = 10000`
 
 ## 4. Release History Milestones (post-v1.0.11)
-* **v1.0.12** — dev login via shared login window (no username field); fixed: dev login impossible since v1.0.8
+* **v1.0.12** — dev login via shared login window; fixed: dev login impossible since v1.0.8
 * **v1.0.13** — dismiss button on orange top-up cards; starting a new live resets customer wallets (with pre-start warning)
 * **v1.0.14** — retry LINE slip image download (3 tries); red warning card when it still fails
-* **v1.0.15** — merge bills across 2 live rounds (hold at end of live, no double shipping, combined free-shipping count, single Kerry file); per-round totals + round column on history page
+* **v1.0.15** — merge bills across 2 live rounds; per-round totals + round column on history page
+* **v1.0.16 (DRAFT, not published)** — out-of-round slips claimed into the next round; red cards for unrecorded slips (wrong account / other customer's duplicate / re-sent rejected slip); `system.log` file; live-round stats on page reload + Kerry summary fix; provider logos as files (zip ~150 KB smaller); end-of-live Discord summary with per-error fix guidance; 56-test suite + CI; `.gitattributes` LF lock for installed scripts
 
 ## 5. How to Continue Development on Any Machine
 1. **Clone the repository:**
    ```bash
    git clone https://github.com/Napat-Newbie/AutoQueueforLive.git
    cd AutoQueueforLive
-   npm install
+   npm install        # Node 24: if better-sqlite3 build fails, retry: npm install --no-save better-sqlite3@latest
    ```
-2. **Environment Variables (.env):** copy secrets (LINE Access Token + Channel Secret, slip provider keys, Gemini API Key, Discord Webhook URLs). `.env` is gitignored — never commit it.
-3. **Run Application:**
-   ```bash
-   node index.js   # port 3000
-   ```
-4. **Known gaps / agreed roadmap:** tests exist (`npm test`, see AGENTS.md section 8: they cut the real functions out of index.js and run the real server in a sandbox) but there is no CI yet. Next, in order: extract pure money logic to a module → split index.js by domain → add CI. Do not refactor the monolith without these tests passing.
+2. **Run tests before anything else:** `npm test` (56 tests, ~20 s; needs no .env, no network — everything runs in a sandbox)
+3. **Environment Variables (.env):** copy secrets (LINE Access Token + Channel Secret, slip provider keys, Gemini API Key, Discord Webhook URLs). `.env` is gitignored — never commit it.
+4. **Run Application:** `node index.js` (port 3000)
 
-## 6. Multi-Model Team Workflow (Kiro + Gemini + ZCode)
-* **Kiro Conductor (`kiro_conductor` - Model: `pro` / Claude Opus Tier):**
-  - Responsibilities: System auditing, architectural oversight, edge-case analysis, acceptance criteria definition, and post-implementation review.
-* **Gemini (`gemini` - Model: Gemini 3.8 Flash):**
-  - Responsibilities: Rapid code generation, bug fixing, database migrations, script executions, and unit testing following Kiro's criteria.
-* **ZCode (GLM):** interactive development sessions — analysis, refactors, git operations, and docs (created `AGENTS.md`, synced main to v1.0.15).
-* Token-saving rule: point agents at specific files/lines (see map in `AGENTS.md`) instead of letting them explore; batch work into fewer sessions.
+## 6. Multi-Model Team Workflow (Kiro + Gemini + Claude + ZCode)
+* **Kiro Conductor (Claude Opus tier):** system auditing, architectural oversight, edge-case analysis, acceptance criteria, post-implementation review
+* **Gemini (3.8 Flash):** rapid code generation, bug fixing, migrations, scripts, unit tests
+* **Claude Sonnet:** read-only deep reviews (release-path review 2026-10-29 was verified accurate; its updater.bat CRLF warning was proven real by experiment)
+* **ZCode (GLM):** interactive sessions — analysis, features, tests, CI, docs, git/release engineering
+* Rules: verify every AI claim against the code before acting on it; point agents at specific files/lines (map in `AGENTS.md`); batch work into fewer sessions to save tokens
