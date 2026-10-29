@@ -1482,10 +1482,16 @@
                 displayName = `${data.lineName} (LINE)`;
             }
 
+            // v1.0.16: ป้าย "โอนนอกรอบ" — เงินก้อนนี้เข้ามาตอนไม่มีไลฟ์ (มักเป็นยอดจุ่มที่โอนทีหลัง) ให้แม่ค้าตรวจสอบก่อนส่งของซ้ำ
+            const outOfRoundBadge = data.outOfRound
+                ? `<div style="display:inline-block; margin-top:6px; padding:3px 10px; border-radius:12px; background:#7b1fa2; color:#fff; font-size:0.82em; font-weight:700;">🕒 โอนนอกรอบ — เงินมาหลังจบไลฟ์ ตรวจก่อนส่งของ</div>`
+                : '';
+
             const innerContent = `
-                <div class="queue-number"></div> 
+                <div class="queue-number"></div>
                 <div class="queue-info">
                     <div class="name">👤 <span>${escapeHtml(displayName)}</span></div>
+                    ${outOfRoundBadge}
                     <div style="font-size: 0.85em; color:#777; margin-top:5px;">ยอดโอน: ${data.amount > 0 ? data.amount : '?'} บาท</div>
                     ${breakdownDisplay}
                 </div>
@@ -2584,6 +2590,14 @@
                         if (data.missingCustomers && data.missingCustomers.length > 0) {
                             missingUl.innerHTML = data.missingCustomers.map(name => `<li>${escapeHtml(name)} (ยังไม่ส่งที่อยู่ในแชท LINE)</li>`).join('');
                             missingBox.style.display = 'block';
+                        }
+                        // v1.0.16: เตือนรายชื่อลูกค้า "โอนนอกรอบ" (เงินมาตอนไม่มีไลฟ์ — มักเป็นยอดจุ่ม) ให้ตรวจสอบก่อนพิมพ์ใบส่งของ
+                        if (data.outOfRoundCustomers && data.outOfRoundCustomers.length > 0) {
+                            statusBox.innerHTML += `
+                                <div style="margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: #f3e5f5; color: #7b1fa2; font-weight: 600;">
+                                    🕒 โอนนอกรอบ (เงินมาหลังจบไลฟ์): ${data.outOfRoundCustomers.map(n => escapeHtml(n)).join(', ')} — ถ้าเป็นยอดจุ่มที่จ่ายของไปแล้ว อย่าส่งของซ้ำ (ในไฟล์ Excel จะมีโน้ตไว้ในช่อง Remark)
+                                </div>
+                            `;
                         }
                     } else {
                         statusBox.innerHTML = 'ไม่สามารถดึงข้อมูลที่อยู่ได้';

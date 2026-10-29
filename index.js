@@ -7,6 +7,41 @@ if (!process.env.AQ_SUPERVISED && process.env.AQ_NO_SUPERVISOR !== '1') {
     const fsSup = require('fs');
     const pathSup = require('path');
     const supLog = (msg) => { try { fsSup.appendFileSync(pathSup.join(__dirname, 'supervisor.log'), `[${new Date().toISOString()}] ${msg}\n`); } catch (e) {} };
+    // v1.0.16: จังหวะที่ตัวเฝ้ายอมแพ้ (ลูกพังซ้ำจนเลิกเปิดใหม่อัตโนมัติ) = Self-Healing หมดทางแล้ว
+    // ตัวเฝ้าจึงส่งข้อความ "ขออัปเดตเวอร์ชันใหม่" เข้า Discord ด้วยตัวเอง (ลูกซึ่งเป็นคิว Discord ปกติพังไปแล้ว)
+    // อ่าน webhook จากไฟล์ .env เองเพราะ dotenv ยังไม่ถูกโหลดตอนนี้ — ทุกอย่างครอบ try/catch การแจ้งเตือนล้มต้องไม่กระทบตัวเฝ้า
+    const notifyGiveUpDiscord = (code, signal, times) => {
+        let finished = false;
+        const finish = () => { if (!finished) { finished = true; process.exit(code || 1); } };
+        try {
+            const envText = fsSup.readFileSync(pathSup.join(__dirname, '.env'), 'utf8');
+            const env = {};
+            envText.split(/\r?\n/).forEach(l => { const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, ''); });
+            const url = env.DISCORD_DEVREPORT_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL || '';
+            if (!/^https:\/\/(discord|discordapp)\.com\/api\/webhooks\//.test(url)) { finish(); return; }
+            let version = '?';
+            try { version = JSON.parse(fsSup.readFileSync(pathSup.join(__dirname, 'package.json'), 'utf8')).version || '?'; } catch (e) {}
+            const shop = env.MERCHANT_ACCOUNT_NAME ? `ร้าน${env.MERCHANT_ACCOUNT_NAME}` : 'ร้านค้า (AutoQueue)';
+            const payload = JSON.stringify({ embeds: [{
+                title: '📮 [ขออัปเดตเวอร์ชันใหม่] โปรแกรมพังซ้ำจนตัวเฝ้าหยุดเปิดใหม่อัตโนมัติ',
+                color: 15158332,
+                fields: [
+                    { name: 'ร้าน / เวอร์ชันที่ติดตั้งอยู่', value: `${shop} / v${version}`, inline: false },
+                    { name: 'ปัญหาที่พบ', value: `โปรแกรมหยุดทำงาน ${times} ครั้งใน 10 นาที (code=${code}, signal=${signal || '-'}) ตัวเฝ้าหยุดเปิดใหม่อัตโนมัติแล้ว — ร้านต้องเปิดโปรแกรมเอง`, inline: false },
+                    { name: 'ทำไมระบบซ่อมเองไม่ได้', value: 'ตัวเฝ้าช่วยได้แค่เปิดโปรแกรมใหม่ ซึ่งไม่ได้แก้ต้นเหตุ — พังซ้ำ 5 ครั้งใน 10 นาที แปลว่าต้องแก้โค้ดในเวอร์ชันใหม่เท่านั้น', inline: false },
+                    { name: 'ที่ผู้พัฒนาควรทำ', value: 'เปิด supervisor.log และ system.log ของร้านดูสาเหตุการพัง แก้แล้วออกเวอร์ชันใหม่ ให้ร้านกด "ตรวจสอบอัปเดต" ในโปรแกรม', inline: false }
+                ],
+                footer: { text: `AutoQueueforLive Update Request • ${new Date().toISOString()}` }
+            }] });
+            const https = require('https');
+            const req = https.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }, timeout: 5000 }, r => { r.resume(); r.on('end', finish); });
+            req.on('error', finish);
+            req.on('timeout', () => req.destroy());
+            req.end(payload);
+            setTimeout(finish, 6000); // รับประกันว่าตัวเฝ้าต้องปิดตัวเองภายใน 6 วินาที ไม่ค้างรอ Discord
+            supLog('ส่งข้อความขออัปเดตเวอร์ชันใหม่เข้า Discord แล้ว (ถ้าตั้ง webhook ไว้)');
+        } catch (e) { finish(); /* การแจ้งเตือนล้มเหลวต้องไม่กระทบตัวเฝ้า */ }
+    };
     let restartTimes = [];
     let totalRestarts = 0;
     let child = null;
@@ -22,7 +57,8 @@ if (!process.env.AQ_SUPERVISED && process.env.AQ_NO_SUPERVISOR !== '1') {
             restartTimes = restartTimes.filter(t => now - t < 10 * 60 * 1000);
             if (restartTimes.length >= 5) {
                 supLog(`โปรแกรมหยุดทำงานซ้ำ ${restartTimes.length} ครั้งใน 10 นาที (code=${code}, signal=${signal}) หยุดเปิดใหม่อัตโนมัติ`);
-                process.exit(code || 1);
+                notifyGiveUpDiscord(code, signal, restartTimes.length);
+                return; // ปิดตัวเองใน notifyGiveUpDiscord (หลังส่ง Discord หรือหมดเวลา)
             }
             restartTimes.push(now);
             totalRestarts++;
@@ -368,6 +404,33 @@ function assessErrorForDevReport(category, text) {
 }
 const SEVERITY_STYLE = { CRITICAL: { icon: '🟥', color: 15158332, label: 'วิกฤต' }, HIGH: { icon: '🟧', color: 15105570, label: 'สูง' }, MEDIUM: { icon: '🟨', color: 16776960, label: 'ปานกลาง' }, LOW: { icon: '🟦', color: 3447003, label: 'ต่ำ' } };
 
+// 📮 v1.0.16: embed "ขออัปเดตเวอร์ชันใหม่" — ใช้เมื่อระบบพบข้อผิดพลาดที่ซ่อมเองไม่ได้ (Self-Healing หมดทาง)
+// เกณฑ์: Error ระดับ CRITICAL (โค้ดพังที่กู้คืนอัตโนมัติไม่มีทางช่วย) หรือ Error เดิมเกิดซ้ำถึงเพดานภายใน 30 นาที
+// สองฟังก์ชันนี้เป็น pure function เพื่อทดสอบแยกด้วย unit test ตรง ๆ (เหมือน buildEndOfLiveReportEmbed)
+const UPDATE_REQUEST_REPEAT_THRESHOLD = 5;
+function shouldRequestNewVersion(severity, repeatCount) {
+    return severity === 'CRITICAL' || Number(repeatCount) >= UPDATE_REQUEST_REPEAT_THRESHOLD;
+}
+function buildUpdateRequestEmbed({ problem = '', whyCannotSelfHeal = '', tried = '', fixGuidance = '', meta = {} } = {}) {
+    const fields = [
+        { name: 'ร้าน / เวอร์ชันที่ติดตั้งอยู่', value: `${meta.shopLabel || '-'} / v${meta.version || '?'}`, inline: false },
+        { name: 'ปัญหาที่พบ', value: String(problem || '-').slice(0, 500), inline: false },
+        { name: 'ทำไมระบบซ่อมเองไม่ได้', value: String(whyCannotSelfHeal || '-').slice(0, 500), inline: false }
+    ];
+    if (tried) fields.push({ name: 'สิ่งที่ระบบพยายามแล้ว', value: String(tried).slice(0, 500), inline: false });
+    fields.push({
+        name: 'ที่ผู้พัฒนาควรทำ',
+        value: `${fixGuidance ? String(fixGuidance).slice(0, 500) + '\n' : ''}→ แก้แล้วออกเวอร์ชันใหม่ ให้ร้านกด "ตรวจสอบอัปเดต" ในโปรแกรม`,
+        inline: false
+    });
+    return {
+        title: '📮 [ขออัปเดตเวอร์ชันใหม่] พบข้อผิดพลาดที่ระบบซ่อมเองไม่ได้',
+        color: 15158332,
+        fields,
+        footer: { text: `AutoQueueforLive Update Request • ${new Date().toLocaleString('en-GB', { timeZone: 'Asia/Bangkok' })}` }
+    };
+}
+
 // ---- ช่อง 1: บันทึกกิจกรรม (รวมส่งทุก 60 วินาที) ----
 const activityBuffer = [];
 let activityDropped = 0;
@@ -398,11 +461,11 @@ function flushActivity() {
     });
     processDiscordQueue().catch(() => {});
 }
-setInterval(flushActivity, 60 * 1000).unref();
+setInterval(flushActivity, Number(process.env.DISCORD_ACTIVITY_FLUSH_MS) > 0 ? Number(process.env.DISCORD_ACTIVITY_FLUSH_MS) : 60 * 1000).unref();
 
 // ---- ช่อง 2: รายงาน Error สำหรับแก้ในเวอร์ชันถัดไป (ส่งทันที, Error เดิมซ้ำใน 30 นาทีรวมเป็นตัวนับ) ----
 const devReportSeen = new Map();
-function queueDevReport({ kind = 'ERROR', category = '', message = '', details = null, actionDetails = '' } = {}) {
+function queueDevReport({ kind = 'ERROR', category = '', message = '', details = null, actionDetails = '', whyCannotSelfHeal = '', fixGuidance = '' } = {}) {
     const url = getDevReportWebhook();
     if (!url || process.env.DISCORD_ALERTS_ENABLED === 'false') return;
     const clean = redactPersonalInfo(message);
@@ -415,7 +478,19 @@ function queueDevReport({ kind = 'ERROR', category = '', message = '', details =
             seen.timer = setTimeout(() => {
                 const s = devReportSeen.get(sig);
                 if (s && s.count > 0) {
-                    discordAlertQueue.push({ url, payload: { embeds: [{ title: `🔁 Error เดิมเกิดซ้ำอีก ${s.count} ครั้งใน 30 นาที`, description: clean.slice(0, 1500), color: 15105570, footer: { text: `${getShopLabel()} • v${getAppVersionSafe()}` } }] } });
+                    // v1.0.16: Error เดิมเกิดซ้ำจนถึงเพดาน = กลไกลองซ้ำ/กู้คืนอัตโนมัติช่วยไม่ได้จริง เปลี่ยนเป็นข้อความ "ขออัปเดตเวอร์ชันใหม่"
+                    let embed;
+                    if (shouldRequestNewVersion(null, s.count)) {
+                        embed = buildUpdateRequestEmbed({
+                            problem: `${clean.slice(0, 300)} — เกิดซ้ำ ${s.count} ครั้งใน 30 นาที`,
+                            whyCannotSelfHeal: `Error เดิมเกิดซ้ำ ${s.count} ครั้งใน 30 นาที แม้ระบบจะลองใหม่/กู้คืนอัตโนมัติแล้ว (เกณฑ์ ${UPDATE_REQUEST_REPEAT_THRESHOLD} ครั้ง)`,
+                            fixGuidance: (assessErrorForDevReport(category, clean) || {}).fix || '',
+                            meta: { shopLabel: getShopLabel(), version: getAppVersionSafe() }
+                        });
+                    } else {
+                        embed = { title: `🔁 Error เดิมเกิดซ้ำอีก ${s.count} ครั้งใน 30 นาที`, description: clean.slice(0, 1500), color: 15105570, footer: { text: `${getShopLabel()} • v${getAppVersionSafe()}` } };
+                    }
+                    discordAlertQueue.push({ url, payload: { embeds: [embed] } });
                     processDiscordQueue().catch(() => {});
                 }
                 devReportSeen.delete(sig);
@@ -427,6 +502,7 @@ function queueDevReport({ kind = 'ERROR', category = '', message = '', details =
     devReportSeen.set(sig, { first: now, count: 0, timer: null });
     if (devReportSeen.size > 500) devReportSeen.delete(devReportSeen.keys().next().value);
 
+    const embeds = [];
     let embed;
     if (kind === 'SELF_HEALING') {
         embed = {
@@ -436,6 +512,15 @@ function queueDevReport({ kind = 'ERROR', category = '', message = '', details =
                 { name: 'ควรทำในเวอร์ชันถัดไป', value: 'ตรวจว่าทำไมปัญหานี้เกิด และแก้ที่ต้นเหตุ ถ้าเกิดบ่อยแปลว่าระบบแก้ได้แค่ปลายเหตุ', inline: false }
             ]
         };
+    } else if (kind === 'UPDATE_REQUEST') {
+        // v1.0.16: ข้อความ "ขออัปเดตเวอร์ชันใหม่" — เรียกจากจุดที่ตรวจพบว่าระบบซ่อมเองไม่ได้ (CRITICAL / ซ้ำเกินเพดาน / แครชวนซ้ำ)
+        embed = buildUpdateRequestEmbed({
+            problem: clean,
+            whyCannotSelfHeal,
+            tried: actionDetails,
+            fixGuidance,
+            meta: { shopLabel: getShopLabel(), version: getAppVersionSafe() }
+        });
     } else {
         const a = assessErrorForDevReport(category, clean);
         const st = SEVERITY_STYLE[a.severity] || SEVERITY_STYLE.MEDIUM;
@@ -451,9 +536,20 @@ function queueDevReport({ kind = 'ERROR', category = '', message = '', details =
             fields.push({ name: 'รายละเอียดทางเทคนิค', value: '```' + d.replace(/```/g, "'''") + '```', inline: false });
         }
         embed = { title: `${st.icon} พบ Error: ${clean.slice(0, 200)}`, color: st.color, fields };
+        // v1.0.16: Error ระดับ CRITICAL = โค้ดพังที่ระบบกู้คืนอัตโนมัติไม่ได้ แนบข้อความ "ขออัปเดตเวอร์ชันใหม่" ตามไปอีก 1 ข้อความ
+        if (shouldRequestNewVersion(a.severity, 0)) {
+            embeds.push(buildUpdateRequestEmbed({
+                problem: clean,
+                whyCannotSelfHeal: `ระดับความรุนแรง CRITICAL — ${a.cause}`,
+                tried: 'ตัวเฝ้าโปรแกรมช่วยได้แค่เปิดใหม่ ซึ่งไม่ได้แก้ต้นเหตุ ส่วนกลไกลองซ้ำอัตโนมัติไม่ครอบคลุมข้อผิดพลาดประเภทนี้',
+                fixGuidance: a.fix,
+                meta: { shopLabel: getShopLabel(), version: getAppVersionSafe() }
+            }));
+        }
     }
     embed.footer = { text: `AutoQueueforLive Dev Report • ${new Date().toLocaleString('en-GB', { timeZone: 'Asia/Bangkok' })}` };
-    discordAlertQueue.push({ url, payload: { embeds: [embed] } });
+    embeds.unshift(embed);
+    discordAlertQueue.push({ url, payload: { embeds } });
     processDiscordQueue().catch(() => {});
 }
 
@@ -506,6 +602,22 @@ function addLog(type, message, details = null) {
     } catch (e) { /* การส่ง Discord ต้องไม่ทำให้การบันทึกล้ม */ }
 }
 addLog('INFO', 'ระบบเริ่มต้นทำงานเรียบร้อย');
+// v1.0.16: ถ้าตัวเฝ้า (supervisor) เปิดโปรแกรมใหม่เพราะแครช ให้มีบรรทัด log ไว้ไล่ย้อน และถ้าแครชวนซ้ำมากพอ ถือว่า Self-Healing หมดทาง → ขออัปเดตเวอร์ชันใหม่ทางช่อง Dev Report
+{
+    const restartCount = Number(process.env.AQ_RESTART_COUNT) || 0;
+    if (restartCount > 0) {
+        addLog('WARN', `ตัวเฝ้าโปรแกรมเปิดใหม่อัตโนมัติครั้งที่ ${restartCount} เพราะโปรแกรมหยุดทำงานผิดปกติ (ดูสาเหตุใน supervisor.log และ system.log ก่อนหน้า)`);
+        if (restartCount >= 3) {
+            queueDevReport({
+                kind: 'UPDATE_REQUEST',
+                category: 'SYSTEM_CRASH_LOOP',
+                message: `โปรแกรมแครชจนตัวเฝ้าเปิดใหม่อัตโนมัติแล้ว ${restartCount} ครั้งในช่วงเปิดโปรแกรมครั้งนี้`,
+                whyCannotSelfHeal: 'การเปิดโปรแกรมใหม่ (Self-Healing ของตัวเฝ้า) ได้แค่รีสตาร์ท ไม่ได้แก้ต้นเหตุ — แครชวนซ้ำ 3 ครั้งขึ้นไปถือว่าต้องแก้ในเวอร์ชันใหม่',
+                fixGuidance: 'เปิด supervisor.log และ system.log ของร้าน ดูท้ายไฟล์หา stack ของการแครช แล้วแก้จุดนั้นก่อนออกเวอร์ชันถัดไป'
+            });
+        }
+    }
+}
 
 // ดักจับ Unhandled Error ทั่วไประดับ Process เพื่อให้บันทึก Error Log ได้เสมอ
 process.on('uncaughtException', (err) => {
@@ -1885,12 +1997,14 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
                 existing.amount += slip.amount;
                 existing.draws += slip.draws || 0;
                 existing.slipIds.push(slip.id);
+                if (slip.arrived_out_of_round === 1) existing.outOfRound = true;
                 if (breakdown) existing.rawBreakdowns.push(breakdown);
             } else {
                 groupMap[statusGroup].set(key, {
                     id: slip.id, slipIds: [slip.id], name: slip.sender_name, lineName: slip.line_name,
-                    amount: slip.amount, draws: slip.draws || 0, time: slip.trans_time, status: statusGroup, 
+                    amount: slip.amount, draws: slip.draws || 0, time: slip.trans_time, status: statusGroup,
                     isPendingAmount: isPendingAmount, imageUrl: imageUrl,
+                    outOfRound: slip.arrived_out_of_round === 1,   // v1.0.16: ป้าย "โอนนอกรอบ" (เงินมาตอนไม่มีไลฟ์)
                     rawBreakdowns: breakdown ? [breakdown] : []
                 });
             }
@@ -2061,7 +2175,7 @@ app.get('/api/history_data', async (req, res) => {
             
             let safeRef = `${transRef}|${breakdownStr}`;
 
-            return { id: slip.id, date: slip.trans_date, time: slip.trans_time, name: slip.sender_name, lineName: slip.line_name, amount: slip.amount, draws: slip.draws || 0, status: slip.status, ref: safeRef, sessionId: slip.session_id || null };
+            return { id: slip.id, date: slip.trans_date, time: slip.trans_time, name: slip.sender_name, lineName: slip.line_name, amount: slip.amount, draws: slip.draws || 0, status: slip.status, ref: safeRef, sessionId: slip.session_id || null, outOfRound: slip.arrived_out_of_round === 1 };   // v1.0.16: ธง "โอนนอกรอบ" ใช้บอกในหน้าประวัติว่ายอดนี้เข้ามาตอนไม่มีไลฟ์แล้วถูกผูกเข้ารอบไหน
         });
 
         // v1.0.15: สรุปยอดโอนแยกตามรอบไลฟ์ (นับทั้งรอบ แม้ไลฟ์ข้ามเที่ยงคืน / ไม่นับสลิปที่ปัดตก)
@@ -2073,7 +2187,7 @@ app.get('/api/history_data', async (req, res) => {
                 const chunk = sessionIds.slice(i, i + 400);
                 const ph = chunk.map(() => '?').join(',');
                 const sums = supabase.db.prepare(
-                    `SELECT session_id, COALESCE(SUM(amount), 0) AS amount, COALESCE(SUM(draws), 0) AS draws, COUNT(*) AS slips, COUNT(DISTINCT line_id) AS customers
+                    `SELECT session_id, COALESCE(SUM(amount), 0) AS amount, COALESCE(SUM(draws), 0) AS draws, COUNT(*) AS slips, COUNT(DISTINCT line_id) AS customers, COALESCE(SUM(arrived_out_of_round), 0) AS oor
                      FROM slips WHERE status != 'rejected' AND session_id IN (${ph}) GROUP BY session_id`
                 ).all(...chunk);
                 sums.forEach(r => {
@@ -2085,7 +2199,8 @@ app.get('/api/history_data', async (req, res) => {
                         active: !!(activeLiveSession && activeLiveSession.id === r.session_id),
                         merged: !!(rec && (rec.mergeFrom || rec.mergedInto)),
                         holdMerge: !!(rec && rec.holdMerge && !rec.mergedInto),
-                        amount: Number(r.amount) || 0, draws: Number(r.draws) || 0, slips: Number(r.slips) || 0, customers: Number(r.customers) || 0
+                        amount: Number(r.amount) || 0, draws: Number(r.draws) || 0, slips: Number(r.slips) || 0, customers: Number(r.customers) || 0,
+                        outOfRoundSlips: Number(r.oor) || 0   // v1.0.16: ใบประกอบของรอบนี้ที่เงินเข้าตอนไม่มีไลฟ์ (โอนนอกรอบ)
                     });
                 });
             }
@@ -2109,6 +2224,9 @@ app.get('/api/history_data', async (req, res) => {
 });
 
 const ALLOWED_QUEUE_ACTIONS = new Set(['completed', 'called', 'skipped', 'waiting', 'cleared', 'rejected']);
+// v1.0.16: ทุกการกระทำของแม่ค้าต่อคิวต้องมีบรรทัด log (เข้า system.log + Discord ช่องกิจกรรม) เพื่อตรวจย้อนหลังได้ว่าใครกดอะไรตอนไหน
+const QUEUE_ACTION_LABELS = { called: 'เรียกคิว', skipped: 'ข้าม', completed: 'เสร็จสิ้น', cleared: 'เคลียร์', waiting: 'คืนสถานะรอ', rejected: 'ปัดตก' };
+
 app.post('/api/queue/action', async (req, res) => {
     try {
         const { action } = req.body || {};
@@ -2116,20 +2234,27 @@ app.post('/api/queue/action', async (req, res) => {
         if (!ALLOWED_QUEUE_ACTIONS.has(action) || slipIds.length === 0) {
             return res.status(400).json({ success: false, message: 'Invalid action or slipIds' });
         }
-        
+
+        const { data: slips } = await supabase.from('slips').select('id, line_name, qr_payload').in('id', slipIds);
+        const validSlips = slips || [];
+        const manualIds = validSlips.filter(s => s.qr_payload && s.qr_payload.startsWith('manual_image')).map(s => s.id);
+        const normalIds = validSlips.filter(s => !(s.qr_payload && s.qr_payload.startsWith('manual_image'))).map(s => s.id);
+
         if (action === 'completed') {
-            const { data: slips } = await supabase.from('slips').select('id, qr_payload').in('id', slipIds);
-            const validSlips = slips || [];
-            const manualIds = validSlips.filter(s => s.qr_payload && s.qr_payload.startsWith('manual_image')).map(s => s.id);
-            const normalIds = validSlips.filter(s => !(s.qr_payload && s.qr_payload.startsWith('manual_image'))).map(s => s.id);
-            
             if (manualIds.length > 0) { await supabase.from('slips').update({ status: 'abnormal_pending' }).in('id', manualIds); }
             if (normalIds.length > 0) { await supabase.from('slips').update({ status: 'completed' }).in('id', normalIds); }
         } else {
             await supabase.from('slips').update({ status: action }).in('id', slipIds);
         }
-        
-        await broadcastTodayStats(); 
+
+        // v1.0.16: บันทึกการกระทำของแม่ค้าลง log (ชื่อลูกค้าโชว์ตามเพื่อตรวจสอบ จำกัด 5 ชื่อแรกกันข้อความยาวเกิน)
+        const names = validSlips.map(s => s.line_name || `สลิป #${s.id}`);
+        const nameText = names.length <= 5 ? names.join(', ') : `${names.slice(0, 5).join(', ')} และอีก ${names.length - 5} รายการ`;
+        const label = QUEUE_ACTION_LABELS[action] || action;
+        const extra = (action === 'completed' && manualIds.length > 0) ? ` (ในจำนวนนี้ ${manualIds.length} ใบเป็นรูปรอตรวจภาพ ค้างสถานะรอตรวจ)` : '';
+        addLog('INFO', `🖥️ แม่ค้ากด "${label}" — ${nameText}${extra}`);
+
+        await broadcastTodayStats();
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
@@ -2137,7 +2262,8 @@ app.post('/api/queue/action', async (req, res) => {
 });
 
 app.post('/api/queue/clear', async (req, res) => {
-    await supabase.from('slips').update({ status: 'cleared' }).eq('status', 'waiting');
+    const r = supabase.db.prepare("UPDATE slips SET status = 'cleared' WHERE status = 'waiting'").run();
+    addLog('INFO', `🖥️ แม่ค้ากด "เคลียร์คิวทั้งหมด" (${r.changes} รายการ)`);
     broadcastTodayStats(); res.json({ success: true });
 });
 
@@ -2162,7 +2288,7 @@ app.post('/api/queue/dismiss_topup', async (req, res) => {
     try {
         const id = Number(req.body && req.body.id);
         if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ success: false, message: 'รหัสการ์ดไม่ถูกต้อง' });
-        const slip = supabase.db.prepare('SELECT line_id FROM slips WHERE id = ?').get(id);
+        const slip = supabase.db.prepare('SELECT line_id, line_name FROM slips WHERE id = ?').get(id);
         if (!slip || !slip.line_id) return res.status(404).json({ success: false, message: 'ไม่พบการ์ดนี้' });
         // ขอบเขตเดียวกับที่หน้าจอใช้แสดงการ์ด: รอบไลฟ์ที่กำลังไลฟ์ หรือวันนี้ถ้าไม่ได้ไลฟ์
         let sql = "UPDATE slips SET status = 'cleared' WHERE line_id = ? AND status = 'accumulated'";
@@ -2170,6 +2296,7 @@ app.post('/api/queue/dismiss_topup', async (req, res) => {
         if (activeLiveSession) { sql += ' AND session_id = ?'; params.push(activeLiveSession.id); }
         else { sql += ' AND trans_date = ?'; params.push(getTodayString()); }
         const r = supabase.db.prepare(sql).run(...params);
+        addLog('INFO', `🖥️ แม่ค้าปิดการ์ดส้ม "รอโอนเพิ่ม" ของ ${slip.line_name || 'ลูกค้า'} (${r.changes} ใบ) — ไม่กระทบยอดรวมและเงินในกระเป๋า`);
         await broadcastTodayStats();
         res.json({ success: true, cleared: r.changes });
     } catch (e) {
@@ -2185,6 +2312,7 @@ app.post('/api/queue/dismiss_image_fail', async (req, res) => {
         const before = lineImageFailures.length;
         lineImageFailures = lineImageFailures.filter(f => f.id !== id);
         if (lineImageFailures.length === before) return res.status(404).json({ success: false, message: 'ไม่พบการ์ดนี้' });
+        addLog('INFO', `🖥️ แม่ค้ากด "รับทราบ" ปิดการ์ดแดง โหลดรูปสลิปไม่สำเร็จ (id ${id})`);
         await broadcastTodayStats();
         res.json({ success: true });
     } catch (e) {
@@ -2305,6 +2433,7 @@ app.post('/api/live_session/start', async (req, res) => {
         activeLiveSession = newSession;
         liveIssueLogs = []; // 🏁 v1.0.16: เริ่มเก็บ Error/WARN ของรอบใหม่จากศูนย์
         await supabase.from('configs').upsert([{ key: 'active_live_session', value: JSON.stringify(newSession) }]);
+        addLog('INFO', `▶️ เริ่มไลฟ์รอบใหม่ (รหัสรอบ ${sessionId}${mergeFrom ? `, รวมบิลกับรอบ ${mergeFrom}` : ''})`);
         
         // 💾 สำรองฐานข้อมูล SQLite อัตโนมัติก่อนเริ่มไลฟ์ ด้วย Online Backup API (รองรับ WAL ครบถ้วน 100%)
         // v1.0.13: รอให้สำรองเสร็จก่อน แล้วค่อยรีเซ็ตยอดสะสมลูกค้า เพื่อให้ไฟล์สำรองยังมียอดเดิมไว้ย้อนดูได้
@@ -2375,6 +2504,13 @@ app.post('/api/live_session/end', async (req, res) => {
         await supabase.from('configs').upsert([{ key: 'last_ended_live_session', value: JSON.stringify(endedSession) }]);
         const prevSession = activeLiveSession;
         activeLiveSession = null;
+
+        // v1.0.16: จบไลฟ์ทุกครั้งต้องมีบรรทัด log เสมอ (เดิมมีเฉพาะกรณีตั้งรอรวมกับรอบหน้า)
+        {
+            const durMs = endedSession.endTime - endedSession.startTime;
+            const durTxt = durMs < 60000 ? 'น้อยกว่า 1 นาที' : `${Math.floor(durMs / 3600000)} ชม. ${Math.floor((durMs % 3600000) / 60000)} นาที`;
+            addLog('INFO', `⏹️ จบไลฟ์ (รหัสรอบ ${endedSession.id}, ใช้เวลา ${durTxt})`);
+        }
 
         // 🏁 v1.0.16: ส่งสรุปหลังจบไลฟ์เข้า Discord ทุกครั้ง (สถิติรอบ + Error ทั้งหมดที่เจอพร้อมแนวทางแก้ไข)
         sendEndOfLiveReport(endedSession).catch(() => {});
@@ -2562,6 +2698,7 @@ async function getOrdersForKerry(options = {}) {
         customerOrders[custKey].totalDraws += Number(slip.draws) || 0;
         customerOrders[custKey].slipsCount += 1;
         customerOrders[custKey].slipIds.push(slip.id);
+        if (slip.arrived_out_of_round === 1) customerOrders[custKey].outOfRound = true;   // v1.0.16: ยอดโอนนอกรอบของลูกค้าคนนี้
         
         let bd = '';
         if (slip.qr_payload && slip.qr_payload.startsWith('manual_image')) {
@@ -2604,6 +2741,7 @@ async function getOrdersForKerry(options = {}) {
             totalDraws: cust.totalDraws,
             items: itemSummary,
             hasAddress: hasAddr,
+            outOfRound: !!cust.outOfRound,   // v1.0.16: มีสลิปที่เงินเข้าตอนไม่มีไลฟ์ (ติดป้ายในไฟล์ Kerry และหน้าต่างสรุป)
             address: effectiveAddr
         };
     });
@@ -2663,7 +2801,7 @@ app.get('/api/kerry/summary', async (req, res) => {
             if (r && r.holdMerge && !r.mergedInto) held = { sessionId: sid };
             else if (r && canHoldSession(r)) canHold = { sessionId: sid };
         }
-        res.json({ success: true, totalCustomers, readyCustomers, missingCustomers, orders: [...orders], merge, held, canHold });
+        res.json({ success: true, totalCustomers, readyCustomers, missingCustomers, orders: [...orders], outOfRoundCustomers: orders.filter(o => o.outOfRound).map(o => o.lineName), merge, held, canHold });
     } catch(e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -2824,7 +2962,7 @@ app.get('/api/kerry/export_excel', async (req, res) => {
             row.getCell(9).value = '';                                            // Col 9: กว้าง/Width(cm)
             row.getCell(10).value = '';                                           // Col 10: ยาว/Length(cm)
             row.getCell(11).value = '';                                           // Col 11: สูง/Height(cm)
-            row.getCell(12).value = addr.remark || '';                            // Col 12: Remark
+            row.getCell(12).value = [addr.remark, order.outOfRound ? '🕒 โอนนอกรอบ (เงินมาทีหลัง) — ตรวจสอบก่อนส่ง' : ''].filter(Boolean).join(' ');  // Col 12: Remark (v1.0.16: ป้ายยอดนอกรอบ)
             row.getCell(13).value = `ORDER${String(index + 1).padStart(4, '0')}`;  // Col 13: Ref #1
             row.getCell(14).value = order.lineName || '';                         // Col 14: Ref #2
             row.getCell(15).value = senderName;                                   // Col 15: Sender Ref
@@ -3013,8 +3151,11 @@ app.post('/api/queue/manual_amount', async (req, res) => {
         } else if (slip.line_id) {
             await supabase.from('customers').insert([{ line_id: slip.line_id, name: slip.line_name || 'ลูกค้า LINE', balance: finalBalance }]);
         }
+        // v1.0.16: บันทึกการกระทำของแม่ค้า (กรอกยอดสลิปเอง) ลง log เพื่อตรวจสอบย้อนหลัง
+        const drawsTxt = result.draws > 0 ? `ได้ ${result.draws} ชิ้น` : 'ยอดยังไม่พอ (เข้าการ์ดส้มรอโอนเพิ่ม)';
+        addLog('INFO', `🖥️ แม่ค้ากรอกยอดสลิปเอง ${amount} บาท — ${slip.line_name || 'ลูกค้า'} ${drawsTxt} (เงินคงเหลือในกระเป๋า ${finalBalance} บาท)`);
 
-        broadcastTodayStats(); 
+        broadcastTodayStats();
         res.json({ success: true, draws: result.draws, remainder: finalBalance });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
@@ -3030,6 +3171,7 @@ app.post('/api/queue/verify_abnormal', async (req, res) => {
     try {
         const newStatus = isApproved ? 'completed' : 'rejected';
         await supabase.from('slips').update({ status: newStatus }).in('id', ids);
+        addLog('INFO', `🖥️ หลังจบไลฟ์ แม่ค้า${isApproved ? 'อนุมัติ' : 'ปัดตก'}สลิปรอตรวจภาพ ${ids.length} ใบ`);
         await broadcastTodayStats();
         res.json({ success: true });
     } catch(err) {
@@ -3044,7 +3186,8 @@ app.post('/api/queue/reject_slip', async (req, res) => {
         const { data: slip } = await supabase.from('slips').select('*').eq('id', slipId).single();
         if (slip) {
             await supabase.from('slips').update({ status: 'rejected' }).eq('id', slipId);
-            
+            addLog('INFO', `🖥️ แม่ค้าปัดตกรูปที่ไม่ใช่สลิปการโอนเงิน — ${slip.line_name || 'ลูกค้า'} (สลิป #${slipId})`);
+
             // 🔕 ปิดการส่งข้อความแจ้งลูกค้า "รูปนี้ไม่ใช่สลิป" ตามที่ร้านกำหนด (v1.0.8)
             // คงไว้เฉพาะข้อความขอบคุณหลังลูกค้าได้สิทธิ์ (และไม่เสียโควตา Push Message ของ LINE OA)
             // if (slip.line_id) {
@@ -4053,15 +4196,21 @@ app.post('/webhook', async (req, res) => {
                         }
 
                         const stmt = supabase.db.prepare(`
-                            INSERT INTO slips (amount, draws, line_id, sender_name, line_name, session_id, trans_date, trans_time, trans_ref, qr_payload, status)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO slips (amount, draws, line_id, sender_name, line_name, session_id, trans_date, trans_time, trans_ref, qr_payload, status, arrived_out_of_round)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         `);
                         const info = stmt.run(
                             amount, draws, userId, lineName, lineName,
                             activeLiveSession ? activeLiveSession.id : null,
                             getTodayString(), slipData.transTime || getLocalTimeString(),
-                            transRef, payloadRef, status
+                            transRef, payloadRef, status,
+                            activeLiveSession ? 0 : 1
                         );
+                        // v1.0.16: เงินเข้าตอนไม่มีไลฟ์ = "โอนนอกรอบ" (ยอดจุ่มที่โอนทีหลัง / โอนเตรียมรอบหน้า)
+                        // การ์ดจะติดป้ายให้เห็นชัด และบันทึกเตือนไว้ใน log/Discord ให้แม่ค้าตรวจสอบก่อนส่งของ
+                        if (!activeLiveSession) {
+                            addLog('WARN', `🕒 ลูกค้า "${lineName}" โอนนอกรอบ (เงินเข้าตอนไม่มีไลฟ์ ${amount} บาท) — ถ้าเป็นยอดจุ่มที่จ่ายของไปแล้ว ให้กดจัดการการ์ดให้ถูกต้อง ระวังส่งของซ้ำ`);
+                        }
                         return { id: info.lastInsertRowid };
                     });
                     if (txAttempt > 1) {

@@ -67,6 +67,13 @@ try {
     console.log('✅ Migration: เพิ่มคอลัมน์ trans_ref ในตาราง slips สำเร็จ');
   }
 
+  // v1.0.16: สลิปที่เงินเข้าตอนไม่มีไลฟ์ (โอนนอกรอบ เช่น ยอดจุ่มที่โอนทีหลังจบไลฟ์)
+  // ใช้ติดป้าย "โอนนอกรอบ" บนการ์ดคิวและไฟล์ Kerry เพื่อให้แม่ค้าระวังไม่ส่งของซ้ำ
+  if (!slipCols.includes('arrived_out_of_round')) {
+    db.exec(`ALTER TABLE slips ADD COLUMN arrived_out_of_round INTEGER DEFAULT 0;`);
+    console.log('✅ Migration: เพิ่มคอลัมน์ arrived_out_of_round ในตาราง slips สำเร็จ');
+  }
+
   // 1. Backfill trans_ref สำหรับสลิปปกติที่ไม่ใช่ manual_image
   db.exec(`
     UPDATE slips 
