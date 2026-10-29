@@ -144,6 +144,8 @@ app.get('/api/subagents/telemetry', (req, res) => {
 let activeLiveSession = null; // { id: 'LIVE_timestamp', startTime: Date.now(), endTime: null }
 // 🏁 v1.0.16: Error/WARN ที่เกิดระหว่างรอบไลฟ์ (เก็บตอน addLog) เพื่อสรุปให้ครบทุกครั้งที่แม่ค้ากดจบไลฟ์
 let liveIssueLogs = [];
+// 📨 v1.0.16: เวลาที่รูปสลิปล่าสุดเข้ามาที่โปรแกรม (ในหน่วยความจำ นับตั้งแต่เปิดโปรแกรม) ให้หน้าจอบอกว่า "สลิปล่าสุดเข้ามาเมื่อกี่นาทีก่อน"
+let lastSlipIngestAt = null;
 var merchantAccountName = process.env.MERCHANT_ACCOUNT_NAME || "";
 
 // 📢 ระบบ Discord Webhook Remote Monitoring & Auto-Diagnosis (เปิด/ปิดผ่าน .env)
@@ -2004,7 +2006,7 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
                 groupMap[statusGroup].set(key, {
                     id: slip.id, slipIds: [slip.id], name: slip.sender_name, lineName: slip.line_name,
                     amount: slip.amount, draws: slip.draws || 0, time: slip.trans_time, status: statusGroup,
-                    isPendingAmount: isPendingAmount, imageUrl: imageUrl,
+                    isPendingAmount: isPendingAmount, imageUrl: imageUrl, date: slip.trans_date,
                     outOfRound: slip.arrived_out_of_round === 1,   // v1.0.16: ป้าย "โอนนอกรอบ" (เงินมาตอนไม่มีไลฟ์)
                     slips: [{ id: slip.id, breakdown: breakdown || '' }],
                     rawBreakdowns: breakdown ? [breakdown] : []
@@ -2017,6 +2019,27 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
         queues.called = processGroup(groupMap.called);
         queues.skipped = processGroup(groupMap.skipped);
         queues.abnormal_pending = processGroup(groupMap.abnormal_pending);
+
+        // v1.0.16: ไอคอน 📍 บนการ์ดคิว -- ลูกค้าคนนี้มีที่อยู่จัดส่งครบ (เบอร์โทร + รหัสไปรษณีย์ + ที่อยู่) แล้วหรือยัง (กติกาเดียวกับหน้าต่าง Kerry)
+        try {
+            const lineIdBySlipAll = new Map(queueData.map(s => [s.id, s.line_id]));
+            const allCards = [...queues.waiting, ...queues.called, ...queues.skipped, ...queues.abnormal_pending];
+            const uids = [...new Set(allCards.map(q => lineIdBySlipAll.get(q.id)).filter(Boolean))];
+            const addrByUid = {};
+            for (let i = 0; i < uids.length; i += 400) {
+                const keys = uids.slice(i, i + 400).map(u => `cust_addr_${u}`);
+                const ph = keys.map(() => '?').join(',');
+                supabase.db.prepare(`SELECT key, value FROM configs WHERE key IN (${ph})`).all(...keys).forEach(r => {
+                    try { addrByUid[r.key.replace('cust_addr_', '')] = JSON.parse(r.value); } catch (e) {}
+                });
+            }
+            allCards.forEach(q => {
+                const uid = lineIdBySlipAll.get(q.id);
+                if (!uid) return;
+                const a = addrByUid[uid];
+                q.hasAddress = !!(a && a.phone && a.postcode && (a.address || typeof a === 'string'));
+            });
+        } catch (e) { /* ไอคอนที่อยู่เป็นข้อมูลเสริม: ล้มเหลวต้องไม่กระทบคิว */ }
 
         // 📍 ลูกค้าที่เคยโอนไม่ครบ (การ์ดสีส้ม) แล้วโอนเพิ่มจนครบ: ครองตำแหน่งคิวเดิมตามเวลาที่ส่งสลิปใบแรกที่ยังไม่ครบ
         try {
@@ -2099,7 +2122,7 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
         const scopeIsCurrent = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
         if (scopeIsCurrent) imageFails = currentLineImageFailures();
     } catch (e) { imageFails = []; }
-    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.length }, queues, topups, recentSlips, imageFails };
+    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.filter(q => !q.isPendingAmount).length }, queues, topups, recentSlips, imageFails };
 }
 
 let broadcastTimer = null;
@@ -3257,6 +3280,8 @@ app.post('/api/queue/edit_items', async (req, res) => {
 
 // ✏️ v1.0.16: ข้อมูลให้หน้าต่างแก้ไขสินค้าบอกแม่ค้าว่า "ลูกค้าคนนี้ซื้อรวมกี่ชิ้นในรอบไลฟ์นี้" และค่าส่งเป็นอย่างไร
 // otherDraws = ชิ้นของลูกค้าคนนี้ในรอบ (นับตามกติกาเดียวกับตอนคิดค่าส่ง รวมรอบที่รวมบิล) ที่ไม่ได้อยู่ในการ์ดที่กำลังแก้
+app.get('/api/queue/slip_heartbeat', (req, res) => res.json({ success: true, at: lastSlipIngestAt }));
+
 app.get('/api/queue/edit_items_context', (req, res) => {
     try {
         const slipIds = String(req.query.slipIds || '').split(',').map(Number).filter(n => Number.isInteger(n) && n > 0);
@@ -4157,6 +4182,8 @@ app.post('/webhook', async (req, res) => {
         }
         else if (event.type === 'message' && event.message.type === 'image') {
             const messageId = event.message.id;
+            lastSlipIngestAt = Date.now();
+            try { io.emit('slip_ingest', { at: lastSlipIngestAt }); } catch (e) { /* ตัวนับเป็นข้อมูลเสริม */ }
             const imageBuffer = await downloadImageFromLine(messageId);
             if (!imageBuffer) {
                 // 🛡️ อย่าทิ้งเงียบ: บันทึก Log ให้แม่ค้า/แอดมินรู้ว่ามีลูกค้าส่งรูปมาแต่ดาวน์โหลดจาก LINE ไม่สำเร็จ
@@ -4745,6 +4772,13 @@ process.on('exit', () => gracefulShutdown(0));
 
 // 🛑 API สำหรับให้ผู้ใช้งานกด "ปิดโปรแกรม" จากหน้า Dashboard ได้โดยตรง
 app.post('/api/system/shutdown', (req, res) => {
+    // v1.0.16: กำลังไลฟ์อยู่ห้ามปิดโปรแกรมโดยไม่ตั้งใจ (ปิดแล้วสลิปลูกค้าไม่เข้า คิวหยุดทันที) -- ต้องส่ง force:true ที่หน้าจอยืนยันซ้ำเท่านั้น
+    if (activeLiveSession) {
+        if (!(req.body && req.body.force === true)) {
+            return res.status(409).json({ success: false, code: 'LIVE_ACTIVE', message: 'กำลังไลฟ์อยู่ ปิดโปรแกรมตอนนี้สลิปลูกค้าจะไม่เข้าระบบ กรุณากด "จบไลฟ์" ก่อน' });
+        }
+        addLog('WARN', '🖥️ แม่ค้ายืนยันปิดโปรแกรมทั้งที่กำลังไลฟ์อยู่ (ยืนยันซ้ำแล้ว)');
+    }
     res.json({ success: true, message: 'กำลังปิดระบบและเซิร์ฟเวอร์...' });
     setTimeout(() => {
         gracefulShutdown(0);

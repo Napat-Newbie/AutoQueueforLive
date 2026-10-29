@@ -61,6 +61,14 @@ pre-check `trans_ref` → double-check ใน atomic transaction → partial UNI
 - **Error ที่ระบบซ่อมเองไม่ได้ → embed "📮 [ขออัปเดตเวอร์ชันใหม่]" เข้าช่อง Dev Report** (`buildUpdateRequestEmbed` / `shouldRequestNewVersion`) เกณฑ์: Error ระดับ CRITICAL (กฎเดียวกับ `assessErrorForDevReport`), Error เดิมซ้ำ ≥ `UPDATE_REQUEST_REPEAT_THRESHOLD` (5) ครั้งใน 30 นาที, แครชวนซ้ำจนตัวเฝ้า (supervisor) เปิดใหม่ ≥ 3 ครั้ง (ผ่าน `AQ_RESTART_COUNT`) และกรณีตัวเฝ้ายอมแพ้ (พัง 5 ครั้งใน 10 นาที) ตัวเฝ้าส่ง Discord เองด้วย `https` อ่าน `.env` เอง (เพราะ dotenv ยังไม่โหลดตอนนั้น)
 - ช่องกิจกรรมส่งเป็นชุดทุก 60 วินาที (`DISCORD_ACTIVITY_FLUSH_MS` override ได้เพื่อเทสต์) — อย่าเปลี่ยนเป็นส่งทันทีทุกกิจกรรม เดี๋ยวชน rate limit ของ Discord
 
+### 4.7 หน้าจอแม่ค้าระหว่างไลฟ์ (v1.0.16)
+- แผงควบคุมด้านบนเป็น sticky (เว้นที่ให้แถบเตือนผ่านตัวแปร CSS `--alert-h`) เสียงทุกอย่างสร้างด้วย Web Audio ในเครื่อง (`playPreset`) **ห้ามกลับไปโหลดไฟล์เสียงจากเว็บ**
+- ท่อหลุด/ซิงค์ LINE ไม่สำเร็จ = แถบแดง (`tunnelHealthVerdict` + `handleTunnelHealth`) รอ 20 วินาทีก่อนเตือน ไซเรนเฉพาะตอนกำลังไลฟ์ ซ้ำทุก 30 วินาที
+- การ์ดรอแม่ค้าใส่ยอด (`isPendingAmount`) **ไม่ได้เลขคิว** และไม่นับใน `waitingCount` (เลขคิวที่บอทตอบลูกค้ามาจาก `waitingCount`)
+- `POST /api/system/shutdown` ระหว่างไลฟ์ได้ 409 `LIVE_ACTIVE` เว้นแต่ส่ง `force:true` (หน้าจอยืนยันซ้ำ) — ปุ่มนี้เป็น Tier B ต้องล็อกอินแม่ค้าอยู่แล้ว
+- การ์ดคิวมี `date` (วันที่โอน) และ `hasAddress` (เบอร์โทร+รหัสไปรษณีย์+ที่อยู่ ตามกติกาเดียวกับ Kerry) `GET /api/queue/slip_heartbeat` คืนเวลาที่รูปสลิปล่าสุดเข้ามา (ในหน่วยความจำ)
+- เริ่มไลฟ์ผ่านหน้าต่าง "เช็กความพร้อม" (`buildReadinessRows`) แทนหน้าต่างยืนยันทีละอัน; ปุ่ม "แก้ไขสินค้า" ใช้ `POST /api/queue/edit_items` (แก้เฉพาะสินค้า+จำนวน ไม่แตะยอดเงิน/กระเป๋า)
+
 ## 5. กับดักสำคัญ
 
 1. **`index.js` ไม่มี `module.exports` และ require เมื่อไหร่ server รันทันที** (tunnel, sentinel, DB ทั้งชุด) — จะเขียน unit test ต้องแยก pure logic ออกเป็นโมดูลก่อน
