@@ -106,6 +106,8 @@ app.get('/api/subagents/telemetry', (req, res) => {
 
 // 🔴 Live Session State & Storage
 let activeLiveSession = null; // { id: 'LIVE_timestamp', startTime: Date.now(), endTime: null }
+// 🏁 v1.0.16: Error/WARN ที่เกิดระหว่างรอบไลฟ์ (เก็บตอน addLog) เพื่อสรุปให้ครบทุกครั้งที่แม่ค้ากดจบไลฟ์
+let liveIssueLogs = [];
 var merchantAccountName = process.env.MERCHANT_ACCOUNT_NAME || "";
 
 // 📢 ระบบ Discord Webhook Remote Monitoring & Auto-Diagnosis (เปิด/ปิดผ่าน .env)
@@ -493,6 +495,11 @@ function addLog(type, message, details = null) {
     // 🛡️ บันทึก System Logs ใน Dashboard เท่านั้น (ไม่ส่งสแปมเข้า Discord เพื่อป้องกันการแจ้งเตือนรบกวน)
     // การแจ้งเตือนเข้า Discord จะส่งเฉพาะกรณีวิกฤตระดับ Crash (uncaughtException) หรือสั่งส่งโดยตรงเท่านั้น
     // 📡 ยกเว้นช่องของผู้พัฒนา (ถ้าตั้งค่าไว้): ทุกกิจกรรมเข้าช่อง 1 แบบรวมทุก 1 นาที และ Error เข้าช่อง 2 ทันที
+    // 🏁 v1.0.16: ระหว่างไลฟ์ เก็บ Error/WARN ไว้สรุปหลังจบไลฟ์ (ส่งเข้า Discord ทุกครั้งที่กดจบไลฟ์)
+    if (activeLiveSession && (type === 'ERROR' || type === 'WARN')) {
+        liveIssueLogs.push({ type, message: String(message).slice(0, 300) });
+        if (liveIssueLogs.length > 400) liveIssueLogs.shift();
+    }
     try {
         queueActivity(type, message);
         if (type === 'ERROR') queueDevReport({ kind: 'ERROR', message, details });
@@ -2186,6 +2193,76 @@ app.post('/api/queue/dismiss_image_fail', async (req, res) => {
 });
 
 // 🔴 LIVE SESSION API -----------------------------------------
+// 🏁 v1.0.16: ตัวสร้าง embed สรุปหลังจบไลฟ์ (pure function — ตัดมาทดสอบแบบ unit test ได้ตรงๆ)
+// session = { id, startTimeStr, endTimeStr, startTime, endTime, holdMerge } / stats = { slips, amount, draws, customers, byStatus } / issues = [{type:'ERROR'|'WARN', message}]
+function buildEndOfLiveReportEmbed(session, stats, issues, meta = {}) {
+    const fmtB = (n) => { const v = Math.round(Number(n) * 100) / 100; return Number.isInteger(v) ? String(v) : v.toFixed(2); };
+    const durMs = (session.endTime || 0) - (session.startTime || 0);
+    const h = Math.floor(durMs / 3600000), m = Math.floor((durMs % 3600000) / 60000);
+    const durStr = durMs <= 0 ? 'น้อยกว่า 1 นาที' : (h > 0 ? `${h} ชม. ${m} นาที` : `${m} นาที`);
+    const errors = (issues || []).filter(i => i.type === 'ERROR');
+    const warns = (issues || []).filter(i => i.type === 'WARN');
+    const st = stats.byStatus || {};
+
+    const fields = [
+        { name: '⏱️ ช่วงเวลา', value: `${session.startTimeStr || '-'} → ${session.endTimeStr || '-'} (${durStr})`, inline: false },
+        { name: '🧾 สลิปรอบนี้', value: `${stats.slips} ใบ`, inline: true },
+        { name: '👥 ลูกค้า', value: `${stats.customers} คน`, inline: true },
+        { name: '💰 ยอดรับรวม', value: `${fmtB(stats.amount)} บาท`, inline: true },
+        { name: '🎟️ สิทธิ์ที่ออก', value: `${stats.draws} ชิ้น`, inline: true },
+        { name: '📋 สถานะคิว', value: `รอ ${st.waiting || 0} • เรียกแล้ว ${st.called || 0} • ข้าม ${st.skipped || 0} • เสร็จ ${st.completed || 0} • รอตรวจ ${st.abnormal_pending || 0}`, inline: false }
+    ];
+    if (session.holdMerge) fields.push({ name: '🔗 รวมบิล', value: 'รอบนี้ตั้ง "รอรวมกับรอบหน้า" — ยังไม่ต้องแพ็คส่งแยกรอบนี้', inline: false });
+
+    // Error ทั้งหมดของรอบ + แนวทางแก้ไขจากชุดกฎเดียวกับช่อง Dev Report (ไม่ใช้ AI)
+    const MAX_ERR = 6;
+    let errText;
+    if (errors.length === 0) {
+        errText = 'ไม่พบ Error ในรอบนี้ 🎉';
+    } else {
+        errText = errors.slice(0, MAX_ERR).map(e => {
+            const a = assessErrorForDevReport('', e.message);
+            const s = SEVERITY_STYLE[a.severity] || SEVERITY_STYLE.MEDIUM;
+            return `${s.icon} **${s.label}** — ${String(e.message).slice(0, 120)}\n> แนวทางแก้ไข: ${a.fix}`;
+        }).join('\n');
+        if (errors.length > MAX_ERR) errText += `\n… และอีก ${errors.length - MAX_ERR} รายการ (ดูทั้งหมดได้ใน system.log ของร้าน)`;
+        if (errText.length > 1000) errText = errText.slice(0, 1000) + '…';
+    }
+    fields.push({ name: `🚨 Error ที่เจอในรอบนี้ (${errors.length})`, value: errText, inline: false });
+    if (warns.length > 0) fields.push({ name: '⚠️ คำเตือน (WARN)', value: `${warns.length} รายการ — รายละเอียดอยู่ใน Logs ของร้าน (เช่น สลิปซ้ำ, โอนผิดบัญชี, รูปโหลดไม่ได้)`, inline: false });
+
+    return {
+        title: `🏁 สรุปหลังจบไลฟ์ ${meta.shopLabel || ''}`.trim(),
+        color: errors.length > 0 ? 15158332 : (warns.length > 0 ? 16753920 : 3066993),
+        fields,
+        footer: { text: `AutoQueueforLive v${meta.version || '?'} • รหัสรอบ ${session.id || '-'}` }
+    };
+}
+
+// 🏁 v1.0.16: ดึงสถิติของรอบที่เพิ่งจบ + รวบรวม Error/WARN ของรอบ ส่งเข้า Discord 1 ข้อความ (ทุกครั้งที่จบไลฟ์)
+async function sendEndOfLiveReport(endedSession) {
+    try {
+        const issues = liveIssueLogs.splice(0, liveIssueLogs.length);
+        const sid = endedSession.id;
+        const row = supabase.db.prepare(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amt, COALESCE(SUM(draws), 0) AS dr, COUNT(DISTINCT line_id) AS cust FROM slips WHERE session_id = ? AND status != 'rejected'"
+        ).get(sid) || {};
+        const byStatus = {};
+        supabase.db.prepare("SELECT status, COUNT(*) AS n FROM slips WHERE session_id = ? AND status != 'rejected' GROUP BY status").all(sid)
+            .forEach(r => { byStatus[r.status] = r.n; });
+        const stats = { slips: row.n || 0, amount: row.amt || 0, draws: row.dr || 0, customers: row.cust || 0, byStatus };
+
+        const embed = buildEndOfLiveReportEmbed(endedSession, stats, issues, { version: getAppVersionSafe(), shopLabel: getShopLabel() });
+        // ส่งเข้าช่องแจ้งเตือนหลัก ถ้าไม่ได้ตั้งไว้ก็ไหลไปช่องกิจกรรม/ช่อง Dev Report ที่ตั้งไว้แทน เพื่อให้สรุปมาถึงทุกครั้ง
+        const url = DISCORD_WEBHOOK_URL || getActivityWebhook() || getDevReportWebhook();
+        if (!url) return;
+        discordAlertQueue.push({ url, payload: { embeds: [embed] } });
+        await processDiscordQueue();
+    } catch (e) {
+        console.error('ส่งสรุปหลังจบไลฟ์เข้า Discord ไม่สำเร็จ:', e.message);
+    }
+}
+
 app.get('/api/live_session/current', (req, res) => {
     res.json({ success: true, session: activeLiveSession });
 });
@@ -2226,6 +2303,7 @@ app.post('/api/live_session/start', async (req, res) => {
         };
         if (mergeFrom) newSession.mergeFrom = mergeFrom;
         activeLiveSession = newSession;
+        liveIssueLogs = []; // 🏁 v1.0.16: เริ่มเก็บ Error/WARN ของรอบใหม่จากศูนย์
         await supabase.from('configs').upsert([{ key: 'active_live_session', value: JSON.stringify(newSession) }]);
         
         // 💾 สำรองฐานข้อมูล SQLite อัตโนมัติก่อนเริ่มไลฟ์ ด้วย Online Backup API (รองรับ WAL ครบถ้วน 100%)
@@ -2297,7 +2375,10 @@ app.post('/api/live_session/end', async (req, res) => {
         await supabase.from('configs').upsert([{ key: 'last_ended_live_session', value: JSON.stringify(endedSession) }]);
         const prevSession = activeLiveSession;
         activeLiveSession = null;
-        
+
+        // 🏁 v1.0.16: ส่งสรุปหลังจบไลฟ์เข้า Discord ทุกครั้ง (สถิติรอบ + Error ทั้งหมดที่เจอพร้อมแนวทางแก้ไข)
+        sendEndOfLiveReport(endedSession).catch(() => {});
+
         io.emit('live_session_changed', null);
         await broadcastTodayStats();
         res.json({ success: true, endedSession: endedSession, held: wantHold });

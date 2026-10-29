@@ -184,10 +184,11 @@ function bkkDate(offsetDays = 0) {
     return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Fresh sandbox (empty database, prices A=100 B=200, shipping 40, free from 3 items) for one test. */
-async function withSandbox(fn, opts) {
-    const sb = await Sandbox.start();
-    try { await sb.configure(opts); await fn(sb); } finally { await sb.stop(); }
+/** Fresh sandbox (empty database, prices A=100 B=200, shipping 40, free from 3 items) for one test.
+ * `env` (optional) overrides child process env vars, e.g. { DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/aq-test' }. */
+async function withSandbox(fn, opts, env) {
+    const sb = await Sandbox.start(env || {});
+    try { await sb.configure(opts || {}); await fn(sb); } finally { await sb.stop(); }
 }
 
 module.exports = { Sandbox, CHANNEL_SECRET, bkkDate, withSandbox };

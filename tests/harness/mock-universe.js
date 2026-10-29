@@ -16,6 +16,7 @@ class MockUniverse {
         this.profiles = new Map();     // userId -> displayName
         this.slips = new Map();        // key -> { status, body }  (SlipOK answer for the slip whose image contains `SLIP:<key>`)
         this.replies = [];             // text pushed/replied to customers
+        this.discords = [];            // webhook payloads the app sent to Discord: { path, body }
     }
 
     async start() {
@@ -108,7 +109,13 @@ class MockUniverse {
                 if (!scripted) return reply(400, { success: false, code: 1002, message: 'unscripted slip' });
                 return reply(scripted.status, scripted.body);
             }
-            // Cloudflare / GitHub / Discord / anything else: refuse, but remember it
+            // Discord webhook (recorded, always OK) — ใช้ทดสอบการแจ้งเตือน/สรุปที่ระบบส่งเข้า Discord
+            if (u.host === 'discord.com' || u.host === 'discordapp.com') {
+                try { this.discords.push({ path: u.pathname, body: JSON.parse(body.toString('utf8')) }); }
+                catch (e) { this.discords.push({ path: u.pathname, raw: body.toString('utf8') }); }
+                return reply(200, {});
+            }
+            // Cloudflare / GitHub / anything else: refuse, but remember it
             this.unexpected.push(`${req.method} ${orig}`);
             return reply(404, { message: 'not scripted in test universe' });
         });
