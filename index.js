@@ -456,6 +456,27 @@ function queueDevReport({ kind = 'ERROR', category = '', message = '', details =
 }
 
 // 📜 ระบบบันทึก System & Error Logs สำหรับหน้าตั้งค่าเชื่อมต่อ
+// v1.0.16: เก็บ System Logs ลงไฟล์ด้วย (เดิมอยู่ในหน่วยความจำ 200 รายการ หายเมื่อโปรแกรมรีสตาร์ท จึงตามย้อนหลังไม่ได้ว่าสลิปหายเพราะอะไร)
+// ไฟล์ system.log ในโฟลเดอร์โปรแกรม หมุนเมื่อเกิน 2 MB เหลือไว้อย่างมาก 2 ไฟล์ (system.log + system-prev.log) ชื่อไฟล์ลงท้าย .log ถูก .gitignore และตัวติดตั้งยกเว้นอยู่แล้ว
+const LOG_FILE = path.join(__dirname, 'system.log');
+const LOG_FILE_PREV = path.join(__dirname, 'system-prev.log');
+const LOG_FILE_MAX_BYTES = 2 * 1024 * 1024;
+let logFileBytes = 0;
+try { logFileBytes = fs.statSync(LOG_FILE).size; } catch (e) { logFileBytes = 0; }
+function appendLogFile(logItem) {
+    try {
+        const detail = logItem.details ? ' | ' + String(logItem.details).replace(/\s+/g, ' ').slice(0, 500) : '';
+        const line = `[${logItem.time}] [${logItem.type}] ${logItem.message}${detail}\n`;
+        const size = Buffer.byteLength(line);
+        if (logFileBytes + size > LOG_FILE_MAX_BYTES) {
+            try { fs.renameSync(LOG_FILE, LOG_FILE_PREV); } catch (e) { /* ไม่มีไฟล์เดิมให้หมุน */ }
+            logFileBytes = 0;
+        }
+        logFileBytes += size;
+        fs.appendFile(LOG_FILE, line, () => {});     // ไม่รอผล: การเขียน Log ล้มเหลวต้องไม่กระทบโปรแกรม
+    } catch (e) { /* ไม่ทำให้การบันทึก Log หลักล้ม */ }
+}
+
 const systemLogs = [];
 function addLog(type, message, details = null) {
     const logItem = {
@@ -467,6 +488,7 @@ function addLog(type, message, details = null) {
     };
     systemLogs.unshift(logItem); // เอาใหม่อยู่บนสุด
     if (systemLogs.length > 200) systemLogs.pop(); // เก็บสูงสุด 200 รายการล่าสุด
+    appendLogFile(logItem);
 
     // 🛡️ บันทึก System Logs ใน Dashboard เท่านั้น (ไม่ส่งสแปมเข้า Discord เพื่อป้องกันการแจ้งเตือนรบกวน)
     // การแจ้งเตือนเข้า Discord จะส่งเฉพาะกรณีวิกฤตระดับ Crash (uncaughtException) หรือสั่งส่งโดยตรงเท่านั้น
@@ -1575,6 +1597,35 @@ function canHoldSession(rec) {
     return !hasLaterSession(rec);
 }
 
+// v1.0.16: ยอดที่ลูกค้าโอน "นอกรอบไลฟ์" (ก่อนกดเริ่มไลฟ์ หรือระหว่างสองรอบ) ผูกเข้ากับรอบที่เริ่มถัดไป (กติกา ก ที่เจ้าของร้านเลือก)
+// เดิมสลิปพวกนี้ไม่มีรหัสรอบ (session_id ว่าง) จึงหายจากหน้าคิวทันทีที่กดเริ่มไลฟ์ เพราะหน้าคิวตอนไลฟ์กรองตามรหัสรอบ
+// ผูกเฉพาะสลิปที่ตรงเงื่อนไขทั้งหมด:
+//  - session_id ว่าง และสถานะยังค้างอยู่ (waiting / called / skipped / abnormal_pending)
+//    ที่แม่ค้าจัดการจบแล้ว (completed / cleared / rejected) ไม่แตะ และ accumulated (ยอดไม่พอ) ไม่แตะ
+//    เพราะเงินในกระเป๋าลูกค้าถูกรีเซ็ตตอนเริ่มไลฟ์ตามกติกา v1.0.13
+//  - id มากกว่าสลิปล่าสุดที่มีรหัสรอบ = เข้ามาหลังรอบก่อนหน้า (ไม่ดึงของเก่าก่อนรอบที่แล้วกลับมา)
+//  - วันที่โอนเป็นวันนี้หรือย้อนหลังไม่เกิน OUT_OF_ROUND_LOOKBACK_DAYS วัน (เวลาไทย)
+const OUT_OF_ROUND_LOOKBACK_DAYS = 1;
+const OUT_OF_ROUND_PENDING_STATUSES = ['waiting', 'called', 'skipped', 'abnormal_pending'];
+function bangkokDateString(offsetDays = 0) {
+    const d = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Bangkok"}));
+    d.setDate(d.getDate() + offsetDays);
+    return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+}
+function outOfRoundSlipFilter() {
+    const last = supabase.db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM slips WHERE session_id IS NOT NULL').get();
+    const marks = OUT_OF_ROUND_PENDING_STATUSES.map(() => '?').join(',');
+    return {
+        where: `session_id IS NULL AND id > ? AND trans_date >= ? AND status IN (${marks})`,
+        params: [Number(last && last.m) || 0, bangkokDateString(-OUT_OF_ROUND_LOOKBACK_DAYS), ...OUT_OF_ROUND_PENDING_STATUSES]
+    };
+}
+function claimOutOfRoundSlips(sessionId) {
+    if (!LIVE_ID_RE.test(String(sessionId))) return 0;
+    const f = outOfRoundSlipFilter();
+    return supabase.db.prepare(`UPDATE slips SET session_id = ? WHERE ${f.where}`).run(sessionId, ...f.params).changes;
+}
+
 // v1.0.11: นับจำนวนชิ้นที่ลูกค้าได้ไปแล้ว เพื่อตัดสินว่าจ่ายค่าส่งไปแล้วหรือยัง
 // ระหว่างไลฟ์: นับสลิปของรอบไลฟ์นี้ + สลิปของวันนี้ที่โอนก่อนกดเริ่มไลฟ์ (session_id ว่าง) กันเก็บค่าส่งซ้ำ
 // สลิปของไลฟ์รอบอื่นในวันเดียวกันยังไม่นับ (ลูกค้าเริ่มนับใหม่ในรอบใหม่ เหมือนเดิม) / ไม่ได้ไลฟ์: นับตามวันที่ เหมือนเดิม
@@ -1585,13 +1636,15 @@ function countPastDraws(lineId, opts = {}) {
     if (opts.excludeRejected) sql += " AND status != 'rejected'";
     if (opts.excludeId !== undefined && opts.excludeId !== null) { sql += ' AND id != ?'; params.push(opts.excludeId); }
     if (activeLiveSession) {
+        // v1.0.16: ไลฟ์ที่ข้ามเที่ยงคืน -- สลิปที่โอนก่อนกดเริ่ม (ไม่มีรหัสรอบ) ของ "วันที่เริ่มไลฟ์" ยังต้องนับ ไม่ใช่เฉพาะของวันนี้
+        const startDate = /^\d{8}$/.test(String(activeLiveSession.startDateStr || '')) ? String(activeLiveSession.startDateStr) : today;
         if (activeLiveSession.mergeFrom && LIVE_ID_RE.test(String(activeLiveSession.mergeFrom))) {
             // v1.0.15: รอบนี้รวมบิลกับรอบก่อนหน้า -> นับชิ้นของรอบก่อนด้วย (ไม่เก็บค่าส่งซ้ำ และนับรวมเพื่อส่งฟรี)
-            sql += ' AND (session_id = ? OR session_id = ? OR (session_id IS NULL AND trans_date = ?))';
-            params.push(activeLiveSession.id, activeLiveSession.mergeFrom, today);
+            sql += ' AND (session_id = ? OR session_id = ? OR (session_id IS NULL AND trans_date IN (?, ?)))';
+            params.push(activeLiveSession.id, activeLiveSession.mergeFrom, today, startDate);
         } else {
-            sql += ' AND (session_id = ? OR (session_id IS NULL AND trans_date = ?))';
-            params.push(activeLiveSession.id, today);
+            sql += ' AND (session_id = ? OR (session_id IS NULL AND trans_date IN (?, ?)))';
+            params.push(activeLiveSession.id, today, startDate);
         }
     } else {
         sql += ' AND trans_date = ?';
@@ -2198,10 +2251,21 @@ app.post('/api/live_session/start', async (req, res) => {
             addLog('ERROR', `รีเซ็ตยอดสะสมลูกค้าตอนเริ่มไลฟ์ไม่สำเร็จ: ${resetErr.message}`);
         }
 
+        // v1.0.16: ผูกสลิปที่ลูกค้าโอนนอกรอบ (ก่อนกดเริ่ม/ระหว่างรอบ) เข้ากับรอบนี้ ทำหลังสำรองฐานข้อมูลและรีเซ็ตกระเป๋า เพื่อให้ไฟล์สำรองเป็นสภาพก่อนเริ่มไลฟ์
+        let claimedOutOfRound = 0;
+        try {
+            claimedOutOfRound = claimOutOfRoundSlips(sessionId);
+            carryOutOfRoundNotices(sessionId);
+            if (claimedOutOfRound > 0) addLog('INFO', `เริ่มไลฟ์รอบใหม่: ผูกสลิปที่ลูกค้าโอนนอกรอบไลฟ์ ${claimedOutOfRound} ใบ เข้ากับรอบนี้ (ยังค้างอยู่ในคิว)`);
+        } catch (claimErr) {
+            claimedOutOfRound = 0;
+            addLog('ERROR', `ผูกสลิปนอกรอบเข้ากับรอบไลฟ์ไม่สำเร็จ (ไลฟ์เริ่มตามปกติ): ${claimErr.message}`);
+        }
+
         // บันทึกลง live_sessions history ใน config ด้วย
         io.emit('live_session_changed', activeLiveSession);
         await broadcastTodayStats();
-        res.json({ success: true, session: activeLiveSession });
+        res.json({ success: true, session: activeLiveSession, claimedOutOfRound });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -2993,8 +3057,8 @@ async function downloadImageFromLine(messageId, opts = {}) {
 // 🔴 รูปสลิปที่โหลดจาก LINE ไม่สำเร็จ (เก็บในหน่วยความจำ แสดงเป็นการ์ดสีแดงให้แม่ค้ารับทราบ ไม่แตะยอด/สลิป/ฐานข้อมูล)
 let lineImageFailures = [];
 let lineImageFailSeq = 0;
-function recordLineImageFailure(name, messageId) {
-    const item = { id: ++lineImageFailSeq, name: name || 'ลูกค้า (ไม่ทราบชื่อ)', messageId, time: new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Bangkok', hour12: false }), sid: activeLiveSession ? activeLiveSession.id : null, date: getTodayString() };
+function recordLineImageFailure(name, messageId, reason = null) {
+    const item = { id: ++lineImageFailSeq, name: name || 'ลูกค้า (ไม่ทราบชื่อ)', messageId, time: new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Bangkok', hour12: false }), sid: activeLiveSession ? activeLiveSession.id : null, date: getTodayString(), reason: reason || null };
     lineImageFailures.push(item);
     if (lineImageFailures.length > 50) lineImageFailures.shift();
     return item;
@@ -3003,7 +3067,23 @@ function currentLineImageFailures() {
     const today = getTodayString();
     return lineImageFailures
         .filter(f => activeLiveSession ? f.sid === activeLiveSession.id : (!f.sid && f.date === today))
-        .map(f => ({ id: f.id, name: f.name, time: f.time }));
+        .map(f => ({ id: f.id, name: f.name, time: f.time, reason: f.reason || null }));
+}
+// v1.0.16: การ์ดแจ้งเตือนที่เกิดนอกรอบ (ก่อนกดเริ่มไลฟ์) ย้ายตามเข้ารอบที่เริ่มถัดไปเหมือนสลิปนอกรอบ ไม่ให้หายไปตอนกดเริ่ม
+function carryOutOfRoundNotices(sessionId) {
+    const earliest = bangkokDateString(-OUT_OF_ROUND_LOOKBACK_DAYS);
+    let n = 0;
+    lineImageFailures.forEach(f => { if (!f.sid && f.date >= earliest) { f.sid = sessionId; n++; } });
+    return n;
+}
+// v1.0.16: สลิปที่ระบบ "ไม่บันทึก" โดยตั้งใจ (โอนผิดบัญชี / ซ้ำกับของลูกค้าอื่นหรือที่ปัดตกไปแล้ว) เดิมเงียบ เหลือแค่บรรทัดใน Logs
+// ตอนนี้แสดงการ์ดบนหน้าจอให้แม่ค้ารับทราบ (การ์ดเดียวกับกรณีโหลดรูปไม่สำเร็จ ไม่แตะยอด/สลิป/ฐานข้อมูล)
+async function notifyUnrecordedSlip(customerName, messageId, reason) {
+    try {
+        recordLineImageFailure(customerName, messageId, reason);
+        io.emit('image_failed');
+        await broadcastTodayStats();
+    } catch (notifyErr) { /* การแจ้งเตือนหน้าจอล้มเหลวต้องไม่ทำให้ Webhook พัง */ }
 }
 
 // ⚡ ระบบติดตามและตรวจสอบโควตาเครดิต API ตรวจสลิป (ป้องกัน Risk 2)
@@ -3834,6 +3914,7 @@ app.post('/webhook', async (req, res) => {
                     const searchName = merchantAccountName.trim().toLowerCase();
                     const actualName = receiverName.toLowerCase();
                     if (!actualName.includes(searchName)) {
+                        await notifyUnrecordedSlip(lineName, messageId, `สลิปโอนเข้าบัญชี "${receiverName || 'ไม่ทราบชื่อ'}" ไม่ตรงกับชื่อบัญชีร้าน "${merchantAccountName}" (ยอด ${fmtBaht(slipData.amount)} บาท) ระบบไม่ได้บันทึกสลิปนี้`);
                         addLog('WARN', `ตรวจพบสลิปโอนผิดบัญชี: ลูกค้า "${lineName}" โอนเข้าบัญชี "${receiverName}" (ไม่ใช่ "${merchantAccountName}")`);
                         // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้โอนไปที่บัญชี "${receiverName || 'ไม่ทราบชื่อ'}" นะคะ ซึ่งไม่ใช่บัญชีของผักกาดน้า รบกวนคุณลูกค้าเช็คบัญชีผู้รับอีกทีนะคะ 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                         continue;
@@ -3844,8 +3925,13 @@ app.post('/webhook', async (req, res) => {
                 const amount = slipData.amount;
 
                 // 🛡️ ป้องกันสลิปซ้ำระดับ B-Tree Index: เช็กว่ารหัสสลิปนี้เคยส่งเข้ามาในระบบแล้วหรือยัง
-                const existingSlip = supabase.db.prepare("SELECT id, trans_date FROM slips WHERE trans_ref = ? AND trans_ref IS NOT NULL AND trans_ref != '' LIMIT 1").get(transRef);
+                const existingSlip = supabase.db.prepare("SELECT id, trans_date, status, line_id, line_name FROM slips WHERE trans_ref = ? AND trans_ref IS NOT NULL AND trans_ref != '' LIMIT 1").get(transRef);
                 if (existingSlip) {
+                    // v1.0.16: ลูกค้าคนเดิมส่งสลิปซ้ำเป็นเรื่องปกติ (ยังเป็นแค่บรรทัดใน Logs) แต่ถ้าเป็นสลิปของลูกค้าคนอื่น หรือใบที่แม่ค้าปัดตกไปแล้ว ให้ขึ้นการ์ดให้รู้
+                    if ((existingSlip.line_id && existingSlip.line_id !== userId) || existingSlip.status === 'rejected') {
+                        const dupWho = (existingSlip.line_id && existingSlip.line_id !== userId) ? `ของลูกค้า "${existingSlip.line_name || 'อีกคน'}"` : 'และถูกปัดตกไปแล้ว';
+                        await notifyUnrecordedSlip(lineName, messageId, `สลิปรหัส ${transRef} (ยอด ${fmtBaht(amount)} บาท) เคยถูกบันทึกแล้ว ${dupWho} ระบบจึงไม่นับซ้ำ`);
+                    }
                     addLog('WARN', `ตรวจพบสลิปซ้ำ: ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ที่เคยบันทึกไปแล้ว`);
                     console.log(`⚠️ ตรวจพบสลิปซ้ำ: ${transRef}`);
                     // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
