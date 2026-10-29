@@ -1997,6 +1997,7 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
                 existing.amount += slip.amount;
                 existing.draws += slip.draws || 0;
                 existing.slipIds.push(slip.id);
+                existing.slips.push({ id: slip.id, breakdown: breakdown || '' });   // v1.0.16: ไว้ให้ปุ่ม "แก้ไขสินค้า" แก้รายการรายสลิป
                 if (slip.arrived_out_of_round === 1) existing.outOfRound = true;
                 if (breakdown) existing.rawBreakdowns.push(breakdown);
             } else {
@@ -2005,6 +2006,7 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
                     amount: slip.amount, draws: slip.draws || 0, time: slip.trans_time, status: statusGroup,
                     isPendingAmount: isPendingAmount, imageUrl: imageUrl,
                     outOfRound: slip.arrived_out_of_round === 1,   // v1.0.16: ป้าย "โอนนอกรอบ" (เงินมาตอนไม่มีไลฟ์)
+                    slips: [{ id: slip.id, breakdown: breakdown || '' }],
                     rawBreakdowns: breakdown ? [breakdown] : []
                 });
             }
@@ -3206,6 +3208,71 @@ app.post('/api/queue/reject_slip', async (req, res) => {
     }
 });
 
+// ✏️ v1.0.16: แม่ค้าแก้ไขรายการสินค้าเอง เมื่อระบบคำนวณจำนวน/เลือกสินค้าให้ผิด
+// แก้เฉพาะ "สินค้าอะไรกี่ชิ้น" (draws + ข้อความ breakdown ใน qr_payload) เท่านั้น
+// ห้ามแตะ: ยอดเงินที่โอนมาจริง (amount), สถานะ, เงินในกระเป๋าลูกค้า — เงินเป็นข้อเท็จจริงจากสลิป ส่วนการ์ดที่ยังค้างในคิวเท่านั้นที่แก้ได้
+app.post('/api/queue/edit_items', async (req, res) => {
+    try {
+        const slipId = Number(req.body && req.body.slipId);
+        const items = Array.isArray(req.body && req.body.items) ? req.body.items : null;
+        if (!Number.isInteger(slipId) || slipId <= 0 || !items) {
+            return res.status(400).json({ success: false, message: 'ข้อมูลไม่ถูกต้อง (ต้องระบุ slipId และรายการสินค้า)' });
+        }
+
+        // ตรวจรายการ: ชื่อ 1-60 ตัวอักษรหลังตัดช่องว่าง, จำนวนเป็นจำนวนเต็ม 0-99, ห้ามชื่อซ้ำ (qty=0 ตัดทิ้ง)
+        const clean = [];
+        for (const it of items) {
+            const name = String((it && it.name) || '').trim().slice(0, 60);
+            const qty = Number(it && it.qty);
+            if (!name || name.includes('|') || !Number.isInteger(qty) || qty < 0 || qty > 99) {   // "|" คือตัวคั่นข้อมูลในสลิป ห้ามอยู่ในชื่อสินค้า
+                return res.status(400).json({ success: false, message: `รายการสินค้าหรือจำนวนไม่ถูกต้อง: "${name || '?'}" x${qty}` });
+            }
+            if (qty > 0 && !clean.some(c => c.name === name)) clean.push({ name, qty });
+        }
+        const breakdown = clean.map(c => `${c.name} x${c.qty}`).join(', ');
+        const draws = clean.reduce((s, c) => s + c.qty, 0);
+
+        const slip = supabase.db.prepare('SELECT * FROM slips WHERE id = ?').get(slipId);
+        if (!slip) return res.status(404).json({ success: false, message: 'ไม่พบสลิปนี้' });
+        if (!['waiting', 'called', 'skipped', 'abnormal_pending'].includes(slip.status)) {
+            return res.status(409).json({ success: false, message: 'แก้ไขได้เฉพาะการ์ดที่ยังค้างอยู่ในคิวเท่านั้น (ไม่รวมที่จบแล้ว/ปัดตกแล้ว)' });
+        }
+
+        // คงส่วนอื่นของ qr_payload ไว้: ปกติคือ "รหัสอ้างอิง|breakdown" ส่วนของ manual_image คือ "manual_image|url|breakdown"
+        const parts = String(slip.qr_payload || '').split('|');
+        const isManual = slip.qr_payload && slip.qr_payload.startsWith('manual_image');
+        const oldBreakdown = isManual ? (parts[2] || '') : (parts[1] || '');
+        if (isManual) parts[2] = breakdown;
+        else if (parts.length > 1) parts[1] = breakdown;
+        else parts.push(breakdown);
+
+        supabase.db.prepare('UPDATE slips SET draws = ?, qr_payload = ? WHERE id = ?').run(draws, parts.join('|'), slipId);
+        addLog('INFO', `🖥️ แม่ค้าแก้ไขรายการสินค้า — ${slip.line_name || 'ลูกค้า'}: เดิม "${oldBreakdown || '-'}" → ใหม่ "${breakdown || '-'}" รวม ${draws} ชิ้น (สลิป #${slipId}, ยอดโอน ${slip.amount} บาท ไม่เปลี่ยน)`);
+        await broadcastTodayStats();
+        res.json({ success: true, draws, breakdown });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ✏️ v1.0.16: ข้อมูลให้หน้าต่างแก้ไขสินค้าบอกแม่ค้าว่า "ลูกค้าคนนี้ซื้อรวมกี่ชิ้นในรอบไลฟ์นี้" และค่าส่งเป็นอย่างไร
+// otherDraws = ชิ้นของลูกค้าคนนี้ในรอบ (นับตามกติกาเดียวกับตอนคิดค่าส่ง รวมรอบที่รวมบิล) ที่ไม่ได้อยู่ในการ์ดที่กำลังแก้
+app.get('/api/queue/edit_items_context', (req, res) => {
+    try {
+        const slipIds = String(req.query.slipIds || '').split(',').map(Number).filter(n => Number.isInteger(n) && n > 0);
+        if (slipIds.length === 0) return res.status(400).json({ success: false, message: 'ต้องระบุ slipIds' });
+        const rows = slipIds.map(id => supabase.db.prepare('SELECT id, line_id, draws, status FROM slips WHERE id = ?').get(id));
+        if (rows.some(r => !r)) return res.status(404).json({ success: false, message: 'ไม่พบสลิป' });
+        const lineId = rows[0].line_id;
+        if (rows.some(r => r.line_id !== lineId)) return res.status(400).json({ success: false, message: 'สลิปไม่ใช่ของลูกค้าคนเดียวกัน' });
+        const roundTotal = lineId ? countPastDraws(lineId, { excludeRejected: true }) : 0;
+        const mine = rows.filter(r => r.status !== 'rejected').reduce((s, r) => s + (Number(r.draws) || 0), 0);
+        res.json({ success: true, otherDraws: Math.max(0, roundTotal - mine), shippingFee, freeShippingThreshold });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 async function getLineProfile(userId) {
     try { 
         const res = await axios.get(`https://api.line.me/v2/bot/profile/${userId}`, { headers: { 'Authorization': `Bearer ${process.env.LINE_ACCESS_TOKEN}` } }); 
@@ -4243,7 +4310,8 @@ app.post('/webhook', async (req, res) => {
                             amount: 0, draws: 0, line_id: userId, sender_name: lineName, line_name: lineName,
                             session_id: activeLiveSession ? activeLiveSession.id : null,
                             trans_date: getTodayString(), trans_time: getLocalTimeString(),
-                            qr_payload: `manual_image|/uploads/${fbName}`, status: 'waiting'
+                            qr_payload: `manual_image|/uploads/${fbName}`, status: 'waiting',
+                            arrived_out_of_round: activeLiveSession ? 0 : 1   // v1.0.16: รูปที่เข้าตอนไม่มีไลฟ์ ติดป้ายโอนนอกรอบเหมือนสลิปปกติ
                         }]).select().single();
                         io.emit('play_sound');
                         broadcastTodayStats();
@@ -4313,7 +4381,8 @@ app.post('/webhook', async (req, res) => {
                     trans_date: getTodayString(), 
                     trans_time: getLocalTimeString(), 
                     qr_payload: payloadRef, 
-                    status: 'waiting' 
+                    status: 'waiting',
+                    arrived_out_of_round: activeLiveSession ? 0 : 1   // v1.0.16: รูปที่เข้าตอนไม่มีไลฟ์ ติดป้ายโอนนอกรอบเหมือนสลิปปกติ
                 }]).select().single();
 
                 if (inserted) {

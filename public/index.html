@@ -642,6 +642,24 @@
         </div>
     </div>
 
+    <!-- v1.0.16: แก้ไขรายการสินค้าของลูกค้าเอง เมื่อระบบคำนวณจำนวน/เลือกสินค้าให้ผิด -->
+    <div class="modal-overlay" id="editItemsModal">
+        <div class="modal-box" style="max-width: 520px; width: 95%;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #f0f0f0; padding-bottom: 10px; margin-bottom: 15px;">
+                <h3 style="margin: 0; color: #7b1fa2;">✏️ แก้ไขรายการสินค้า</h3>
+                <span id="editItemsCustomerName" style="font-size: 0.9em; background: #f3e5f5; color: #7b1fa2; padding: 4px 10px; border-radius: 6px; font-weight: 500;"></span>
+            </div>
+            <div id="editItemsBody" style="max-height: 55vh; overflow-y: auto; text-align: left;"></div>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #eee; padding-top: 12px; margin-top: 8px;">
+                <div style="font-size: 0.85em; color: #777;">ยอดโอนและสถานะคิวไม่เปลี่ยน — แก้เฉพาะสินค้าและจำนวน</div>
+                <div style="display: flex; gap: 8px;">
+                    <button onclick="document.getElementById('editItemsModal').style.display='none'" style="background:#eee; color:#333; padding: 10px 18px; border: none; border-radius: 8px; cursor: pointer; font-family:'Kanit';">ปิด</button>
+                    <button class="btn-success" onclick="saveEditItems()" style="padding: 10px 22px; border-radius: 8px; font-weight: bold; cursor: pointer;">💾 บันทึกแก้ไข</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- v1.0.15: เลือกตอนจบไลฟ์ ส่งของรอบนี้เลย หรือรอรวมบิลกับรอบหน้า -->
     <div class="modal-overlay" id="holdChoiceModal">
         <div class="modal-box" style="max-width: 500px; width: 95%; text-align: left;">
@@ -1440,9 +1458,13 @@
 
         function addQueueToScreen(data) {
             const rawName = data.name || 'ลูกค้า';
-            const safeName = rawName.replace(/'/g, "").replace(/"/g, "").replace(/\\/g, ""); 
+            const safeName = rawName.replace(/'/g, "").replace(/"/g, "").replace(/\\/g, "");
             const slipIdsJson = data.slipIds ? JSON.stringify(data.slipIds) : `[${data.id}]`;
-            
+
+            // v1.0.16: เก็บรายการสินค้ารายสลิปไว้ให้ปุ่ม "✏️ แก้ไขสินค้า" ใช้ตอนเปิดหน้าต่างแก้ไข
+            window.__editItemsData = window.__editItemsData || {};
+            window.__editItemsData[data.id] = Array.isArray(data.slips) ? data.slips : [];
+
             let buttonsHtml = ''; let borderColor = ''; let badgeColor = ''; let breakdownDisplay = '';
 
             if (data.status === 'abnormal_pending') {
@@ -1457,15 +1479,18 @@
             } else if (data.status === 'called') {
                 borderColor = '#1a73e8'; badgeColor = '#1a73e8';
                 buttonsHtml = `<button class="btn-success" onclick='actionQueue(${slipIdsJson}, "completed", "${escapeHtml(safeName)}")'>✅ เสร็จสิ้น</button>
-                               <button class="btn-warning" onclick='actionQueue(${slipIdsJson}, "skipped", "${escapeHtml(safeName)}")'>⏭️ ข้าม</button>`;
+                               <button class="btn-warning" onclick='actionQueue(${slipIdsJson}, "skipped", "${escapeHtml(safeName)}")'>⏭️ ข้าม</button>
+                               <button class="btn-primary" style="background:#7b1fa2; border:none;" onclick="openEditItemsModal(${data.id}, '${escapeHtml(safeName)}')">✏️ แก้ไขสินค้า</button>`;
             } else if (data.status === 'skipped') {
                 borderColor = '#f44336'; badgeColor = '#f44336';
                 buttonsHtml = `<button class="btn-primary" onclick='actionQueue(${slipIdsJson}, "called", "${escapeHtml(safeName)}")'>📢 เรียกคิวอีกครั้ง</button>
-                               <button class="btn-danger-outline" onclick='cancelSingleQueue(${slipIdsJson}, "${escapeHtml(safeName)}")' title="ยกเลิกคิวนี้และหักยอดออก">❌ ยกเลิกคิว</button>`;
-            } else { 
+                               <button class="btn-danger-outline" onclick='cancelSingleQueue(${slipIdsJson}, "${escapeHtml(safeName)}")' title="ยกเลิกคิวนี้และหักยอดออก">❌ ยกเลิกคิว</button>
+                               <button class="btn-primary" style="background:#7b1fa2; border:none;" onclick="openEditItemsModal(${data.id}, '${escapeHtml(safeName)}')">✏️ แก้ไขสินค้า</button>`;
+            } else {
                 borderColor = '#4caf50'; badgeColor = '#4caf50';
                 buttonsHtml = `<button class="btn-primary" onclick='actionQueue(${slipIdsJson}, "called", "${escapeHtml(safeName)}")'>📢 เรียกคิว</button>
                                <button class="btn-warning" onclick='actionQueue(${slipIdsJson}, "skipped", "${escapeHtml(safeName)}")'>⏭️ ข้าม</button>
+                               <button class="btn-primary" style="background:#7b1fa2; border:none;" onclick="openEditItemsModal(${data.id}, '${escapeHtml(safeName)}')">✏️ แก้ไขสินค้า</button>
                                <button class="btn-danger-outline" onclick='cancelSingleQueue(${slipIdsJson}, "${escapeHtml(safeName)}")' title="ยกเลิกคิวนี้และหักยอดออก">❌ ยกเลิก</button>`;
             }
             
@@ -1511,6 +1536,132 @@
             else if (data.status === 'skipped') document.getElementById('skipped-queue-list').append(el);
             else if (data.status === 'abnormal_pending') document.getElementById('abnormal-queue-list').append(el);
             else document.getElementById('queue-list').append(el);
+        }
+
+        // ✏️ v1.0.16: แก้ไขรายการสินค้าเองเมื่อระบบคำนวณ/เลือกสินค้าให้ผิด (แก้เฉพาะสินค้า+จำนวน ยอดเงินและสถานะคงเดิม)
+        // บอกแม่ค้าว่าลูกค้าคนนี้ซื้อรวมกี่ชิ้นในรอบไลฟ์ และค่าส่งเป็นอย่างไร (ครบ threshold ชิ้น = ส่งฟรี กติกาเดียวกับตอนคิดเงิน)
+        function editItemsShippingNote(otherDraws, beforeMine, nowMine, fee, threshold) {
+            const isFree = (n) => !(fee > 0) || n >= threshold;
+            const before = otherDraws + beforeMine;
+            const now = otherDraws + nowMine;
+            let message; let free = false;
+            if (now <= 0) {
+                message = 'ลูกค้าคนนี้ไม่มีสินค้าในรอบนี้';
+            } else if (isFree(now)) {
+                free = true;
+                message = (fee > 0 && threshold > 1)
+                    ? 'ลูกค้าคนนี้ซื้อรวม ' + now + ' ชิ้นในรอบนี้ ครบ ' + threshold + ' ชิ้น → ส่งฟรี'
+                    : 'ลูกค้าคนนี้ซื้อรวม ' + now + ' ชิ้นในรอบนี้ → ส่งฟรี';
+            } else {
+                message = 'ลูกค้าคนนี้ซื้อรวม ' + now + ' ชิ้นในรอบนี้ ยังไม่ครบ ' + threshold + ' ชิ้น → ต้องจ่ายค่าส่ง ' + fee + '฿ (ซื้อเพิ่มอีก ' + (threshold - now) + ' ชิ้นส่งฟรี)';
+            }
+            const warnings = [];
+            if (nowMine < beforeMine) {
+                warnings.push('ลดจำนวนชิ้น: เงินที่ลูกค้าโอนไว้ไม่ถูกคืนเข้ากระเป๋าอัตโนมัติ ถ้าต้องคืนเงิน แม่ค้าโอนคืนเอง');
+            }
+            if (nowMine !== beforeMine && fee > 0) {
+                if (before > 0 && isFree(before) && now > 0 && !isFree(now)) {
+                    warnings.push('จากเดิมส่งฟรี กลายเป็นต้องจ่ายค่าส่ง ' + fee + '฿ สลิปถัดไปของลูกค้าจะถูกคิดค่าส่งใหม่');
+                } else if (before > 0 && !isFree(before) && isFree(now)) {
+                    warnings.push('ครบส่งฟรีแล้ว ค่าส่ง ' + fee + '฿ ที่ลูกค้าจ่ายไปก่อนหน้านี้ระบบไม่คืนเข้ากระเป๋าให้ ถ้าจะคืน แม่ค้าโอนคืนเอง');
+                } else if (now <= 0 && before > 0) {
+                    warnings.push('ไม่เหลือสินค้า: ถ้าลูกค้าโอนเพิ่ม ระบบจะเก็บค่าส่งใหม่');
+                }
+            }
+            return { total: now, free, message, warnings };
+        }
+        let __editItemsState = null;
+        function openEditItemsModal(cardId, name) {
+            const slips = (window.__editItemsData || {})[cardId] || [];
+            if (!slips.length) { alert('ไม่พบรายการสินค้าของการ์ดนี้'); return; }
+            document.getElementById('editItemsCustomerName').innerText = name || 'ลูกค้า';
+            const slipIdsParam = slips.map(s => s.id).join(',');
+            Promise.all([
+                fetch('/api/config').then(r => r.json()),
+                fetch('/api/queue/edit_items_context?slipIds=' + encodeURIComponent(slipIdsParam)).then(r => r.json()).catch(() => null)
+            ]).then(([cfg, ctx]) => {
+                const prices = String(cfg.prices || '').split(',').map(s => s.trim()).filter(Boolean).map(item => {
+                    if (item.includes(':')) { const p = item.split(':'); return { name: p[0].trim(), price: parseInt(p[1].trim()) }; }
+                    const p = parseInt(item); return { name: p + '฿', price: p };
+                }).filter(p => p && p.name && !isNaN(p.price));
+                // จำนวนปัจจุบันของแต่ละสลิป แยกจากข้อความ breakdown ("ชื่อ xจำนวน, ...")
+                __editItemsState = {
+                    prices,
+                    // ข้อมูลค่าส่ง: ถ้าดึงไม่สำเร็จ ไม่แสดงบรรทัดค่าส่ง (แก้ไขสินค้าต่อได้ตามปกติ)
+                    ship: (ctx && ctx.success) ? { otherDraws: Number(ctx.otherDraws) || 0, fee: Number(ctx.shippingFee) || 0, threshold: Number(ctx.freeShippingThreshold) || 0 } : null,
+                    beforeMine: 0,
+                    slips: slips.map(s => {
+                        const qty = {};
+                        String(s.breakdown || '').split(/[,+]/).forEach(part => {
+                            const m = part.trim().match(/^(.*?)\s+x(\d+)$/);
+                            if (m) qty[m[1].trim()] = parseInt(m[2], 10);
+                        });
+                        return { id: s.id, qty };
+                    })
+                };
+                __editItemsState.beforeMine = __editItemsState.slips.reduce((sum, s) => sum + Object.values(s.qty).reduce((a, b) => a + b, 0), 0);
+                renderEditItemsModal();
+                document.getElementById('editItemsModal').style.display = 'flex';
+            }).catch(err => alert('ดึงรายการสินค้าไม่สำเร็จ: ' + err.message));
+        }
+        function editItemQty(rowKey, delta) {
+            const st = __editItemsState; if (!st) return;
+            const [slipIdx, prodIdx] = String(rowKey).split('_').map(Number);
+            const slip = st.slips[slipIdx]; if (!slip) return;
+            const row = st.rows[slipIdx][prodIdx]; if (!row) return;
+            const next = Math.max(0, Math.min(99, (slip.qty[row.name] || 0) + delta));
+            slip.qty[row.name] = next;
+            renderEditItemsModal();
+        }
+        function renderEditItemsModal() {
+            const st = __editItemsState; if (!st) return;
+            // แถวสินค้าของแต่ละสลิป = รายการใน priceList + สินค้าเดิมที่ไม่มีใน priceList แล้ว (กันข้อมูลหายตอนราคาถูกแก้)
+            st.rows = st.slips.map(slip => {
+                const rows = [...st.prices];
+                Object.keys(slip.qty).forEach(n => { if ((slip.qty[n] || 0) > 0 && !rows.some(r => r.name === n)) rows.push({ name: n, price: null }); });
+                return rows;
+            });
+            let totalDraws = 0; let totalValue = 0;
+            let html = st.slips.map((slip, i) => {
+                const rowsHtml = st.rows[i].map((row, j) => {
+                    const q = slip.qty[row.name] || 0;
+                    if (q > 0) { totalDraws += q; if (row.price) totalValue += row.price * q; }
+                    return `<div style="display:flex; align-items:center; justify-content:space-between; padding:7px 4px; border-bottom:1px solid #f2f2f2;">
+                        <div style="font-size:0.95em;">${escapeHtml(row.name)} ${row.price ? `<span style="color:#999; font-size:0.85em;">(${row.price}฿)</span>` : '<span style="color:#bbb; font-size:0.8em;">(ไม่มีในรายการราคาปัจจุบัน)</span>'}</div>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <button onclick="editItemQty('${i}_${j}', -1)" style="width:30px; height:30px; border-radius:50%; border:1px solid #ddd; background:#fff; cursor:pointer; font-size:1em;">−</button>
+                            <span style="min-width:26px; text-align:center; font-weight:700; font-size:1.05em;">${q}</span>
+                            <button onclick="editItemQty('${i}_${j}', 1)" style="width:30px; height:30px; border-radius:50%; border:1px solid #7b1fa2; background:#7b1fa2; color:#fff; cursor:pointer; font-size:1em;">+</button>
+                        </div>
+                    </div>`;
+                }).join('');
+                const head = st.slips.length > 1 ? `<div style="font-weight:600; color:#7b1fa2; margin:10px 0 2px;">สลิป #${slip.id}</div>` : '';
+                return head + (rowsHtml || '<div style="color:#999; padding:8px 4px;">ยังไม่มีรายการ — กด + เพื่อเพิ่มสินค้า</div>');
+            }).join('');
+            html += `<div style="display:flex; justify-content:space-between; margin-top:12px; padding:8px 12px; background:#f3e5f5; border-radius:8px; font-weight:600; color:#4a148c;">
+                <span>รวมทั้งหมด ${totalDraws} ชิ้น</span><span>มูลค่าราคาตามปัจจุบัน ~${totalValue}฿</span></div>`;
+            if (st.ship) {
+                const note = editItemsShippingNote(st.ship.otherDraws, st.beforeMine, totalDraws, st.ship.fee, st.ship.threshold);
+                const color = note.free ? '#1b5e20' : '#e65100'; const bg = note.free ? '#e8f5e9' : '#fff3e0';
+                html += `<div style="margin-top:8px; padding:8px 12px; background:${bg}; color:${color}; border-radius:8px; font-size:0.9em; font-weight:500;">🚚 ${escapeHtml(note.message)}</div>`;
+                note.warnings.forEach(w => {
+                    html += `<div style="margin-top:6px; padding:8px 12px; background:#fff3e0; color:#bf360c; border-left:4px solid #ff9800; border-radius:6px; font-size:0.88em;">⚠️ ${escapeHtml(w)}</div>`;
+                });
+            }
+            document.getElementById('editItemsBody').innerHTML = html;
+        }
+        async function saveEditItems() {
+            const st = __editItemsState; if (!st) return;
+            try {
+                for (const slip of st.slips) {
+                    const items = Object.keys(slip.qty).filter(n => (slip.qty[n] || 0) > 0).map(n => ({ name: n, qty: slip.qty[n] }));
+                    const r = await fetch('/api/queue/edit_items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slipId: slip.id, items }) });
+                    const j = await r.json();
+                    if (!j.success) { alert('แก้ไขไม่สำเร็จ (สลิป #' + slip.id + '): ' + (j.message || j.error || '')); return; }
+                }
+                document.getElementById('editItemsModal').style.display = 'none';
+                // การ์ดคิวรีเฟรชเองผ่าน socket — ไม่ต้องโหลดหน้าใหม่
+            } catch (e) { alert('แก้ไขไม่สำเร็จ: ' + e.message); }
         }
 
         // 💬 แสดงรายชื่อลูกค้าที่รอโอนเพิ่ม (ไม่เข้าคิว) ให้แม่ค้าทักได้ทัน

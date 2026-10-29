@@ -1,4 +1,4 @@
-// tests/system/silent-drops.test.js
+﻿// tests/system/silent-drops.test.js
 // A customer paid and sent a slip, but the app deliberately does not record it. The shop owner must be able to SEE that
 // (card on the dashboard + line in system.log) instead of the slip disappearing silently.
 // Runs the real index.js in a sandbox (tests/harness/sandbox.js).
@@ -142,3 +142,19 @@ test('no unexpected outside calls were made', () => withSandbox(async sb => {
     await sb.waitForSlips(1);
     assert.deepEqual(sb.unexpectedCalls(), []);
 }));
+
+test('v1.0.16: an unreadable slip image arriving with no live is tagged out-of-round; during a live it is not', () => withSandbox(async sb => {
+    sb.mock.profile('Ualice', 'Alice');
+    sb.mock.slipUnreadable('k1');
+    await sb.sendSlip('Ualice', 'm1', 'k1');
+    await sb.waitForSlips(1);
+    assert.equal(sb.sql('SELECT arrived_out_of_round AS f FROM slips ORDER BY id')[0].f, 1, 'no live running -> purple badge flag set');
+
+    await sb.startLive();
+    sb.mock.slipUnreadable('k2');
+    await sb.sendSlip('Ualice', 'm2', 'k2');
+    await sb.waitForSlips(2);
+    const rows = sb.sql('SELECT arrived_out_of_round AS f FROM slips ORDER BY id');
+    assert.equal(rows[rows.length - 1].f, 0, 'live running -> normal card, no badge');
+}));
+
