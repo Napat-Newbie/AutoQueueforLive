@@ -1557,8 +1557,8 @@
                     <div class="queue-number" style="color:#c62828;">❗</div>
                     <div class="queue-info">
                         <div class="name">👤 <span>${escapeHtml(f.name || 'ลูกค้า')}</span></div>
-                        <div style="font-size: 0.95em; color:#c62828; margin-top:6px; font-weight:600;">❌ โหลดรูปสลิปไม่สำเร็จ (เน็ตสะดุด) เวลา ${escapeHtml(f.time || '')}</div>
-                        <div style="font-size: 0.85em; color:#777; margin-top:3px;">สลิปนี้ยังไม่เข้าคิวและยังไม่นับยอด กรุณาเปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง หรือบอกลูกค้าให้ส่งรูปใหม่</div>
+                        <div style="font-size: 0.95em; color:#c62828; margin-top:6px; font-weight:600;">❌ ${f.reason ? escapeHtml(f.reason) : 'โหลดรูปสลิปไม่สำเร็จ (เน็ตสะดุด)'} เวลา ${escapeHtml(f.time || '')}</div>
+                        <div style="font-size: 0.85em; color:#777; margin-top:3px;">${f.reason ? 'ยอดนี้ยังไม่ถูกนับและไม่เข้าคิว ถ้าเป็นสลิปที่ถูกต้อง กรุณาเปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง หรือแทรกคิวให้ลูกค้า' : 'สลิปนี้ยังไม่เข้าคิวและยังไม่นับยอด กรุณาเปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง หรือบอกลูกค้าให้ส่งรูปใหม่'}</div>
                     </div>
                     <div class="queue-actions">
                         <button type="button" class="btn-danger-outline imgfail-ack-btn" title="ซ่อนการ์ดนี้ (ไม่กระทบยอดหรือสลิปใดๆ)">✔ รับทราบ</button>

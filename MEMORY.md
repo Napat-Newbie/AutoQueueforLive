@@ -24,10 +24,10 @@
 * **Cloudflare Tunnel URL:** changes per session; the app auto-syncs the current URL to LINE Developers Console — do not hardcode
 * **Discord Alert Webhook:** `(เก็บไว้ใน .env -> DISCORD_WEBHOOK_URL เท่านั้น ห้ามใส่ลิงก์จริงในไฟล์นี้)`
 
-## 3. Audit Findings from v1.0.5 — resolved, except one midnight edge case (item 3)
+## 3. Audit Findings from v1.0.5 — resolved (the last midnight edge case is closed by the unreleased out-of-round work, see item 3)
 1. ~~BUG-01~~ **Fixed:** webhook now iterates `for (const event of events)` — no dropped slips in a batch
 2. ~~SEC-01 & SEC-02~~ **Fixed:** update URLs restricted to allowlisted hosts; full 3-tier RBAC middleware (Tier A local/tunnel-login, Tier B merchant+dreamdev, Tier C dreamdev-only) + `/uploads` requires login
-3. **BUG-02 & BUG-03 — fixed except one edge case:** broadcasts, `/api/stats/today`, slip inserts and Kerry export use `session_id`; `last_ended_live_session` covers livestreams crossing midnight. Also fixed after v1.0.15: reloading the page during a live now loads the live-round stats (it used to load per-date stats until the next broadcast), and `/api/kerry/summary` uses the same live-round rule as the Excel download. **Still open:** `countPastDraws()` counts slips paid before the live started (`session_id IS NULL`) only when `trans_date` is today, so in a live that crosses midnight they stop counting after 00:00 and the customer could be charged shipping again (found by reading the code, not reproduced; fix it together with unit tests)
+3. **BUG-02 & BUG-03 — fixed:** broadcasts, `/api/stats/today`, slip inserts and Kerry export use `session_id`; `last_ended_live_session` covers livestreams crossing midnight. Fixed after v1.0.15 (not released yet): reloading the page during a live loads the live-round stats (it used to load per-date stats until the next broadcast); `/api/kerry/summary` uses the same live-round rule as the Excel download; slips paid outside a live (before pressing start, or between two rounds) are attached to the next round at start (rule ก, AGENTS.md 4.5) and `countPastDraws()` also counts unattached slips of the live's start date, which closes the case where a customer who paid before the live was charged shipping again after midnight. Each of these has a test in `tests/` that fails on the previous code
 4. ~~DB-01~~ **Fixed:** indexes on `trans_date`, `status`, `line_id`, `session_id` + partial UNIQUE index on `trans_ref`; `busy_timeout = 10000`
 
 ## 4. Release History Milestones (post-v1.0.11)
@@ -48,7 +48,7 @@
    ```bash
    node index.js   # port 3000
    ```
-4. **Known gaps / agreed roadmap:** no tests & no CI yet. Agreed order: extract pure money logic to a module → unit-test it (`calculateBestDraws`, `walletAfter`, `describeTopup`, `countPastDraws`) → split index.js by domain → add CI. Do not refactor the monolith before tests exist.
+4. **Known gaps / agreed roadmap:** tests exist (`npm test`, see AGENTS.md section 8: they cut the real functions out of index.js and run the real server in a sandbox) but there is no CI yet. Next, in order: extract pure money logic to a module → split index.js by domain → add CI. Do not refactor the monolith without these tests passing.
 
 ## 6. Multi-Model Team Workflow (Kiro + Gemini + ZCode)
 * **Kiro Conductor (`kiro_conductor` - Model: `pro` / Claude Opus Tier):**

@@ -21,7 +21,7 @@ Name: "{app}\public\uploads"
 Name: "{app}\backups"
 
 [Files]
-Source: "c:\Users\napat\OneDrive\Desktop\Project-SlipAPI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.git*,*.log,*.docx,*.md,*.tmp,*.bak,*.code-workspace,*.txt,installer.iss,take_screenshots.js,generate_*.js,public\manual_images\*,public\uploads\*,data.sqlite*,backups\*,node_modules\.cache*,AutoQueueforLive_Setup.exe,.env"
+Source: "c:\Users\napat\OneDrive\Desktop\Project-SlipAPI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.git*,*.log,*.docx,*.md,*.tmp,*.bak,*.code-workspace,*.txt,installer.iss,take_screenshots.js,generate_*.js,public\manual_images\*,public\uploads\*,tests\*,data.sqlite*,backups\*,node_modules\.cache*,AutoQueueforLive_Setup.exe,.env"
 Source: "c:\Users\napat\OneDrive\Desktop\Project-SlipAPI\.env"; DestDir: "{app}"; Flags: onlyifdoesntexist
 
 [Icons]

@@ -48,6 +48,13 @@ pre-check `trans_ref` → double-check ใน atomic transaction → partial UNI
 - RBAC 3 ชั้น: Tier A (หน้าคิว/Kerry — เครื่องร้านผ่าน `isDirectLocalRequest` ไม่ต้อง login, ผ่าน tunnel ต้อง login), Tier B (`/api/admin/*`, `/api/system/*` = merchant+dreamdev), Tier C (`/api/test/*`, sentinel, reset = dreamdev เท่านั้น)
 - LINE webhook ตรวจ HMAC signature + dedup `processedMessageIds`
 
+### 4.5 ยอดที่โอนนอกรอบไลฟ์ (กติกา ก, ยังไม่ออกเวอร์ชัน)
+- สลิปที่ลูกค้าโอนก่อนกดเริ่มไลฟ์ หรือระหว่างสองรอบ (`session_id` ว่าง) ถูกผูกเข้ารอบที่เริ่มถัดไปตอน `POST /api/live_session/start` ด้วย `claimOutOfRoundSlips` เหตุผล: หน้าคิวตอนไลฟ์กรองตาม `session_id` ถ้าไม่ผูก สลิปนอกรอบจะหายจากคิว (พิสูจน์ด้วยเทสต์กับ v1.0.15)
+- ผูกเฉพาะสถานะ `waiting, called, skipped, abnormal_pending` ที่ `id` มากกว่าสลิปล่าสุดที่มีรหัสรอบ และ `trans_date` เป็นวันนี้หรือเมื่อวาน (`OUT_OF_ROUND_LOOKBACK_DAYS`) ส่วน `completed, cleared, rejected` ไม่แตะ และ `accumulated` (ยอดไม่พอ) ไม่แตะ เพราะเงินในกระเป๋าถูกรีเซ็ตตอนเริ่มไลฟ์ตามกติกา v1.0.13
+- การ์ดแจ้งเตือนบนหน้าจอที่เกิดก่อนเริ่มไลฟ์ย้ายตามเข้ารอบด้วย (`carryOutOfRoundNotices`)
+- สลิปที่ระบบไม่บันทึกโดยตั้งใจ (โอนผิดบัญชี, ซ้ำกับของลูกค้าอื่น, ซ้ำกับใบที่ปัดตกแล้ว) ขึ้นการ์ดแดงพร้อมเหตุผล (`notifyUnrecordedSlip`) ลูกค้าคนเดิมส่งซ้ำยังเป็นแค่บรรทัดใน Log
+- System Log เขียนลงไฟล์ `system.log` ข้างโปรแกรมด้วย (หมุนที่ 2 MB เป็น `system-prev.log`) หน้า Logs ในโปรแกรมยังเป็นหน่วยความจำ 200 รายการเหมือนเดิม
+
 ## 5. กับดักสำคัญ
 
 1. **`index.js` ไม่มี `module.exports` และ require เมื่อไหร่ server รันทันที** (tunnel, sentinel, DB ทั้งชุด) — จะเขียน unit test ต้องแยก pure logic ออกเป็นโมดูลก่อน
@@ -59,7 +66,7 @@ pre-check `trans_ref` → double-check ใน atomic transaction → partial UNI
 
 ## 6. สถานะปัจจุบันและแผนที่ตกลงไว้
 
-- ยังไม่มี test และ CI (`npm test` เป็น placeholder)
+- มีชุดเทสต์แล้ว (`npm test`, ดูหัวข้อ 8) แต่ยังไม่มี CI
 - แผนที่ตกลงกับเจ้าของไว้: (1) แยก pure logic การเงินออกจาก index.js เป็นโมดูลแรก → (2) เขียน unit test ให้ logic เงิน → (3) ค่อยแยก index.js ที่เหลือตามโดเมน → (4) เพิ่ม CI — **ห้ามข้ามขั้น test ไปแยกไฟล์ทั้งไฟล์**
 - โครงสร้าง commit: ข้อความอธิบายเป็นอังกฤษ สไตล์ `feat(v1.0.x): ...` / `fix: ...` / `release: ...` / `docs: ...`
 
@@ -70,3 +77,15 @@ pre-check `trans_ref` → double-check ใน atomic transaction → partial UNI
 - `public/manual_images/page_*.html` (ไฟล์ละ ~440 KB): สร้างจาก `node generate_staging_pages.js` ไม่อยู่ใน git (อยู่ใน `.gitignore`) ส่วนภาพ PNG ในโฟลเดอร์เดียวกันอยู่ใน git
 - `package-lock.json` (209 KB), `releases/*.zip` (12 ไฟล์ รวม ~4.2 MB), `*.docx` (3 ไฟล์): ไบนารี/ไฟล์สร้างอัตโนมัติ ไม่ต้องอ่านเว้นแต่ถูกสั่ง
 - ถ้าเพิ่มรูปใหม่ลง `public/index.html` ให้ใส่เป็นไฟล์ใน `public/images/` แล้วอ้างด้วย path ไม่ฝัง base64 (หน้าคู่มือ `generate_staging_pages.js` จะฝังกลับเองเฉพาะ `/images/providers/*`)
+
+## 8. ทดสอบ (`npm test`)
+
+ทดสอบบน Node v24.20.0 ใช้ `node:test` และ `node:sqlite` ในตัว ไม่มี dev dependency เพิ่ม ใช้เวลาประมาณ 20 วินาที
+
+- **วิธีรัน:** ต้องมี `node_modules` ที่รากรีโป หรือชี้ด้วย `AQ_TEST_NODE_MODULES=<path>` แล้ว `npm test` (รันเฉพาะไฟล์: `node --test tests/system/out-of-round.test.js`)
+- `tests/unit/`: ตัดฟังก์ชันจริงจาก `index.js` และ `public/index.html` ไปรันใน vm (`tests/harness/extract.js`) ไม่ต้องแก้ `index.js` ครอบคลุมคำนวณเงิน (`calculateBestDraws`, `describeTopup`, `walletAfter`), `countPastDraws` (รวมไลฟ์ข้ามเที่ยงคืนและรวมบิล), การโหลดสถิติของหน้า Dashboard ตอนเปิดหน้าระหว่างไลฟ์
+- `tests/system/`: รัน `index.js` จริงในโฟลเดอร์ชั่วคราว (`tests/harness/sandbox.js`) ฐานข้อมูลใหม่ทุกเทสต์ ไม่แตะ `data.sqlite` ของรีโป `tests/harness/preload.js` ปิดโลกภายนอก (axios ทุกสายถูกส่งไป mock, `child_process` ไม่ทำงานจริง, ไม่เปิด tunnel/เบราว์เซอร์) และ `tests/harness/mock-universe.js` จำลอง LINE กับ SlipOK ครอบคลุมยอดนอกรอบ, สลิปที่ไม่ถูกบันทึก, Kerry สรุปกับไฟล์, system.log, รวมบิล, รีเซ็ตกระเป๋า
+- **ห้ามรัน `node index.js` เพื่อทดสอบ** บนเครื่องที่มีข้อมูลจริง (เปิด tunnel สาธารณะ เปิดเบราว์เซอร์ ติดต่อ LINE/Discord จริง) ให้ใช้ sandbox
+- `AQ_TEST_APP_ROOT=<โฟลเดอร์ของรุ่นอื่น>` รันชุดเทสต์เดิมกับโค้ดรุ่นอื่น (เช่น `git worktree add --detach <path> <commit>`) ใช้พิสูจน์ว่าเทสต์จับบั๊กของรุ่นก่อนได้ (`AQ_TEST_INDEX_HTML` ทำแบบเดียวกันกับเทสต์หน้าเว็บ)
+- `npm ci` ใช้ไม่ได้ ณ 2026-10-29: `package-lock.json` ไม่ตรงกับ `package.json` (ขาด `better-queue`, `thai-address-database` กับ dependency ต่อเนื่อง) และ `npm install` เต็มชุดล้มด้วย 404 ของ `@types/estree` ในสภาพแวดล้อมที่ตรวจ ชุดเทสต์ต้องการเฉพาะ `express, socket.io, axios, form-data, dotenv, better-sqlite3, exceljs, localtunnel` ซึ่งเป็นแพ็กเกจที่ `index.js`, `db.js`, `sentinel/` เรียกจริง
+- **ไม่ครอบคลุม:** เบราว์เซอร์จริง, LINE/SlipOK/Gemini จริง, tunnel, ตัวอัปเดต (`updater.bat`), หน้าตา UI (เทสต์เช็คข้อมูลที่ API ส่ง ไม่ใช่ภาพที่วาด), การข้ามเที่ยงคืนจริงของนาฬิกา (ทดสอบผ่านวันที่ที่กำหนดในเทสต์)
