@@ -2500,7 +2500,10 @@ app.get('/api/kerry/sessions', async (req, res) => {
 // เช็คสรุปสถานะที่อยู่ของรอบไลฟ์/วันนี้
 app.get('/api/kerry/summary', async (req, res) => {
     try {
-        const orders = await getOrdersForKerry({ date: req.query.date, sessionId: req.query.sessionId });
+        // ใช้กติกาเดียวกับ /api/kerry/export_excel: ระหว่างไลฟ์ ถ้าไม่ได้เลือกรอบ ให้ใช้รอบที่กำลังไลฟ์
+        // (เดิมสรุปนับตามวันที่ แต่ไฟล์ที่ดาวน์โหลดนับตามรอบไลฟ์ ทำให้จำนวนลูกค้าในหน้าต่างไม่ตรงกับไฟล์)
+        const summarySessionId = req.query.sessionId || (activeLiveSession ? activeLiveSession.id : null);
+        const orders = await getOrdersForKerry({ date: req.query.date, sessionId: summarySessionId });
         const totalCustomers = orders.length;
         const readyCustomers = orders.filter(o => o.hasAddress).length;
         const missingCustomers = orders.filter(o => !o.hasAddress).map(o => o.lineName);
