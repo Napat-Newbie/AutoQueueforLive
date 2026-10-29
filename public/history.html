@@ -98,6 +98,17 @@
             </div>
         </div>
 
+        <!-- v1.0.15: สรุปยอดโอนแยกตามรอบไลฟ์ -->
+        <div class="report-card" style="margin-bottom: 20px;">
+            <h3>🎥 ยอดโอนแยกตามรอบไลฟ์</h3>
+            <div id="rounds-summary-list" style="max-height: 340px; overflow: auto;">
+                <div style="color: #888; text-align: center; padding: 10px;">กำลังคำนวณข้อมูล...</div>
+            </div>
+            <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
+                💡 ยอดแต่ละรอบนับทั้งรอบ (แม้ไลฟ์ข้ามเที่ยงคืน) และไม่นับสลิปที่ปัดตก จึงอาจไม่เท่ายอดรวมด้านบนที่กรองตามวันที่ ส่วน "นอกรอบไลฟ์" คือสลิปที่โอนตอนไม่ได้กดเริ่มไลฟ์ หรือข้อมูลเก่าก่อนมีรอบไลฟ์
+            </div>
+        </div>
+
         <!-- 🆕 แดชบอร์ดสรุป Report แยกตามสินค้าและรายชื่อลูกค้า -->
         <div class="report-grid">
             <div class="report-card">
@@ -121,6 +132,7 @@
                     <tr>
                         <th>วันที่โอน</th>
                         <th>เวลา</th>
+                        <th>รอบไลฟ์</th>
                         <th>ชื่อลูกค้า</th>
                         <th>ยอดโอน</th>
                         <th>สินค้าที่ได้</th>
@@ -129,7 +141,7 @@
                     </tr>
                 </thead>
                 <tbody id="history-table-body">
-                    <tr><td colspan="7" style="text-align:center; padding: 40px; color: #888;">กำลังโหลดข้อมูล...</td></tr>
+                    <tr><td colspan="8" style="text-align:center; padding: 40px; color: #888;">กำลังโหลดข้อมูล...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -155,6 +167,15 @@
             return `${day}/${month}/${year}`;
         }
 
+        // v1.0.15: ชื่อรอบไลฟ์ของแต่ละสลิป (ใช้ข้อมูลรอบจาก rounds ที่เซิร์ฟเวอร์ส่งมา)
+        let roundLabels = {};
+        function roundCellHtml(sessionId) {
+            if (!sessionId) return '<span style="color:#aaa;">นอกรอบไลฟ์</span>';
+            const r = roundLabels[sessionId] || { sessionId: sessionId, startTime: Number(String(sessionId).slice(5)) || null, endTime: null };
+            const badge = r.merged ? ' <span title="รวมบิล">🔗</span>' : '';
+            return escapeHtml(formatRoundLabel(r)) + badge;
+        }
+
         function renderHistoryTable(data) {
             const tbody = document.getElementById('history-table-body');
             tbody.innerHTML = '';
@@ -166,7 +187,7 @@
             let dailyCustomers = {};
             
             if(!data || data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding: 40px; color: #999;">ไม่มีข้อมูลสลิปในช่วงวันที่เลือก</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 40px; color: #999;">ไม่มีข้อมูลสลิปในช่วงวันที่เลือก</td></tr>';
                 document.getElementById('sumAmount').innerText = "0.00";
                 document.getElementById('sumDraws').innerText = "0";
                 document.getElementById('sumSlips').innerText = "0";
@@ -224,6 +245,7 @@
                 tr.innerHTML = `
                     <td style="color: #444; font-weight: 500;">${escapeHtml(formatDisplayDate(item.date))}</td>
                     <td style="color: #666;">${escapeHtml(item.time || '-')}</td>
+                    <td style="font-size: 0.85em; color: #555; min-width: 120px;">${roundCellHtml(item.sessionId)}</td>
                     <td><strong>${escapeHtml(item.name)}</strong> <br><span style="font-size:0.85em; color:#00b900;">${item.lineName ? '📱 '+escapeHtml(item.lineName) : ''}</span></td>
                     <td style="font-weight: 500; color:#111;">฿${item.amount.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
                     <td style="color:#4caf50; font-weight:500;">🎟️ ${item.draws} ชิ้น ${breakdownHtml}</td>
@@ -271,11 +293,51 @@
             if (!hasCustomer) customerListUI.innerHTML = '<div style="color: #999; text-align: center;">ไม่มีรายชื่อลูกค้า</div>';
         }
 
+        // v1.0.15: ยอดโอนแยกตามรอบไลฟ์
+        function formatRoundLabel(r) {
+            if (r.outside) return 'นอกรอบไลฟ์ (ไม่ได้กดเริ่มไลฟ์ / ข้อมูลเก่า)';
+            const fmt = (ms) => new Date(ms).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+            if (!r.startTime) return 'ไลฟ์ (ไม่ทราบเวลา)';
+            if (r.active) return `🔴 กำลังไลฟ์ (เริ่ม ${fmt(r.startTime)})`;
+            const endT = r.endTime ? new Date(r.endTime).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit' }) : '';
+            return `ไลฟ์ ${fmt(r.startTime)}${endT ? ' - ' + endT : ''}`;
+        }
+
+        function renderRounds(rounds) {
+            const box = document.getElementById('rounds-summary-list');
+            if (!box) return;
+            if (!rounds || rounds.length === 0) {
+                box.innerHTML = '<div style="color: #999; text-align: center; padding: 10px;">ไม่พบรอบไลฟ์ในช่วงวันที่เลือก</div>';
+                return;
+            }
+            const money = (n) => '฿' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            const rows = rounds.map(r => {
+                let badge = '';
+                if (r.merged) badge = ' <span style="font-size:0.8em; background:#e3f2fd; color:#1565c0; padding:2px 8px; border-radius:10px;">🔗 รวมบิล</span>';
+                else if (r.holdMerge) badge = ' <span style="font-size:0.8em; background:#fff3e0; color:#e65100; padding:2px 8px; border-radius:10px;">⏳ รอรวมบิล</span>';
+                return `<tr>
+                    <td style="font-weight:500;">${escapeHtml(formatRoundLabel(r))}${badge}</td>
+                    <td style="text-align:right; font-weight:600; color:#1a73e8;">${money(r.amount)}</td>
+                    <td style="text-align:right;">${r.draws} ชิ้น</td>
+                    <td style="text-align:right;">${r.slips} ใบ</td>
+                    <td style="text-align:right;">${r.customers} คน</td>
+                </tr>`;
+            }).join('');
+            box.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:0.95em;">
+                <thead><tr>
+                    <th style="padding:8px 10px;">รอบไลฟ์</th>
+                    <th style="padding:8px 10px; text-align:right;">ยอดโอน</th>
+                    <th style="padding:8px 10px; text-align:right;">สินค้าที่ออก</th>
+                    <th style="padding:8px 10px; text-align:right;">สลิป</th>
+                    <th style="padding:8px 10px; text-align:right;">ลูกค้า</th>
+                </tr></thead><tbody>${rows}</tbody></table>`;
+        }
+
         function fetchHistory() {
             const startDate = document.getElementById('startDate').value;
             const endDate = document.getElementById('endDate').value;
             
-            document.getElementById('history-table-body').innerHTML = '<tr><td colspan="7" style="text-align:center; padding: 40px; color: #888;">กำลังค้นหาข้อมูล...</td></tr>';
+            document.getElementById('history-table-body').innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 40px; color: #888;">กำลังค้นหาข้อมูล...</td></tr>';
             
             let url = `/api/history_data?`;
             if (startDate) url += `startDate=${startDate}&`;
@@ -285,7 +347,10 @@
                 .then(res => res.json())
                 .then(data => {
                     if (data.success) {
+                        roundLabels = {};
+                        (data.rounds || []).forEach(r => { if (r.sessionId) roundLabels[r.sessionId] = r; });
                         renderHistoryTable(data.history);
+                        renderRounds(data.rounds);
                     } else {
                         alert("เกิดข้อผิดพลาดในการดึงข้อมูล");
                     }

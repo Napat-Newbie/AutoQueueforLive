@@ -21,7 +21,7 @@
                 <div>
                     <div class="flex items-center space-x-2.5">
                         <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">Version History & Changelog</h1>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.11 (CURRENT)</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.15 (CURRENT)</span>
                     </div>
                     <p class="text-xs text-zinc-400 mt-0.5">บันทึกประวัติการปรับปรุง แก้ไขบั๊ก และฟีเจอร์ใหม่ของ AutoQueue for Live ทั้งหมด</p>
                 </div>
@@ -34,12 +34,94 @@
         <!-- Timeline Container -->
         <div class="space-y-6">
 
-            <!-- v1.0.11 -->
+            <!-- v1.0.15 -->
             <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
                     <div class="flex items-center space-x-3">
-                        <span class="text-lg font-bold text-white">🚀 Version 1.0.11</span>
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.15</span>
                         <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">24 ตุลาคม 2026</span>
+                </div>
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">✨ ใหม่:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>รวมบิล 2 รอบไลฟ์: ตอนกด "จบไลฟ์" เลือก "รอรวมกับรอบหน้า" ได้ (ใช้เมื่อยังไม่ได้ส่งของรอบนั้น) ลูกค้าที่ซื้อแล้วซื้อเพิ่มในรอบถัดไปจะไม่ถูกเก็บค่าส่งซ้ำ นับชิ้นรวมกันเพื่อส่งฟรี และไฟล์ Kerry จะรวมของ 2 รอบเป็นพัสดุเดียว (รวมได้สูงสุด 2 รอบ ยกเลิกการรอรวมได้ในหน้า Export Kerry)</li>
+                            <li>ก่อนเริ่มไลฟ์รอบถัดไป ระบบแจ้งว่ารอบก่อนตั้งรอรวมบิลไว้ และมีกี่คน ก่อนให้ยืนยัน</li>
+                            <li>หน้าประวัติ: มีการ์ด "ยอดโอนแยกตามรอบไลฟ์" (ยอดโอน สินค้าที่ออก สลิป ลูกค้า ของแต่ละรอบ) และคอลัมน์ "รอบไลฟ์" ในตารางสลิป</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- v1.0.14 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.14</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">23 ตุลาคม 2026</span>
+                </div>
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">🔧 แก้ไข:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>เน็ตสะดุดตอนรับรูปสลิปจาก LINE: ระบบลองดาวน์โหลดรูปซ้ำอัตโนมัติสูงสุด 3 ครั้ง สลิปจึงไม่หลุดง่ายเหมือนเดิม</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">✨ ใหม่:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>ถ้าลองซ้ำแล้วยังโหลดรูปสลิปไม่ได้ จะมีการ์ดสีแดงบนหน้าจอหลักพร้อมเสียงเตือน บอกชื่อลูกค้า ให้เปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง (กด "รับทราบ" เพื่อซ่อนการ์ด)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- v1.0.13 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.13</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">17 ตุลาคม 2026</span>
+                </div>
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">✨ ใหม่:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>การ์ดสีส้ม (รอลูกค้าโอนเพิ่ม) มีปุ่ม "ลบ" ลบออกจากหน้าจอได้ทีละใบ ยอดโอนรวมไม่เปลี่ยน</li>
+                            <li>กด "เริ่มไลฟ์" รอบใหม่ ระบบรีเซ็ตเงินค้างของลูกค้าทุกคนเป็น 0 (ไฟล์สำรองยังเก็บยอดเดิมไว้ และบันทึกรายชื่อไว้ในบันทึกระบบ)</li>
+                            <li>เตือนก่อนเริ่มไลฟ์ ถ้ายังมีลูกค้าที่มีเงินค้าง แสดงรายชื่อและยอด ให้ยืนยันก่อนเริ่ม</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- v1.0.12 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.12</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">17 ตุลาคม 2026</span>
+                </div>
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">🔧 แก้ไข:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>ปรับปรุงระบบเข้าสู่ระบบหน้าตั้งค่า ให้ใช้หน้าต่างล็อกอินเดียวกันได้ทุกสิทธิ์ (วิธีใช้งานของแม่ค้าไม่เปลี่ยน)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- v1.0.11 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.11</span>
                     </div>
                     <span class="text-xs text-zinc-400 font-mono">17 ตุลาคม 2026</span>
                 </div>

@@ -566,6 +566,9 @@
             </div>
         </div>
 
+        <!-- 🔴 รูปสลิปที่โหลดจาก LINE ไม่สำเร็จ (เน็ตสะดุด) ต้องให้แม่ค้าเช็กในแชท LINE OA เอง -->
+        <div id="imgfail-box" style="display:none; margin-bottom: 20px;"></div>
+
         <!-- 🎮 กระดานคิวหลัก -->
         <div class="queue-header" style="border-left: 6px solid #1a73e8; padding-left: 10px; margin-top: 0;">
             <h2 style="color: #1a73e8; margin: 0;">🎮 คิวที่กำลังเล่นกิจกรรม (Active)</h2>
@@ -639,6 +642,24 @@
         </div>
     </div>
 
+    <!-- v1.0.15: เลือกตอนจบไลฟ์ ส่งของรอบนี้เลย หรือรอรวมบิลกับรอบหน้า -->
+    <div class="modal-overlay" id="holdChoiceModal">
+        <div class="modal-box" style="max-width: 500px; width: 95%; text-align: left;">
+            <div style="font-size: 2.6em; text-align: center;">📦</div>
+            <div style="font-weight: 600; font-size: 1.15em; text-align: center; margin: 6px 0 12px;">รอบนี้จะส่งของเลย หรือรอรวมกับรอบหน้า?</div>
+            <div style="font-size: 0.92em; line-height: 1.6; color: #444; margin-bottom: 14px;">
+                <div><strong>📦 ส่งของรอบนี้เลย:</strong> เปิดหน้า Export Kerry ให้ทันที เหมือนเดิม</div>
+                <div style="margin-top: 6px;"><strong>⏳ รอรวมกับรอบหน้า:</strong> ยังไม่ส่งของรอบนี้ ลูกค้าที่ซื้อรอบนี้แล้วซื้อเพิ่มในไลฟ์รอบหน้า จะไม่ถูกเก็บค่าส่งซ้ำ นับชิ้นรวมกันเพื่อส่งฟรี และไฟล์ Kerry ของรอบหน้าจะรวมของ 2 รอบเป็นพัสดุเดียว</div>
+                <div style="margin-top: 8px; color: #b45309;">⚠️ กดรอรวมเฉพาะเมื่อ <strong>ยังไม่ได้ส่งของรอบนี้จริง</strong> / รวมได้สูงสุด 2 รอบ (รอบหน้ากดรอรวมต่อไม่ได้) / ลูกค้าที่โอนไม่ครบ (การ์ดสีส้ม) ยอดค้างยังถูกรีเซ็ตตอนเริ่มไลฟ์รอบหน้าตามเดิม</div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+                <button onclick="holdChoice('hold')" style="background: #ea580c; color: #fff; padding: 11px 16px; border: none; border-radius: 8px; cursor: pointer; font-family: 'Kanit'; font-size: 1em;">⏳ รอรวมกับรอบหน้า (ยังไม่ส่งของ)</button>
+                <button onclick="holdChoice('ship')" style="background: #16a34a; color: #fff; padding: 11px 16px; border: none; border-radius: 8px; cursor: pointer; font-family: 'Kanit'; font-size: 1em;">📦 ส่งของรอบนี้เลย</button>
+                <button onclick="holdChoice('cancel')" style="background: #eee; color: #444; padding: 9px 16px; border: none; border-radius: 8px; cursor: pointer; font-family: 'Kanit';">❌ ยกเลิก (ยังไม่จบไลฟ์)</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 📦 Modal Export Kerry Express -->
     <div class="modal-overlay" id="kerryExportModal">
         <div class="modal-box" style="max-width: 550px; width: 95%; text-align: left;">
@@ -655,6 +676,8 @@
                     <option value="">ตามวันที่ที่เลือกในหน้าประวัติ (แบบเดิม)</option>
                 </select>
             </div>
+
+            <div id="kerryMergeNotice" style="display: none; margin-bottom: 12px;"></div>
 
             <div style="background: #fff7ed; border: 1px solid #ffedd5; padding: 12px 16px; border-radius: 8px; margin-bottom: 15px;">
                 <div style="font-weight: 600; color: #c2410c; margin-bottom: 4px;">สรุปความพร้อมของที่อยู่จัดส่ง:</div>
@@ -1505,8 +1528,46 @@
                 </div>
                 <div class="queue-actions">
                     <div class="draws-badge" style="background-color:#ff9800; color:#fff;">⏳ รอโอนเพิ่ม</div>
+                    <button type="button" class="btn-danger-outline topup-dismiss-btn" title="ลบการ์ดนี้ออกจากหน้าจอ (ยอดรวมไม่เปลี่ยน)">🗑️ ลบ</button>
                 </div>`;
+            const dismissBtn = el.querySelector('.topup-dismiss-btn');
+            if (dismissBtn) {
+                dismissBtn.addEventListener('click', () => {
+                    openModal('🗑️', `ลบการ์ดรอโอนเพิ่มของ "${t.name || 'ลูกค้า'}" ?\n(ลบออกจากหน้าจอเท่านั้น ยอดโอนรวมไม่เปลี่ยน ถ้าลูกค้าโอนเพิ่มภายหลัง ระบบจะคิดยอดเดิมรวมให้)`, () => {
+                        notifyIfActionFailed(fetch('/api/queue/dismiss_topup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: t.id }) }));
+                    });
+                });
+            }
             return el;
+        }
+
+        // 🔴 การ์ดแดง: รูปสลิปโหลดจาก LINE ไม่สำเร็จ แม่ค้าต้องเปิดดูรูปในแชท LINE OA แล้วใส่ยอด/แทรกคิวเอง
+        function renderImageFails(list) {
+            const box = document.getElementById('imgfail-box');
+            if (!box) return;
+            box.innerHTML = '';
+            if (!Array.isArray(list) || list.length === 0) { box.style.display = 'none'; return; }
+            box.style.display = 'block';
+            list.forEach(f => {
+                const el = document.createElement('div');
+                el.className = 'queue-card';
+                el.style.borderLeft = '6px solid #c62828';
+                el.style.background = 'rgba(198,40,40,0.08)';
+                el.innerHTML = `
+                    <div class="queue-number" style="color:#c62828;">❗</div>
+                    <div class="queue-info">
+                        <div class="name">👤 <span>${escapeHtml(f.name || 'ลูกค้า')}</span></div>
+                        <div style="font-size: 0.95em; color:#c62828; margin-top:6px; font-weight:600;">❌ โหลดรูปสลิปไม่สำเร็จ (เน็ตสะดุด) เวลา ${escapeHtml(f.time || '')}</div>
+                        <div style="font-size: 0.85em; color:#777; margin-top:3px;">สลิปนี้ยังไม่เข้าคิวและยังไม่นับยอด กรุณาเปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง หรือบอกลูกค้าให้ส่งรูปใหม่</div>
+                    </div>
+                    <div class="queue-actions">
+                        <button type="button" class="btn-danger-outline imgfail-ack-btn" title="ซ่อนการ์ดนี้ (ไม่กระทบยอดหรือสลิปใดๆ)">✔ รับทราบ</button>
+                    </div>`;
+                el.querySelector('.imgfail-ack-btn').addEventListener('click', () => {
+                    notifyIfActionFailed(fetch('/api/queue/dismiss_image_fail', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: f.id }) }));
+                });
+                box.append(el);
+            });
         }
 
         // 🧾 รายการยอดโอนล่าสุด: แสดงทุกสลิปที่ลูกค้าส่งมา พร้อมผล (ได้กี่ชิ้น / ยอดไม่พอต้องโอนเพิ่มเท่าไหร่)
@@ -1540,6 +1601,7 @@
         function renderDashboard(data) {
             updateStatsUI(data.stats);
             renderRecent(data.recentSlips || []);
+            renderImageFails(data.imageFails || []);
             document.getElementById('queue-list').innerHTML = '';
             document.getElementById('active-queue-list').innerHTML = '';
             document.getElementById('skipped-queue-list').innerHTML = '';
@@ -1620,6 +1682,27 @@
                 osc.start(); osc.stop(ctx.currentTime + 0.55);
                 osc.onended = () => { try { ctx.close(); } catch (e) {} };
             } catch (e) { /* เสียงถูกบล็อกก็ไม่เป็นไร กล่องรายชื่อยังแสดงตามปกติ */ }
+        });
+
+        // 🔴 เสียงเตือนเมื่อโหลดรูปสลิปจาก LINE ไม่สำเร็จ (โทนต่ำ 2 ครั้ง แยกจากเสียงโอนไม่ครบ)
+        socket.on('image_failed', () => {
+            try {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                if (!Ctx) return;
+                const ctx = new Ctx();
+                [0, 0.35].forEach(offset => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = 'sine'; osc.frequency.value = 440;
+                    const t0 = ctx.currentTime + offset;
+                    gain.gain.setValueAtTime(0.0001, t0);
+                    gain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.03);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.28);
+                    osc.connect(gain); gain.connect(ctx.destination);
+                    osc.start(t0); osc.stop(t0 + 0.3);
+                });
+                setTimeout(() => { try { ctx.close(); } catch (e) {} }, 1000);
+            } catch (e) { /* เสียงถูกบล็อกก็ไม่เป็นไร การ์ดแดงยังแสดงตามปกติ */ }
         });
 
         socket.on('play_sound', () => {
@@ -1936,7 +2019,7 @@
 
             if (session && session.startTime) {
                 badge.className = 'live-status-pill online';
-                statusText.innerText = '🔴 กำลังไลฟ์สด (LIVE)';
+                statusText.innerText = '🔴 กำลังไลฟ์สด (LIVE)' + (session.mergeFrom ? ' 🔗 รวมบิลกับรอบก่อน' : '');
                 btnStart.style.display = 'none';
                 btnEnd.style.display = 'inline-flex';
 
@@ -2283,7 +2366,40 @@
             });
         }
 
+        // v1.0.13: เริ่มไลฟ์ใหม่จะรีเซ็ตเงินค้างของลูกค้าทุกคน จึงเตือนแม่ค้าก่อนถ้ายังมีเงินค้าง
+        // v1.0.15: ถ้ารอบก่อนหน้าตั้งไว้ "รอรวมกับรอบหน้า" ให้แจ้งก่อนว่ารอบนี้จะรวมบิลกับรอบนั้น
         function proceedStartLive() {
+            fetch('/api/live_session/pending_merge')
+                .then(res => res.ok ? res.json() : null)
+                .catch(() => null)
+                .then(d => {
+                    if (d && d.success && d.pending) {
+                        const msg = `[รวมบิลกับรอบก่อนหน้า] รอบไลฟ์ก่อนหน้าตั้งไว้ "รอรวมกับรอบหน้า" (ลูกค้าที่ซื้อรอบนั้น ${d.customers} คน)\n\nถ้าเริ่มไลฟ์รอบนี้:\n• ลูกค้าที่ซื้อรอบก่อนแล้วซื้อเพิ่ม จะไม่ถูกเก็บค่าส่งซ้ำ และนับชิ้นรวมกันเพื่อส่งฟรี\n• ไฟล์ Kerry จะรวมของ 2 รอบเป็นพัสดุเดียว\n• จบรอบนี้แล้วต้องส่งของ (รอรวมต่อไม่ได้)\n\nถ้าส่งของรอบก่อนไปแล้ว ให้กดยกเลิก แล้วไป Export Kerry เลือกรอบนั้นและกด "ยกเลิกการรอรวมบิล"\n\nยืนยันเริ่มไลฟ์และรวมบิลกับรอบก่อน?`;
+                        setTimeout(() => openModal('🔗', msg, () => checkBalancesThenStartLive()), 0);
+                    } else {
+                        checkBalancesThenStartLive();
+                    }
+                });
+        }
+
+        function checkBalancesThenStartLive() {
+            fetch('/api/queue/pending_balances')
+                .then(res => res.ok ? res.json() : null)
+                .catch(() => null)
+                .then(d => {
+                    if (d && d.success && d.count > 0) {
+                        const lines = (d.list || []).map(c => `• ${c.name}: ${Number(c.balance).toLocaleString('en-US')} บาท`);
+                        if (d.count > lines.length) lines.push(`• และอีก ${d.count - lines.length} คน`);
+                        const msg = `[เตือนก่อนเริ่มไลฟ์] ยังมีเงินค้างของลูกค้า ${d.count} คน รวม ${Number(d.total).toLocaleString('en-US')} บาท\n${lines.join('\n')}\n\nถ้ากดเริ่มไลฟ์ ยอดเหล่านี้จะถูกรีเซ็ตเป็น 0 ลูกค้าต้องโอนใหม่ทั้งหมด (ควรโอนคืนหรือแจ้งลูกค้าก่อน)\n\nยืนยันเริ่มไลฟ์และรีเซ็ตยอดเหล่านี้?`;
+                        // เปิดหน้าต่างใหม่หลังหน้าต่างเดิมปิดแล้ว (ไม่งั้นถูกปิดตามไปด้วย)
+                        setTimeout(() => openModal('⚠️', msg, () => doStartLive()), 0);
+                    } else {
+                        doStartLive();
+                    }
+                });
+        }
+
+        function doStartLive() {
             fetch('/api/live_session/start', { method: 'POST' })
                 .then(res => res.json())
                 .then(data => {
@@ -2291,18 +2407,41 @@
                 });
         }
 
-        function confirmEndLive() {
-            // ⚠️ เตือนแม่ค้าถ้ายังมีคิวค้าง เพราะหลังจบไลฟ์และเริ่มรอบใหม่ คิวเก่าจะไม่แสดงบนหน้าจอคิว
-            const baseMsg = 'ยืนยันการ "จบไลฟ์สด" ?\n(ระบบจะหยุดจับเวลา และสรุปข้อมูลเพื่อ Export ไฟล์ Kerry Excel ได้ทันที)';
-            const doEnd = () => {
-                fetch('/api/live_session/end', { method: 'POST' })
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.success) {
-                            updateLiveUI(null);
+        // v1.0.15: จบไลฟ์จริง (holdMerge = true -> รอรวมกับรอบหน้า ยังไม่เปิด Export Kerry)
+        function endLiveNow(holdMerge) {
+            fetch('/api/live_session/end', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ holdMerge: !!holdMerge })
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        updateLiveUI(null);
+                        if (data.held) {
+                            openModal('⏳', 'บันทึกแล้ว: รอบนี้ "รอรวมกับรอบหน้า"\n\nยังไม่ต้องส่งของรอบนี้ เมื่อเริ่มไลฟ์รอบหน้า ลูกค้าที่ซื้อรอบนี้แล้วซื้อเพิ่มจะไม่ถูกเก็บค่าส่งซ้ำ\nจบไลฟ์รอบหน้าแล้วค่อยดาวน์โหลดไฟล์ Kerry ที่รวม 2 รอบ\n\nถ้าเปลี่ยนใจ: ไปที่ Export Kerry เลือกรอบนี้ แล้วกด "ยกเลิกการรอรวมบิล"', null);
+                        } else {
                             openKerryExportModal(); // เปิดหน้าต่างดาวน์โหลด Kerry ให้ทันทีหลังจบไลฟ์
                         }
-                    });
+                    }
+                });
+        }
+
+        function holdChoice(choice) {
+            document.getElementById('holdChoiceModal').style.display = 'none';
+            if (choice === 'cancel') return;
+            endLiveNow(choice === 'hold');
+        }
+
+        function confirmEndLive() {
+            // ⚠️ เตือนแม่ค้าถ้ายังมีคิวค้าง เพราะหลังจบไลฟ์และเริ่มรอบใหม่ คิวเก่าจะไม่แสดงบนหน้าจอคิว
+            const mergedRound = !!(currentLiveSession && currentLiveSession.mergeFrom);
+            const baseMsg = 'ยืนยันการ "จบไลฟ์สด" ?\n(ระบบจะหยุดจับเวลา และสรุปข้อมูลเพื่อ Export ไฟล์ Kerry Excel ได้ทันที)'
+                + (mergedRound ? '\n\n🔗 รอบนี้รวมบิลกับรอบก่อนหน้า: ไฟล์ Kerry จะรวมของ 2 รอบเป็นพัสดุเดียว' : '');
+            const doEnd = () => {
+                if (mergedRound) { endLiveNow(false); return; } // รวมบิลได้สูงสุด 2 รอบ รอบนี้ต้องส่งของ
+                // เปิดหน้าต่างเลือกหลังหน้าต่างยืนยันปิดแล้ว
+                setTimeout(() => { document.getElementById('holdChoiceModal').style.display = 'flex'; }, 0);
             };
             fetch('/api/stats/today')
                 .then(res => res.ok ? res.json() : null)
@@ -2328,15 +2467,53 @@
         function formatLiveSessionLabel(s) {
             const fmt = (ms) => new Date(ms).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
             const end = s.endTime ? new Date(s.endTime).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit' }) : '';
-            return s.active ? `🔴 ไลฟ์ที่กำลังดำเนินอยู่ (เริ่ม ${fmt(s.startTime)})` : `ไลฟ์ ${fmt(s.startTime)} - ${end}`;
+            const base = s.active ? `🔴 ไลฟ์ที่กำลังดำเนินอยู่ (เริ่ม ${fmt(s.startTime)})` : `ไลฟ์ ${fmt(s.startTime)} - ${end}`;
+            // v1.0.15: ป้ายรวมบิล / รอรวมบิล
+            if (s.mergeFrom || s.mergedInto) return `${base} 🔗 รวมบิล`;
+            if (s.holdMerge) return `${base} ⏳ รอรวมบิล`;
+            return base;
         }
 
-        function openKerryExportModal() {
+        // v1.0.15: ตั้ง/ยกเลิก "รอรวมกับรอบหน้า" จากหน้าต่าง Export Kerry
+        function setSessionHold(sessionId, hold) {
+            fetch('/api/live_session/hold', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: sessionId, hold: !!hold })
+            })
+                .then(res => res.json().catch(() => ({ success: false, error: 'ตอบกลับไม่ถูกต้อง' })))
+                .then(d => {
+                    if (!d.success) { alert(d.error || 'ทำรายการไม่สำเร็จ'); return; }
+                    refreshKerryExport();
+                    loadKerrySessionOptions();
+                })
+                .catch(e => alert('ทำรายการไม่สำเร็จ: ' + e.message));
+        }
+
+        function renderKerryMergeNotice(data) {
+            const box = document.getElementById('kerryMergeNotice');
+            if (!box) return;
+            let html = '';
+            if (data && data.merge && data.merge.sessions && data.merge.sessions.length > 1) {
+                const items = data.merge.sessions.map(s => `<li>${escapeHtml(formatLiveSessionLabel({ startTime: s.startTime, endTime: s.endTime, active: false }))}</li>`).join('');
+                html = `<div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:10px 14px; font-size:0.9em; color:#1e3a8a; line-height:1.5;">
+                    🔗 <strong>รวมบิล 2 รอบ</strong> — ไฟล์นี้รวมลูกค้าและสินค้าของทั้ง 2 รอบ ลูกค้าที่ซื้อทั้งสองรอบอยู่แถวเดียว ส่งเป็นพัสดุเดียว
+                    <ul style="margin:4px 0 0 18px; padding:0;">${items}</ul></div>`;
+            } else if (data && data.held) {
+                html = `<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:10px 14px; font-size:0.9em; color:#92400e; line-height:1.5;">
+                    ⏳ <strong>รอบนี้ตั้งไว้ "รอรวมกับรอบหน้า"</strong> — ถ้าส่งของรอบนี้ตอนนี้ ให้ยกเลิกการรอรวมบิลก่อน เพื่อไม่ให้ลูกค้าได้ส่งฟรีโดยไม่ตั้งใจในรอบหน้า
+                    <div style="margin-top:6px;"><button onclick="setSessionHold('${escapeHtml(data.held.sessionId)}', false)" style="background:#f59e0b; color:#fff; border:none; border-radius:6px; padding:6px 12px; cursor:pointer; font-family:'Kanit';">ยกเลิกการรอรวมบิล (ส่งรอบนี้แยก)</button></div></div>`;
+            } else if (data && data.canHold) {
+                html = `<div style="font-size:0.85em; color:#666;">ยังไม่ได้ส่งของรอบนี้?
+                    <a href="#" onclick="setSessionHold('${escapeHtml(data.canHold.sessionId)}', true); return false;" style="color:#ea580c;">ตั้งเป็น "รอรวมกับรอบหน้า"</a></div>`;
+            }
+            box.innerHTML = html;
+            box.style.display = html ? 'block' : 'none';
+        }
+
+        function loadKerrySessionOptions() {
             const select = document.getElementById('kerrySessionSelect');
-            select.value = '';
-            document.getElementById('kerryExportModal').style.display = 'flex';
-            refreshKerryExport();
-            fetch('/api/kerry/sessions')
+            return fetch('/api/kerry/sessions')
                 .then(res => res.ok ? res.json() : null)
                 .then(data => {
                     if (!data || !data.success) return;
@@ -2346,6 +2523,14 @@
                     select.value = keep;
                 })
                 .catch(() => {});
+        }
+
+        function openKerryExportModal() {
+            const select = document.getElementById('kerrySessionSelect');
+            select.value = '';
+            document.getElementById('kerryExportModal').style.display = 'flex';
+            refreshKerryExport();
+            loadKerrySessionOptions();
         }
 
         function refreshKerryExport() {
@@ -2367,6 +2552,7 @@
                 .then(res => res.json())
                 .then(data => {
                     if (reqNo !== window.__kerryReqNo) return; // ผลของรอบที่เลือกก่อนหน้า ไม่ต้องแสดง
+                    renderKerryMergeNotice(data);
                     if (data.success) {
                         const readyPct = data.totalCustomers > 0 ? Math.round((data.readyCustomers / data.totalCustomers) * 100) : 0;
                         statusBox.innerHTML = `
