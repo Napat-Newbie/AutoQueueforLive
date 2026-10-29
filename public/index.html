@@ -67,6 +67,28 @@
         /* v1.0.16: ตรึงแผงควบคุม (ป้ายสถานะ LIVE/LINE/โควตา/เวอร์ชัน) ไว้บนสุด เลื่อนดูคิวยาวแล้วไม่หาย -- เว้นที่ให้แถบเตือนสีแดงเมื่อแสดงอยู่ */
         .live-control-panel { position: sticky; top: var(--alert-h, 0px); z-index: 900; }
         .queue-card.pending-amount-card .queue-number { font-size: 1.4em; }
+        /* v1.0.16: Toast (ป้ายแจ้งเตือนชั่วคราว) + ลิ้นชักประวัติแจ้งเตือน + การ์ดรอใส่ยอดกะพริบเมื่อเข้าใหม่ */
+        .toast-stack { position: fixed; z-index: 3000; display: flex; flex-direction: column; gap: 8px; width: min(380px, 92vw); pointer-events: none; }
+        .toast-stack.tr { top: calc(var(--alert-h, 0px) + 12px); right: 12px; }
+        .toast-stack.bl { bottom: 12px; left: 12px; }
+        .toast { pointer-events: auto; cursor: pointer; padding: 10px 14px; border-radius: 10px; color: #fff; font-size: 0.92em; line-height: 1.4; box-shadow: 0 6px 18px rgba(0,0,0,0.25); animation: toastIn 0.25s ease-out; word-break: break-word; }
+        .toast.warn { background: #c2410c; border-left: 6px solid #7f1d1d; }
+        .toast.bad { background: #b91c1c; border-left: 6px solid #7f1d1d; }
+        .toast.ok { background: #15803d; }
+        .toast.info { background: #1e40af; }
+        @keyframes toastIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+        .queue-card.pending-flash { animation: pendingFlash 0.6s ease-in-out 4; }
+        @keyframes pendingFlash { 0%, 100% { background: transparent; } 50% { background: rgba(230, 81, 0, 0.30); } }
+        @media (prefers-reduced-motion: reduce) { .toast, .queue-card.pending-flash { animation: none !important; } }
+        #notifDrawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(400px, 100vw); background: #fff; box-shadow: -4px 0 20px rgba(0,0,0,0.25); z-index: 3500; transform: translateX(105%); transition: transform 0.2s; display: flex; flex-direction: column; }
+        #notifDrawer.open { transform: none; }
+        #notifDrawer .notif-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid #e2e8f0; }
+        #notifList { overflow-y: auto; flex: 1; padding: 8px 12px; }
+        .notif-row { padding: 8px 10px; margin-bottom: 8px; border-radius: 8px; border-left: 5px solid #94a3b8; background: #f8fafc; font-size: 0.9em; word-break: break-word; }
+        .notif-row.bad { border-left-color: #b91c1c; background: #fef2f2; }
+        .notif-row.warn { border-left-color: #ea580c; background: #fff7ed; }
+        .notif-row.ok { border-left-color: #16a34a; background: #f0fdf4; }
+        .notif-row .notif-time { font-size: 0.8em; color: #64748b; margin-bottom: 2px; }
         .live-status-pill {
             display: inline-flex;
             align-items: center;
@@ -478,6 +500,18 @@
     <div class="container" style="margin-top: 20px;">
         
         <!-- 🔴 แถบควบคุมรอบไลฟ์สด (Live Session Control Panel) -->
+        <div id="toastStackTR" class="toast-stack tr"></div>
+        <div id="toastStackBL" class="toast-stack bl"></div>
+        <div id="notifDrawer" aria-label="ประวัติแจ้งเตือน">
+            <div class="notif-head">
+                <strong>🔔 ประวัติแจ้งเตือน (20 รายการล่าสุด)</strong>
+                <div style="display:flex; gap:6px;">
+                    <button onclick="clearNotifHistory()" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; padding:6px 10px; border-radius:8px; cursor:pointer;">ล้าง</button>
+                    <button onclick="toggleNotifDrawer(false)" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; padding:6px 10px; border-radius:8px; cursor:pointer;">✕ ปิด</button>
+                </div>
+            </div>
+            <div id="notifList"></div>
+        </div>
         <div class="live-control-panel">
             <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
                 <div id="liveStatusBadge" class="live-status-pill offline">
@@ -519,6 +553,9 @@
                 </button>
                 <button class="btn-kerry" onclick="openKerryExportModal()">
                     📦 Export Kerry Excel
+                </button>
+                <button id="notifBellBtn" onclick="toggleNotifDrawer()" title="ดูประวัติแจ้งเตือนย้อนหลัง 20 รายการล่าสุด" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-family: 'Kanit'; display: flex; align-items: center; gap: 6px;">
+                    🔔 แจ้งเตือน <span id="notifBadge" style="display:none; margin-left:4px; background:#dc2626; color:#fff; border-radius:10px; padding:1px 7px; font-size:0.8em; font-weight:700;">0</span>
                 </button>
                 <button onclick="openDevAuthModal()" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-family: 'Kanit'; display: flex; align-items: center; gap: 6px;">
                     🔑 ตั้งค่าระบบ (Setup)
@@ -1510,25 +1547,135 @@
                 let t = ctx.currentTime + 0.01;
                 frequencies.forEach((freq, idx) => {
                     const dur = durations[idx] || 0.15;
-                    if (freq) {
+                    // ตัวเลข = โน้ตเดี่ยว | อาร์เรย์ = คอร์ด (เล่นพร้อมกัน) | 0 = ช่วงเงียบคั่นจังหวะ
+                    const notes = (Array.isArray(freq) ? freq : [freq]).filter(f => f > 0);
+                    const vol = (volume || 0.2) / Math.max(1, notes.length * 0.7);
+                    notes.forEach(f => {
                         const osc = ctx.createOscillator(); const gain = ctx.createGain();
-                        osc.type = type || 'sine'; osc.frequency.value = freq;
+                        osc.type = type || 'sine'; osc.frequency.value = f;
                         gain.gain.setValueAtTime(0.0001, t);
-                        gain.gain.exponentialRampToValueAtTime(volume || 0.2, t + 0.02);
+                        gain.gain.exponentialRampToValueAtTime(vol, t + 0.02);
                         gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
                         osc.connect(gain); gain.connect(ctx.destination);
                         osc.start(t); osc.stop(t + dur + 0.02);
-                    }
-                    t += dur;   // freq = 0 คือช่วงเงียบคั่นจังหวะ
+                    });
+                    t += dur;
                 });
             } catch (e) { console.warn('Audio blocked or unsupported:', e); }
         }
         const SOUND_PRESETS = {
             newSlip: { freqs: [523.25, 659.25], durs: [0.1, 0.1], type: 'sine' },                       // ปิ๊ง C5 -> E5
+            warnBeep: { freqs: [600, 0, 600], durs: [0.1, 0.06, 0.1], type: 'sine' },                          // สลิปซ้ำ/โอนผิดบัญชี: บี๊ปคู่สั้น 600Hz
+            pendingChord: { freqs: [[523.25, 659.25, 783.99]], durs: [0.7], type: 'sine', volume: 0.2 },        // สลิปไม่มี QR: คอร์ด C-E-G
             quotaAlert: { freqs: [550, 0, 550], durs: [0.18, 0.1, 0.18], type: 'sine' },                // โควตาหมด 2 ครั้ง
             siren: { freqs: [440, 880, 440, 880, 440, 880], durs: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25], type: 'square', volume: 0.12 }   // ท่อหลุด
         };
         function playPreset(name) { const p = SOUND_PRESETS[name]; if (p) playToneSequence(p.freqs, p.durs, p.type, p.volume); }
+
+        // ===== v1.0.16: ประวัติแจ้งเตือน 20 รายการล่าสุด + Toast + ปุ่มคัดลอกข้อความทักลูกค้า + การ์ดรอใส่ยอดกะพริบ =====
+        const NOTIF_HISTORY_MAX = 20;
+        const NOTIF_STORAGE_KEY = 'aq_notif_history_v1';
+        let __notifHistory = [];
+        let __notifUnread = 0;
+        try { const saved = JSON.parse(sessionStorage.getItem(NOTIF_STORAGE_KEY) || '[]'); if (Array.isArray(saved)) __notifHistory = saved.slice(0, NOTIF_HISTORY_MAX); } catch (e) {}
+        function pushNotif(kind, text) {
+            const msg = String(text || '').trim();
+            if (!msg) return;
+            const last = __notifHistory[0];
+            if (last && last.text === msg && Date.now() - last.t < 60000) return;   // ข้อความเดิมซ้ำภายใน 1 นาที ไม่บันทึกซ้ำ
+            __notifHistory.unshift({ t: Date.now(), kind: kind || 'info', text: msg });
+            if (__notifHistory.length > NOTIF_HISTORY_MAX) __notifHistory.length = NOTIF_HISTORY_MAX;
+            try { sessionStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify(__notifHistory)); } catch (e) {}
+            const drawer = document.getElementById('notifDrawer');
+            if (drawer && drawer.classList.contains('open')) renderNotifDrawer(); else __notifUnread++;
+            renderNotifBadge();
+        }
+        function renderNotifBadge() {
+            const b = document.getElementById('notifBadge');
+            if (!b) return;
+            b.style.display = __notifUnread > 0 ? 'inline-block' : 'none';
+            b.innerText = String(__notifUnread);
+        }
+        function renderNotifDrawer() {
+            const list = document.getElementById('notifList');
+            if (!list) return;
+            list.innerHTML = '';
+            if (!__notifHistory.length) { list.innerHTML = '<div style="color:#94a3b8; padding:16px; text-align:center;">ยังไม่มีการแจ้งเตือน</div>'; return; }
+            const icons = { bad: '🔴', warn: '🟠', ok: '🟢', info: 'ℹ️' };
+            __notifHistory.forEach(n => {
+                const row = document.createElement('div'); row.className = 'notif-row ' + n.kind;
+                const head = document.createElement('div'); head.className = 'notif-time';
+                head.textContent = (icons[n.kind] || '') + ' ' + new Date(n.t).toLocaleTimeString('th-TH', { hour12: false, timeZone: 'Asia/Bangkok' });
+                const body = document.createElement('div'); body.textContent = n.text;
+                row.appendChild(head); row.appendChild(body); list.appendChild(row);
+            });
+        }
+        function toggleNotifDrawer(force) {
+            const d = document.getElementById('notifDrawer');
+            if (!d) return;
+            const open = typeof force === 'boolean' ? force : !d.classList.contains('open');
+            d.classList.toggle('open', open);
+            if (open) { __notifUnread = 0; renderNotifBadge(); renderNotifDrawer(); }
+        }
+        function clearNotifHistory() {
+            __notifHistory = []; __notifUnread = 0;
+            try { sessionStorage.removeItem(NOTIF_STORAGE_KEY); } catch (e) {}
+            renderNotifBadge(); renderNotifDrawer();
+        }
+        // opts: { kind: 'warn'|'bad'|'ok'|'info', pos: 'tr' (บนขวา) | 'bl' (ล่างซ้าย), ms, title, record: false = ไม่ลงประวัติ }
+        function showToast(message, opts) {
+            opts = opts || {};
+            const kind = opts.kind || 'info';
+            if (opts.record !== false) pushNotif(kind, (opts.title ? opts.title + ' — ' : '') + message);
+            const root = document.getElementById(opts.pos === 'bl' ? 'toastStackBL' : 'toastStackTR');
+            if (!root) return null;
+            const el = document.createElement('div');
+            el.className = 'toast ' + kind;
+            if (opts.title) { const t = document.createElement('div'); t.style.fontWeight = '700'; t.textContent = opts.title; el.appendChild(t); }
+            const body = document.createElement('div'); body.textContent = message; el.appendChild(body);
+            const remove = () => { if (el.parentNode) el.parentNode.removeChild(el); };
+            el.addEventListener('click', remove);
+            root.appendChild(el);
+            while (root.children.length > 4) root.removeChild(root.firstChild);
+            setTimeout(remove, opts.ms || 8000);
+            return el;
+        }
+        // ข้อความสำเร็จรูปให้แม่ค้าคัดลอกไปวางในแชท LINE OA (ไม่ส่งอะไรให้ลูกค้าเอง)
+        function buildTopupMessage(t) {
+            const name = (t && t.name) || 'ลูกค้า';
+            const amt = t && Number(t.amount) > 0 ? Number(t.amount).toLocaleString('en-US') : null;
+            const need = Number(t && t.need).toLocaleString('en-US');
+            const got = amt ? 'ได้รับยอดโอน ' + amt + ' บาทแล้วนะคะ' : 'ได้รับสลิปแล้วนะคะ';
+            return t && t.held
+                ? 'สวัสดีค่ะ คุณ' + name + ' ' + got + ' ยอดนี้เท่ากับราคาสินค้าพอดี แต่ยังไม่รวมค่าส่ง รบกวนโอนค่าส่งเพิ่มอีก ' + need + ' บาท แล้วเข้าคิวให้ทันทีค่ะ 🙏'
+                : 'สวัสดีค่ะ คุณ' + name + ' ' + got + ' แต่ยอดรวม (รวมค่าส่งแล้ว) ยังไม่พอสำหรับสินค้า รบกวนโอนเพิ่มอีก ' + need + ' บาท แล้วเข้าคิวให้ทันทีค่ะ 🙏';
+        }
+        function buildAddressRequestMessage(name) {
+            return 'สวัสดีค่ะ คุณ' + (name || 'ลูกค้า') + ' รบกวนพิมพ์ ชื่อ-นามสกุล ที่อยู่ รหัสไปรษณีย์ และเบอร์โทร ส่งมาในแชทนี้ด้วยนะคะ จะได้รีบแพ็คของส่งให้ค่ะ 📦';
+        }
+        function copyText(text, okMessage) {
+            const done = () => showToast(okMessage || 'คัดลอกแล้ว', { kind: 'ok', pos: 'bl', ms: 2500, record: false });
+            const fail = () => showToast('คัดลอกไม่สำเร็จ ลองลากคลุมข้อความแล้วคัดลอกเอง', { kind: 'warn', pos: 'bl', ms: 4000, record: false });
+            const fallback = () => {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+                    document.body.appendChild(ta); ta.select();
+                    const ok = document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    if (ok) done(); else fail();
+                } catch (e) { fail(); }
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+        }
+        // การ์ดรอใส่ยอดที่เพิ่งเข้ามาใหม่ (ไม่ใช่ตอนโหลดหน้าครั้งแรก) กะพริบสั้นๆ ให้สายตาจับได้
+        const __pendingSeen = new Set();
+        let __pendingSeenReady = false;
+        function markPendingFlash(el, id) {
+            if (__pendingSeen.has(id)) return;
+            __pendingSeen.add(id);
+            if (__pendingSeenReady) el.classList.add('pending-flash');
+        }
 
         // ===== v1.0.16: ท่อสัญญาณ (Tunnel) หลุด / ซิงค์ LINE Webhook ล้มเหลว = แถบเตือนสีแดง + เสียงไซเรน (เฉพาะตอนกำลังไลฟ์) =====
         function tunnelHealthVerdict(data) {
@@ -1556,6 +1703,7 @@
                 __tunnelBadTimer = null;
                 __tunnelAlertShown = true;
                 showGlobalAlertBanner(v.message, 'tunnel');
+                try { pushNotif('bad', v.message.replace(/^⚠️\s*/, '')); } catch (e) {}
                 tunnelSirenOnce();
                 __tunnelSirenTimer = setInterval(tunnelSirenOnce, TUNNEL_SIREN_REPEAT_MS);
             }, TUNNEL_ALERT_GRACE_MS);
@@ -1668,6 +1816,9 @@
                 breakdownDisplay += `<div style="font-size: 0.95em; color:#1a73e8; margin-top:4px;">📦 จัดส่งไปแล้ว: ${escapeHtml(data.breakdown)}</div>`;
             }
 
+            if (data.hasAddress === false && !data.isPendingAmount && data.status !== 'abnormal_pending') {
+                buttonsHtml += `<button type="button" class="btn-primary addr-copy-btn" style="background:#0f766e; border:none;" title="คัดลอกข้อความทวงที่อยู่ไปวางในแชท LINE OA">📋 คัดลอกข้อความทวงที่อยู่</button>`;
+            }
             let displayName = data.name;
             if (data.lineName && data.lineName !== data.name) {
                 displayName = `${data.name} (LINE: ${data.lineName})`;
@@ -1711,11 +1862,15 @@
             el.dataset.sort = String(data.sortId || data.id);
             el.style.borderLeft = `6px solid ${borderColor}`;
             el.innerHTML = innerContent;
+            const addrCopyBtn = el.querySelector('.addr-copy-btn');
+            if (addrCopyBtn) addrCopyBtn.addEventListener('click', () => copyText(buildAddressRequestMessage(data.lineName || data.name), 'คัดลอกข้อความทวงที่อยู่แล้ว'));
             
             if (data.status === 'called') document.getElementById('active-queue-list').append(el);
             else if (data.status === 'skipped') document.getElementById('skipped-queue-list').append(el);
             else if (data.status === 'abnormal_pending') document.getElementById('abnormal-queue-list').append(el);
-            else document.getElementById('queue-list').append(el); try { updateWaitBadges(); } catch (e) {}
+            else document.getElementById('queue-list').append(el);
+            try { updateWaitBadges(); } catch (e) {}
+            if (data.isPendingAmount) markPendingFlash(el, data.id);
         }
 
         // ✏️ v1.0.16: แก้ไขรายการสินค้าเองเมื่อระบบคำนวณ/เลือกสินค้าให้ผิด (แก้เฉพาะสินค้า+จำนวน ยอดเงินและสถานะคงเดิม)
@@ -1865,8 +2020,11 @@
                 </div>
                 <div class="queue-actions">
                     <div class="draws-badge" style="background-color:#ff9800; color:#fff;">⏳ รอโอนเพิ่ม</div>
+                    <button type="button" class="btn-primary topup-copy-btn" style="background:#0f766e; border:none;" title="คัดลอกข้อความแจ้งโอนเพิ่มไปวางในแชท LINE OA">📋 คัดลอกข้อความทัก</button>
                     <button type="button" class="btn-danger-outline topup-dismiss-btn" title="ลบการ์ดนี้ออกจากหน้าจอ (ยอดรวมไม่เปลี่ยน)">🗑️ ลบ</button>
                 </div>`;
+            const topupCopyBtn = el.querySelector('.topup-copy-btn');
+            if (topupCopyBtn) topupCopyBtn.addEventListener('click', () => copyText(buildTopupMessage(t), 'คัดลอกข้อความแจ้งโอนเพิ่มแล้ว'));
             const dismissBtn = el.querySelector('.topup-dismiss-btn');
             if (dismissBtn) {
                 dismissBtn.addEventListener('click', () => {
@@ -1907,6 +2065,13 @@
             });
         }
 
+        // v1.0.16: สลิปที่ระบบไม่บันทึกโดยตั้งใจ (โอนผิดบัญชี/ซ้ำ) ขึ้นเป็นแถวสีแดงบนสุดของตารางด้วย (ข้อมูลมาจากการ์ดแดงเดิม ไม่ได้อยู่ในฐานข้อมูล)
+        function mergeUnrecordedIntoRecent(recent, fails) {
+            const rows = (Array.isArray(fails) ? fails : []).filter(f => f && f.reason).slice().reverse()
+                .map(f => ({ tone: 'bad', name: f.name, amount: 0, noAmount: true, label: f.reason, time: f.time }));
+            return rows.concat(Array.isArray(recent) ? recent : []).slice(0, 30);
+        }
+
         // 🧾 รายการยอดโอนล่าสุด: แสดงทุกสลิปที่ลูกค้าส่งมา พร้อมผล (ได้กี่ชิ้น / ยอดไม่พอต้องโอนเพิ่มเท่าไหร่)
         function renderRecent(list) {
             const box = document.getElementById('recent-box');
@@ -1926,7 +2091,7 @@
                 const amt = r.amount > 0 ? Number(r.amount).toLocaleString('en-US') + ' บาท' : '? บาท';
                 el.innerHTML = `
                     <div class="queue-info">
-                        <div class="name">👤 <span>${escapeHtml(r.name || 'ลูกค้า')}</span> <span style="font-weight:600;">• โอน ${escapeHtml(amt)}</span></div>
+                        <div class="name">👤 <span>${escapeHtml(r.name || 'ลูกค้า')}</span> ${r.noAmount ? '' : '<span style="font-weight:600;">• โอน ' + escapeHtml(amt) + '</span>'}</div>
                         <div style="font-size: 0.9em; color:${c}; margin-top:4px; font-weight:500;">${icons[r.tone] || ''} ${escapeHtml(r.label || '')}</div>
                         <div style="font-size: 0.8em; color:#777; margin-top:2px;">เวลา ${escapeHtml(r.time || '')}</div>
                     </div>`;
@@ -1937,7 +2102,7 @@
         // ✅ ฟังก์ชันใหม่: ทำหน้าที่วาดหน้าจอทันทีที่มีข้อมูลเข้ามา
         function renderDashboard(data) {
             updateStatsUI(data.stats);
-            renderRecent(data.recentSlips || []);
+            renderRecent(mergeUnrecordedIntoRecent(data.recentSlips || [], data.imageFails || []));
             renderImageFails(data.imageFails || []);
             document.getElementById('queue-list').innerHTML = '';
             document.getElementById('active-queue-list').innerHTML = '';
@@ -1955,6 +2120,7 @@
             });
             if(data.queues.skipped) data.queues.skipped.forEach(q => addQueueToScreen(q));
             if(data.queues.abnormal_pending) data.queues.abnormal_pending.forEach(q => addQueueToScreen(q));
+            __pendingSeenReady = true;   // จากนี้ไปการ์ดรอใส่ยอดใหม่จะกะพริบ
             renumberQueues();
         }
 
@@ -2004,7 +2170,8 @@
         }, 30000);
 
         // 💬 เสียงเตือนเบาๆ เมื่อมีลูกค้าโอนไม่ครบ (สร้างเสียงเอง ไม่พึ่งอินเทอร์เน็ต)
-        socket.on('topup_needed', () => {
+        socket.on('topup_needed', (d) => {
+            try { if (d && d.name) pushNotif('warn', 'ลูกค้า ' + d.name + ' โอนไม่ครบ ต้องโอนเพิ่มอีก ' + Number(d.need).toLocaleString('en-US') + ' บาท' + (d.held ? ' (ค่าส่ง)' : '')); } catch (e) {}
             try {
                 const Ctx = window.AudioContext || window.webkitAudioContext;
                 if (!Ctx) return;
@@ -2023,6 +2190,7 @@
 
         // 🔴 เสียงเตือนเมื่อโหลดรูปสลิปจาก LINE ไม่สำเร็จ (โทนต่ำ 2 ครั้ง แยกจากเสียงโอนไม่ครบ)
         socket.on('image_failed', () => {
+            try { pushNotif('bad', 'โหลดรูปสลิปจาก LINE ไม่สำเร็จ — เปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง'); } catch (e) {}
             try {
                 const Ctx = window.AudioContext || window.webkitAudioContext;
                 if (!Ctx) return;
@@ -2040,6 +2208,26 @@
                 });
                 setTimeout(() => { try { ctx.close(); } catch (e) {} }, 1000);
             } catch (e) { /* เสียงถูกบล็อกก็ไม่เป็นไร การ์ดแดงยังแสดงตามปกติ */ }
+        });
+
+        // v1.0.16: สลิปซ้ำ / โอนเข้าผิดบัญชี (ระบบไม่บันทึก) = Toast ส้มแดงมุมบนขวา + บี๊ปคู่สั้น 600Hz (การ์ดแดงกับแถวแดงในตารางมาจาก full_sync)
+        socket.on('slip_warning', (d) => {
+            try {
+                const title = d && d.kind === 'duplicate' ? '⚠️ สลิปซ้ำ' : (d && d.kind === 'wrong_account' ? '⚠️ โอนเข้าผิดบัญชี' : '⚠️ สลิปที่ระบบไม่บันทึก');
+                showToast((d && d.name ? d.name + ' — ' : '') + ((d && d.reason) || ''), { kind: 'warn', pos: 'tr', title, ms: 12000 });
+                playPreset('warnBeep');
+            } catch (e) {}
+        });
+        // v1.0.16: ลูกค้าส่งที่อยู่เข้ามา = Toast เขียวมุมล่างซ้าย ไม่มีเสียง (ไอคอน 📍 บนการ์ดเปลี่ยนเองจาก full_sync)
+        socket.on('address_updated', (d) => {
+            try { showToast('คุณ' + ((d && d.name) || 'ลูกค้า') + ' อัปเดตที่อยู่จัดส่งแล้ว', { kind: 'ok', pos: 'bl', ms: 6000 }); } catch (e) {}
+        });
+        // v1.0.16: สลิปที่ไม่มี QR / อ่านยอดไม่ได้ (รอแม่ค้าใส่ยอด) = เสียงคอร์ดเฉพาะ + การ์ดส้มกะพริบ ไม่มีเลขคิว
+        socket.on('pending_amount_slip', (d) => {
+            try {
+                pushNotif('warn', ((d && d.name) ? d.name + ' ' : '') + 'ส่งสลิปที่ระบบอ่านยอดไม่ได้ — รอแม่ค้ากดเช็คสลิปและใส่ยอด');
+                playPreset('pendingChord');
+            } catch (e) {}
         });
 
         socket.on('play_sound', () => {
@@ -2690,6 +2878,7 @@
         socket.on('provider_quota_alert', (data) => {
             updateQuotaUI(data);
             showGlobalAlertBanner(data.message);
+            try { pushNotif('bad', String(data.message || '').replace(/^⚠️\s*(\[แจ้งเตือนด่วน\]:\s*)?/, '')); } catch (e) {}
             try {
                 playPreset('quotaAlert');
             } catch(e) {}

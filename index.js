@@ -3394,10 +3394,11 @@ function carryOutOfRoundNotices(sessionId) {
 }
 // v1.0.16: สลิปที่ระบบ "ไม่บันทึก" โดยตั้งใจ (โอนผิดบัญชี / ซ้ำกับของลูกค้าอื่นหรือที่ปัดตกไปแล้ว) เดิมเงียบ เหลือแค่บรรทัดใน Logs
 // ตอนนี้แสดงการ์ดบนหน้าจอให้แม่ค้ารับทราบ (การ์ดเดียวกับกรณีโหลดรูปไม่สำเร็จ ไม่แตะยอด/สลิป/ฐานข้อมูล)
-async function notifyUnrecordedSlip(customerName, messageId, reason) {
+async function notifyUnrecordedSlip(customerName, messageId, reason, kind = 'other') {
     try {
         recordLineImageFailure(customerName, messageId, reason);
-        io.emit('image_failed');
+        // v1.0.16: ส่ง slip_warning (Toast + บี๊ปคู่ 600Hz ที่หน้าจอ) แทน image_failed เพื่อไม่ให้เสียงดังซ้อนกัน
+        io.emit('slip_warning', { kind, name: customerName || 'ลูกค้า (ไม่ทราบชื่อ)', reason });
         await broadcastTodayStats();
     } catch (notifyErr) { /* การแจ้งเตือนหน้าจอล้มเหลวต้องไม่ทำให้ Webhook พัง */ }
 }
@@ -4164,6 +4165,8 @@ app.post('/webhook', async (req, res) => {
                             key: addrConfigKey,
                             value: JSON.stringify(parsedAddress)
                         }]);
+                        // v1.0.16: บอกหน้าจอแม่ค้าทันที (Toast เขียว + ไอคอน 📍 บนการ์ดคิวเปลี่ยนเป็นมีที่อยู่) ไม่ต้องรอสลิปใบถัดไป
+                        try { io.emit('address_updated', { name: parsedAddress.recipient_name || lineName }); broadcastTodayStats(); } catch (e) { /* หน้าจอล้มเหลวต้องไม่ทำให้ Webhook พัง */ }
 
                         let confirmMsg = `📦 ผักกาดบันทึกที่อยู่จัดส่งให้เรียบร้อยแล้วค่า!\n` +
                                          `👤 ผู้รับ: ${parsedAddress.recipient_name}\n` +
@@ -4232,7 +4235,7 @@ app.post('/webhook', async (req, res) => {
                     const searchName = merchantAccountName.trim().toLowerCase();
                     const actualName = receiverName.toLowerCase();
                     if (!actualName.includes(searchName)) {
-                        await notifyUnrecordedSlip(lineName, messageId, `สลิปโอนเข้าบัญชี "${receiverName || 'ไม่ทราบชื่อ'}" ไม่ตรงกับชื่อบัญชีร้าน "${merchantAccountName}" (ยอด ${fmtBaht(slipData.amount)} บาท) ระบบไม่ได้บันทึกสลิปนี้`);
+                        await notifyUnrecordedSlip(lineName, messageId, `สลิปโอนเข้าบัญชี "${receiverName || 'ไม่ทราบชื่อ'}" ไม่ตรงกับชื่อบัญชีร้าน "${merchantAccountName}" (ยอด ${fmtBaht(slipData.amount)} บาท) ระบบไม่ได้บันทึกสลิปนี้`, 'wrong_account');
                         addLog('WARN', `ตรวจพบสลิปโอนผิดบัญชี: ลูกค้า "${lineName}" โอนเข้าบัญชี "${receiverName}" (ไม่ใช่ "${merchantAccountName}")`);
                         // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้โอนไปที่บัญชี "${receiverName || 'ไม่ทราบชื่อ'}" นะคะ ซึ่งไม่ใช่บัญชีของผักกาดน้า รบกวนคุณลูกค้าเช็คบัญชีผู้รับอีกทีนะคะ 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                         continue;
@@ -4248,7 +4251,7 @@ app.post('/webhook', async (req, res) => {
                     // v1.0.16: ลูกค้าคนเดิมส่งสลิปซ้ำเป็นเรื่องปกติ (ยังเป็นแค่บรรทัดใน Logs) แต่ถ้าเป็นสลิปของลูกค้าคนอื่น หรือใบที่แม่ค้าปัดตกไปแล้ว ให้ขึ้นการ์ดให้รู้
                     if ((existingSlip.line_id && existingSlip.line_id !== userId) || existingSlip.status === 'rejected') {
                         const dupWho = (existingSlip.line_id && existingSlip.line_id !== userId) ? `ของลูกค้า "${existingSlip.line_name || 'อีกคน'}"` : 'และถูกปัดตกไปแล้ว';
-                        await notifyUnrecordedSlip(lineName, messageId, `สลิปรหัส ${transRef} (ยอด ${fmtBaht(amount)} บาท) เคยถูกบันทึกแล้ว ${dupWho} ระบบจึงไม่นับซ้ำ`);
+                        await notifyUnrecordedSlip(lineName, messageId, `สลิปรหัส ${transRef} (ยอด ${fmtBaht(amount)} บาท) เคยถูกบันทึกแล้ว ${dupWho} ระบบจึงไม่นับซ้ำ`, 'duplicate');
                     }
                     addLog('WARN', `ตรวจพบสลิปซ้ำ: ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ที่เคยบันทึกไปแล้ว`);
                     console.log(`⚠️ ตรวจพบสลิปซ้ำ: ${transRef}`);
@@ -4340,7 +4343,7 @@ app.post('/webhook', async (req, res) => {
                             qr_payload: `manual_image|/uploads/${fbName}`, status: 'waiting',
                             arrived_out_of_round: activeLiveSession ? 0 : 1   // v1.0.16: รูปที่เข้าตอนไม่มีไลฟ์ ติดป้ายโอนนอกรอบเหมือนสลิปปกติ
                         }]).select().single();
-                        io.emit('play_sound');
+                        io.emit('pending_amount_slip', { name: lineName });
                         broadcastTodayStats();
                     } catch (fbErr) {
                         addLog('ERROR', `เก็บสลิปสำรองไม่สำเร็จ: ${fbErr.message} (กรุณาตรวจสลิปของ "${lineName}" ในแชท LINE)`);
@@ -4413,7 +4416,7 @@ app.post('/webhook', async (req, res) => {
                 }]).select().single();
 
                 if (inserted) {
-                    io.emit('play_sound');
+                    io.emit('pending_amount_slip', { name: lineName });   // v1.0.16: เสียงคอร์ด + การ์ดกะพริบ (แทน ping ปกติ)
                     broadcastTodayStats();
                     
                     let replyMsg = `ผักกาดขอบคุณสำหรับคำสั่งซื้อมากๆ เลยน้าา 🙏💖\nอย่าลืมพิมพ์ชื่อ ที่อยู่ เบอร์โทรส่งมาให้ผักกาดในแชทนี้ด้วยนะคะ จะได้รีบแพ็คของส่งให้ค่า 📦✨`;
