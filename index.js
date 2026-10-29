@@ -4450,6 +4450,27 @@ let cloudflareProcess = null;
 let localtunnelInstance = null;
 let webhookSyncStatus = { synced: false, url: null, error: null, lastTested: null, testResult: null };
 
+// 🔁 v1.0.16: ผูก LINE Webhook ไม่สำเร็จ (เช่น ลิงก์ท่อใหม่ยังไม่พร้อม) -> ลองใหม่เองเป็นระยะจนกว่าจะผ่าน
+// เดิมลอง 3 ครั้งแล้วหยุด ต้องรอให้แม่ค้ากดปุ่มทดสอบเอง ระหว่างนั้น LINE ยังชี้ไปลิงก์เก่าที่ใช้ไม่ได้ สลิปลูกค้าไม่เข้า
+const WEBHOOK_RESYNC_INTERVAL_MS = 60 * 1000;          // ลองใหม่ทุก 1 นาที
+const WEBHOOK_RESYNC_SLOW_AFTER_ROUNDS = 30;           // ผ่านไป 30 รอบ (~30 นาที) ค่อยห่างเป็นทุก 5 นาที กัน Log รก
+const WEBHOOK_RESYNC_SLOW_INTERVAL_MS = 5 * 60 * 1000;
+let webhookRetryRound = 0;
+let webhookRetryTimer = null;
+function scheduleWebhookResync(publicUrl) {
+    if (webhookRetryTimer) clearTimeout(webhookRetryTimer);
+    const wait = webhookRetryRound >= WEBHOOK_RESYNC_SLOW_AFTER_ROUNDS ? WEBHOOK_RESYNC_SLOW_INTERVAL_MS : WEBHOOK_RESYNC_INTERVAL_MS;
+    webhookRetryTimer = setTimeout(() => {
+        webhookRetryTimer = null;
+        if (typeof shuttingDown !== 'undefined' && shuttingDown) return;
+        if (currentPublicUrl !== publicUrl) { webhookRetryRound = 0; return; }   // ท่อได้ลิงก์ใหม่แล้ว: รอบใหม่ของลิงก์ใหม่จัดการเอง
+        if (webhookSyncStatus.synced && webhookSyncStatus.url === `${publicUrl}/webhook`) { webhookRetryRound = 0; return; }   // มีคนกดทดสอบผ่านไปแล้ว
+        webhookRetryRound++;
+        updateLineWebhookEndpoint(publicUrl, 1, true).catch(() => {});
+    }, wait);
+    if (webhookRetryTimer && webhookRetryTimer.unref) webhookRetryTimer.unref();
+}
+
 app.get('/api/tunnel/status', (req, res) => {
     res.json({
         success: true,
@@ -4487,7 +4508,11 @@ app.post('/api/tunnel/test_line', async (req, res) => {
 });
 
 // 🌐 ฟังก์ชันอัปเดต LINE Webhook URL อัตโนมัติไปยัง LINE Messaging API (Zero-Click Sync)
-async function updateLineWebhookEndpoint(publicUrl, retries = 3) {
+async function updateLineWebhookEndpoint(publicUrl, retries = 3, isResync = false) {
+    if (!isResync) {   // ลิงก์ใหม่ / กดบันทึกคีย์ใหม่ = เริ่มนับรอบลองซ้ำใหม่
+        webhookRetryRound = 0;
+        if (webhookRetryTimer) { clearTimeout(webhookRetryTimer); webhookRetryTimer = null; }
+    }
     const token = process.env.LINE_ACCESS_TOKEN ? process.env.LINE_ACCESS_TOKEN.replace(/["'\r\n ]/g, '').trim() : '';
     const webhookUrl = `${publicUrl}/webhook`;
 
@@ -4542,6 +4567,11 @@ async function updateLineWebhookEndpoint(publicUrl, retries = 3) {
                 synced: true, 
                 testResult: testRes.data 
             });
+            if (webhookRetryRound > 0) {
+                addLog('SUCCESS', `ผูก LINE Webhook สำเร็จหลังระบบลองซ้ำเอง (รอบที่ ${webhookRetryRound}) ลิงก์: ${webhookUrl}`);
+            }
+            webhookRetryRound = 0;
+            if (webhookRetryTimer) { clearTimeout(webhookRetryTimer); webhookRetryTimer = null; }
             break;
         } catch(err) {
             const errMsg = err.response ? JSON.stringify(err.response.data) : err.message;
@@ -4550,7 +4580,11 @@ async function updateLineWebhookEndpoint(publicUrl, retries = 3) {
             
             if (attempt === retries) {
                 console.error(`❌ ไม่สามารถอัปเดต LINE Webhook อัตโนมัติได้: ${errMsg}`);
-                addLog('ERROR', `อัปเดต LINE Webhook อัตโนมัติไม่สำเร็จ: ${errMsg}`);
+                const httpStatus = err.response ? err.response.status : '-';
+                const detail = `HTTP ${httpStatus} | ท่อ: ${activeTunnelType || '-'} | ลิงก์ที่ส่งให้ LINE: ${webhookUrl}`;
+                if (webhookRetryRound === 0) addLog('ERROR', `อัปเดต LINE Webhook อัตโนมัติไม่สำเร็จ: ${errMsg} (${detail}) ระบบจะลองผูกใหม่เองทุก 1 นาทีจนกว่าจะผ่าน`);
+                else addLog('WARN', `ผูก LINE Webhook ซ้ำยังไม่สำเร็จ (รอบที่ ${webhookRetryRound}): ${errMsg} (${detail})`);
+                scheduleWebhookResync(publicUrl);
             } else {
                 await new Promise(r => setTimeout(r, 3000));
             }

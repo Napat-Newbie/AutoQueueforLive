@@ -67,6 +67,7 @@ pre-check `trans_ref` → double-check ใน atomic transaction → partial UNI
 - การ์ดรอแม่ค้าใส่ยอด (`isPendingAmount`) **ไม่ได้เลขคิว** และไม่นับใน `waitingCount` (เลขคิวที่บอทตอบลูกค้ามาจาก `waitingCount`)
 - `POST /api/system/shutdown` ระหว่างไลฟ์ได้ 409 `LIVE_ACTIVE` เว้นแต่ส่ง `force:true` (หน้าจอยืนยันซ้ำ) — ปุ่มนี้เป็น Tier B ต้องล็อกอินแม่ค้าอยู่แล้ว
 - การ์ดคิวมี `date` (วันที่โอน) และ `hasAddress` (เบอร์โทร+รหัสไปรษณีย์+ที่อยู่ ตามกติกาเดียวกับ Kerry) `GET /api/queue/slip_heartbeat` คืนเวลาที่รูปสลิปล่าสุดเข้ามา (ในหน่วยความจำ)
+- ผูก LINE Webhook ไม่สำเร็จ (`updateLineWebhookEndpoint`): ลอง 3 ครั้งแล้ว `scheduleWebhookResync` ลองใหม่เองทุก 1 นาที (ห่างเป็น 5 นาทีหลัง 30 รอบ) จนกว่าจะผ่านหรือท่อเปลี่ยนลิงก์ ERROR ลง Log/Discord แค่ครั้งแรก รอบถัดไปเป็น WARN (กันท่วมช่อง Dev Report และไม่ให้เข้าเกณฑ์ "ขออัปเดตเวอร์ชันใหม่" ผิดๆ) ข้อความ error ต้องมีลิงก์ + ชนิดท่อ + รหัส HTTP
 - เริ่มไลฟ์ผ่านหน้าต่าง "เช็กความพร้อม" (`buildReadinessRows`) แทนหน้าต่างยืนยันทีละอัน; ปุ่ม "แก้ไขสินค้า" ใช้ `POST /api/queue/edit_items` (แก้เฉพาะสินค้า+จำนวน ไม่แตะยอดเงิน/กระเป๋า)
 
 ## 5. กับดักสำคัญ
