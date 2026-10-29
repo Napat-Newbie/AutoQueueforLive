@@ -1,6 +1,6 @@
 // tests/unit/dashboard-ergonomics.test.js
 // v1.0.16 dashboard ergonomics. Real functions are cut out of public/index.html and run in a vm (no DOM needed),
-// plus a few static guards for things that cannot be unit-run (sticky panel, no external sound file, reconnect re-sync).
+// plus a few static guards for things that cannot be unit-run (panel not frozen, no external sound file, reconnect re-sync).
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -88,8 +88,8 @@ test('readiness checklist: tunnel down / quota empty / socket lost are red, low 
     assert.equal(byKey(other, 'balances').level, 'warn');
 });
 
-test('static guards: sticky control panel, no external sound file, queue numbering, reconnect re-sync, shutdown guard', () => {
-    assert.match(html, /\.live-control-panel\s*\{\s*position:\s*sticky;\s*top:\s*var\(--alert-h/);
+test('static guards: control panel NOT frozen (v1.0.17), no external sound file, queue numbering, reconnect re-sync, shutdown guard', () => {
+    assert.ok(!/\.live-control-panel\s*\{[^}]*position:\s*sticky/.test(html), 'v1.0.17: the top control panel is not frozen any more');
     assert.ok(!html.includes('mixkit'), 'no sound file may be fetched from the internet');
     assert.match(html, /:not\(\.topup-card\):not\(\.pending-amount-card\)/, 'cards waiting for the amount take no queue number');
     const connectBlock = html.slice(html.indexOf('__socketEverConnected = false'), html.indexOf('__socketEverConnected = true;') + 40);

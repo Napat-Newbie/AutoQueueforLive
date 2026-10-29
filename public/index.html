@@ -64,8 +64,11 @@
             flex-wrap: wrap;
             gap: 15px;
         }
-        /* v1.0.16: ตรึงแผงควบคุม (ป้ายสถานะ LIVE/LINE/โควตา/เวอร์ชัน) ไว้บนสุด เลื่อนดูคิวยาวแล้วไม่หาย -- เว้นที่ให้แถบเตือนสีแดงเมื่อแสดงอยู่ */
-        .live-control-panel { position: sticky; top: var(--alert-h, 0px); z-index: 900; }
+        /* v1.0.17: แผงควบคุมด้านบนไม่ตรึงแล้ว (เจ้าของสั่ง) -- ตรึงเฉพาะ "ยอดโอนรวม": เมื่อเลื่อนจนการ์ดยอดโอนรวมพ้นจอ จะมีป้ายเล็กลอยที่มุมซ้ายบนแสดงยอดเดิม */
+        #floatingTotal { position: fixed; top: 8px; left: 8px; z-index: 1200; display: none; align-items: baseline; gap: 10px; padding: 8px 18px; border-radius: 14px; color: #fff; background: linear-gradient(135deg, #476bad, #57b189); box-shadow: 0 4px 14px rgba(0,0,0,0.3); pointer-events: none; font-weight: 600; }
+        #floatingTotal.show { display: flex; }
+        #floatingTotal .ft-label { font-size: 0.85em; opacity: 0.9; }
+        #floatingTotal .ft-amount { font-size: 1.6em; line-height: 1.1; }
         .queue-card.pending-amount-card .queue-number { font-size: 1.4em; }
         /* v1.0.16: Toast (ป้ายแจ้งเตือนชั่วคราว) + ลิ้นชักประวัติแจ้งเตือน + การ์ดรอใส่ยอดกะพริบเมื่อเข้าใหม่ */
         .toast-stack { position: fixed; z-index: 3000; display: flex; flex-direction: column; gap: 8px; width: min(380px, 92vw); pointer-events: none; }
@@ -500,6 +503,7 @@
     <div class="container" style="margin-top: 20px;">
         
         <!-- 🔴 แถบควบคุมรอบไลฟ์สด (Live Session Control Panel) -->
+        <div id="floatingTotal" aria-hidden="true"><span class="ft-label">ยอดโอนรวม</span><span class="ft-amount">฿ <span id="floatingTotalAmount">0.00</span></span></div>
         <div id="toastStackTR" class="toast-stack tr"></div>
         <div id="toastStackBL" class="toast-stack bl"></div>
         <div id="notifDrawer" aria-label="ประวัติแจ้งเตือน">
@@ -577,7 +581,8 @@
             <div style="display: flex; gap: 15px; flex-wrap: wrap; border-top: 1px solid #eee; padding-top: 15px; align-items: flex-end;">
                 <div class="config-item"><div style="display: flex; flex-direction: column; gap: 5px;"><label><strong>🚚 ค่าส่ง:</strong></label><input type="number" id="shippingInput" style="width: 80px;"></div></div>
                 <div class="config-item"><div style="display: flex; flex-direction: column; gap: 5px;"><label><strong>🆓 ส่งฟรีเมื่อ(ชิ้น):</strong></label><input type="number" id="thresholdInput" style="width: 80px;"></div></div>
-                <div class="config-item" style="flex: 1; min-width: 200px;"><div style="display: flex; flex-direction: column; gap: 5px; width: 100%;"><label><strong>🏦 ชื่อบัญชีร้าน:</strong></label><input type="text" id="merchantInput" placeholder="เว้นว่างถ้าไม่ต้องการตรวจเช็ก"></div></div>
+                <div class="config-item" style="flex: 1; min-width: 200px;"><div style="display: flex; flex-direction: column; gap: 5px; width: 100%;"><label><strong>🏦 ชื่อบัญชีร้าน (ไทย):</strong></label><input type="text" id="merchantInput" placeholder="เว้นว่างถ้าไม่ต้องการตรวจเช็ก"></div></div>
+                <div class="config-item" style="flex: 1; min-width: 200px;"><div style="display: flex; flex-direction: column; gap: 5px; width: 100%;"><label><strong>🏦 ชื่อบัญชีร้าน (อังกฤษ):</strong></label><input type="text" id="merchantEnInput" placeholder="ไม่บังคับ เช่น Mantiya" title="ใส่ถ้าสลิปบางแบบ (เช่น TrueMoney) แสดงชื่อผู้รับเป็นภาษาอังกฤษ สลิปผ่านถ้าชื่อผู้รับตรงกับชื่อไทยหรืออังกฤษอย่างใดอย่างหนึ่ง ใส่แค่ส่วนต้นของชื่อก็พอ เพราะธนาคารมักตัดชื่อท้าย"></div></div>
                 <div class="config-item" style="flex: 1; min-width: 250px;">
                     <div style="display: flex; flex-direction: column; gap: 5px; width: 100%;">
                         <label><strong>🔗 ลิงก์ OpenChat:</strong></label>
@@ -1337,7 +1342,7 @@
 
     <!-- 🚀 Modal: แจ้งเตือนอัปเดตเวอร์ชันใหม่ (New Update Available Modal) -->
     <div class="modal-overlay" id="appUpdateModal" style="display: none; z-index: 10000;">
-        <div class="modal-box" style="max-width: 580px; width: 95%; text-align: left; padding: 25px; border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.3);">
+        <div class="modal-box" style="max-width: 580px; width: 95%; text-align: left; padding: 25px; border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.3); max-height: 92vh; overflow-y: auto; box-sizing: border-box;">
             <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #3b82f6; padding-bottom: 12px; margin-bottom: 16px;">
                 <div style="display: flex; align-items: center; gap: 12px;">
                     <div style="width: 48px; height: 48px; border-radius: 12px; background: linear-gradient(135deg, #3b82f6, #6366f1); display: flex; align-items: center; justify-content: center; font-size: 24px; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);">
@@ -1359,7 +1364,7 @@
             <!-- Title & Changelog -->
             <div style="margin-bottom: 16px;">
                 <h4 id="updateModalTitle" style="margin: 0 0 10px 0; color: #0f172a; font-size: 1.05em; font-weight: 600;">รายละเอียดการปรับปรุง (Changelog):</h4>
-                <div id="updateModalChangelogBox" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; max-height: 220px; overflow-y: auto;">
+                <div id="updateModalChangelogBox" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; max-height: min(30vh, 320px); overflow-y: auto;">
                     <ul id="updateModalChangelogList" style="margin: 0; padding-left: 20px; color: #334155; font-size: 0.9em; line-height: 1.7;">
                     </ul>
                 </div>
@@ -1401,7 +1406,7 @@
 
     <!-- 🎉 Modal: แจ้งเตือนเมื่ออัปเดตสำเร็จ (Post-Update Success Modal) -->
     <div class="modal-overlay" id="appUpdateSuccessModal" style="display: none; z-index: 10001;">
-        <div class="modal-box" style="max-width: 520px; width: 95%; text-align: left; padding: 25px; border-radius: 16px;">
+        <div class="modal-box" style="max-width: 520px; width: 95%; text-align: left; padding: 25px; border-radius: 16px; max-height: 92vh; overflow-y: auto; box-sizing: border-box;">
             <div style="text-align: center; margin-bottom: 15px;">
                 <div style="font-size: 3em; margin-bottom: 8px;">🎉</div>
                 <h2 style="margin: 0; color: #166534; font-size: 1.4em;">อัปเดตระบบสำเร็จเรียบร้อย!</h2>
@@ -1410,7 +1415,7 @@
 
             <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; margin-bottom: 20px;">
                 <strong style="color: #1e293b; font-size: 0.92em; display: block; margin-bottom: 8px;">รายการที่ได้รับการปรับปรุงในเวอร์ชันนี้ (Changelog):</strong>
-                <ul id="successModalChangelogList" style="margin: 0; padding-left: 20px; color: #475569; font-size: 0.88em; line-height: 1.6;">
+                <ul id="successModalChangelogList" style="max-height: 28vh; overflow-y: auto; padding-right: 8px; margin: 0; padding-left: 20px; color: #475569; font-size: 0.88em; line-height: 1.6;">
                 </ul>
             </div>
 
@@ -1501,6 +1506,8 @@
 
         function updateStatsUI(stats) {
             document.getElementById('totalAmount').innerText = stats.totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2});
+            const floatingAmount = document.getElementById('floatingTotalAmount');
+            if (floatingAmount) floatingAmount.innerText = document.getElementById('totalAmount').innerText;
             document.getElementById('uniqueCustomers').innerText = stats.uniqueCustomers;
             document.getElementById('totalSlips').innerText = stats.totalSlips;
             document.getElementById('totalDraws').innerText = stats.totalDraws;
@@ -1572,7 +1579,7 @@
         };
         function playPreset(name) { const p = SOUND_PRESETS[name]; if (p) playToneSequence(p.freqs, p.durs, p.type, p.volume); }
 
-        // ===== v1.0.16: ประวัติแจ้งเตือน 20 รายการล่าสุด + Toast + ปุ่มคัดลอกข้อความทักลูกค้า + การ์ดรอใส่ยอดกะพริบ =====
+        // ===== v1.0.16: ประวัติแจ้งเตือน 20 รายการล่าสุด + Toast + การ์ดรอใส่ยอดกะพริบ =====
         const NOTIF_HISTORY_MAX = 20;
         const NOTIF_STORAGE_KEY = 'aq_notif_history_v1';
         let __notifHistory = [];
@@ -1640,34 +1647,17 @@
             setTimeout(remove, opts.ms || 8000);
             return el;
         }
-        // ข้อความสำเร็จรูปให้แม่ค้าคัดลอกไปวางในแชท LINE OA (ไม่ส่งอะไรให้ลูกค้าเอง)
-        function buildTopupMessage(t) {
-            const name = (t && t.name) || 'ลูกค้า';
-            const amt = t && Number(t.amount) > 0 ? Number(t.amount).toLocaleString('en-US') : null;
-            const need = Number(t && t.need).toLocaleString('en-US');
-            const got = amt ? 'ได้รับยอดโอน ' + amt + ' บาทแล้วนะคะ' : 'ได้รับสลิปแล้วนะคะ';
-            return t && t.held
-                ? 'สวัสดีค่ะ คุณ' + name + ' ' + got + ' ยอดนี้เท่ากับราคาสินค้าพอดี แต่ยังไม่รวมค่าส่ง รบกวนโอนค่าส่งเพิ่มอีก ' + need + ' บาท แล้วเข้าคิวให้ทันทีค่ะ 🙏'
-                : 'สวัสดีค่ะ คุณ' + name + ' ' + got + ' แต่ยอดรวม (รวมค่าส่งแล้ว) ยังไม่พอสำหรับสินค้า รบกวนโอนเพิ่มอีก ' + need + ' บาท แล้วเข้าคิวให้ทันทีค่ะ 🙏';
+        // v1.0.17: ป้ายยอดโอนรวมลอย -- โผล่เมื่อการ์ด "ยอดโอนรวม" เลื่อนพ้นจอ หายเมื่อเห็นการ์ดตัวจริง (คลิกทะลุได้ ไม่บังปุ่ม)
+        function setupFloatingTotal() {
+            const card = document.querySelector('.metric-main-card');
+            const badge = document.getElementById('floatingTotal');
+            if (!card || !badge || typeof IntersectionObserver === 'undefined') return;
+            new IntersectionObserver((entries) => {
+                entries.forEach(e => badge.classList.toggle('show', !e.isIntersecting));
+            }).observe(card);
         }
-        function buildAddressRequestMessage(name) {
-            return 'สวัสดีค่ะ คุณ' + (name || 'ลูกค้า') + ' รบกวนพิมพ์ ชื่อ-นามสกุล ที่อยู่ รหัสไปรษณีย์ และเบอร์โทร ส่งมาในแชทนี้ด้วยนะคะ จะได้รีบแพ็คของส่งให้ค่ะ 📦';
-        }
-        function copyText(text, okMessage) {
-            const done = () => showToast(okMessage || 'คัดลอกแล้ว', { kind: 'ok', pos: 'bl', ms: 2500, record: false });
-            const fail = () => showToast('คัดลอกไม่สำเร็จ ลองลากคลุมข้อความแล้วคัดลอกเอง', { kind: 'warn', pos: 'bl', ms: 4000, record: false });
-            const fallback = () => {
-                try {
-                    const ta = document.createElement('textarea');
-                    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-                    document.body.appendChild(ta); ta.select();
-                    const ok = document.execCommand('copy');
-                    document.body.removeChild(ta);
-                    if (ok) done(); else fail();
-                } catch (e) { fail(); }
-            };
-            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
-        }
+        try { setupFloatingTotal(); } catch (e) { console.warn('floating total unavailable:', e); }
+
         // การ์ดรอใส่ยอดที่เพิ่งเข้ามาใหม่ (ไม่ใช่ตอนโหลดหน้าครั้งแรก) กะพริบสั้นๆ ให้สายตาจับได้
         const __pendingSeen = new Set();
         let __pendingSeenReady = false;
@@ -1791,7 +1781,15 @@
             } else if (data.status === 'waiting' && data.isPendingAmount) {
                 borderColor = '#ff9800'; badgeColor = '#ff9800';
                 buttonsHtml = `<button class="btn-primary" style="background:#ff9800; border:none;" onclick="openCheckSlipModal('${escapeHtml(String(data.id).replace(/['"\\]/g, ''))}', '${escapeHtml(String(data.imageUrl || '').replace(/['"\\]/g, ''))}', '${escapeHtml(safeName)}')">🔍 เช็คสลิปและใส่ยอด</button>`;
-                breakdownDisplay = `<div style="font-size: 0.9em; color:#ff9800; margin-top:5px; font-weight:500;">⚠️ สลิปไม่มีคิวอาร์ รอเช็คยอดเงิน</div>`;
+                if (data.bankDelay) {
+                    // v1.0.17: สลิปธนาคารที่ต้องรอ (SlipOK Code 1010) -- บอกเวลาที่ลองส่งรูปเดิมซ้ำได้
+                    const bd = data.bankDelay;
+                    const readyAt = (bd.at && bd.delay) ? new Date(bd.at + bd.delay * 60000).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bangkok' }) : '';
+                    breakdownDisplay = `<div style="font-size: 0.9em; color:#ff9800; margin-top:5px; font-weight:500;">⏳ สลิปธนาคาร${escapeHtml(bd.bankName || '')} ธนาคารยังไม่ยืนยัน${bd.delay ? ' (ต้องรอประมาณ ' + escapeHtml(String(bd.delay)) + ' นาทีหลังโอน)' : ''}</div>
+                                       <div style="font-size: 0.82em; color:#777; margin-top:3px;">ให้ลูกค้าส่งรูปเดิมอีกครั้ง${readyAt ? ' หลัง ' + escapeHtml(readyAt) + ' น.' : ''} ระบบจะตรวจให้เอง แล้วกด "ปัดตก" การ์ดนี้ หรือจะกดเช็คสลิปแล้วใส่ยอดเองก็ได้ (ระบบกันนับซ้ำให้)</div>`;
+                } else {
+                    breakdownDisplay = `<div style="font-size: 0.9em; color:#ff9800; margin-top:5px; font-weight:500;">⚠️ สลิปไม่มีคิวอาร์ รอเช็คยอดเงิน</div>`;
+                }
             } else if (data.status === 'called') {
                 borderColor = '#1a73e8'; badgeColor = '#1a73e8';
                 buttonsHtml = `<button class="btn-success" onclick='actionQueue(${slipIdsJson}, "completed", "${escapeHtml(safeName)}")'>✅ เสร็จสิ้น</button>
@@ -1816,9 +1814,6 @@
                 breakdownDisplay += `<div style="font-size: 0.95em; color:#1a73e8; margin-top:4px;">📦 จัดส่งไปแล้ว: ${escapeHtml(data.breakdown)}</div>`;
             }
 
-            if (data.hasAddress === false && !data.isPendingAmount && data.status !== 'abnormal_pending') {
-                buttonsHtml += `<button type="button" class="btn-primary addr-copy-btn" style="background:#0f766e; border:none;" title="คัดลอกข้อความทวงที่อยู่ไปวางในแชท LINE OA">📋 คัดลอกข้อความทวงที่อยู่</button>`;
-            }
             let displayName = data.name;
             if (data.lineName && data.lineName !== data.name) {
                 displayName = `${data.name} (LINE: ${data.lineName})`;
@@ -1862,8 +1857,6 @@
             el.dataset.sort = String(data.sortId || data.id);
             el.style.borderLeft = `6px solid ${borderColor}`;
             el.innerHTML = innerContent;
-            const addrCopyBtn = el.querySelector('.addr-copy-btn');
-            if (addrCopyBtn) addrCopyBtn.addEventListener('click', () => copyText(buildAddressRequestMessage(data.lineName || data.name), 'คัดลอกข้อความทวงที่อยู่แล้ว'));
             
             if (data.status === 'called') document.getElementById('active-queue-list').append(el);
             else if (data.status === 'skipped') document.getElementById('skipped-queue-list').append(el);
@@ -2020,11 +2013,8 @@
                 </div>
                 <div class="queue-actions">
                     <div class="draws-badge" style="background-color:#ff9800; color:#fff;">⏳ รอโอนเพิ่ม</div>
-                    <button type="button" class="btn-primary topup-copy-btn" style="background:#0f766e; border:none;" title="คัดลอกข้อความแจ้งโอนเพิ่มไปวางในแชท LINE OA">📋 คัดลอกข้อความทัก</button>
                     <button type="button" class="btn-danger-outline topup-dismiss-btn" title="ลบการ์ดนี้ออกจากหน้าจอ (ยอดรวมไม่เปลี่ยน)">🗑️ ลบ</button>
                 </div>`;
-            const topupCopyBtn = el.querySelector('.topup-copy-btn');
-            if (topupCopyBtn) topupCopyBtn.addEventListener('click', () => copyText(buildTopupMessage(t), 'คัดลอกข้อความแจ้งโอนเพิ่มแล้ว'));
             const dismissBtn = el.querySelector('.topup-dismiss-btn');
             if (dismissBtn) {
                 dismissBtn.addEventListener('click', () => {
@@ -2213,7 +2203,7 @@
         // v1.0.16: สลิปซ้ำ / โอนเข้าผิดบัญชี (ระบบไม่บันทึก) = Toast ส้มแดงมุมบนขวา + บี๊ปคู่สั้น 600Hz (การ์ดแดงกับแถวแดงในตารางมาจาก full_sync)
         socket.on('slip_warning', (d) => {
             try {
-                const title = d && d.kind === 'duplicate' ? '⚠️ สลิปซ้ำ' : (d && d.kind === 'wrong_account' ? '⚠️ โอนเข้าผิดบัญชี' : '⚠️ สลิปที่ระบบไม่บันทึก');
+                const title = d && d.kind === 'duplicate' ? '⚠️ สลิปซ้ำ' : (d && d.kind === 'wrong_account' ? '⚠️ โอนเข้าผิดบัญชี' : (d && d.kind === 'check_pending' ? '⚠️ ตรวจการ์ดรอใส่ยอด' : '⚠️ สลิปที่ระบบไม่บันทึก'));
                 showToast((d && d.name ? d.name + ' — ' : '') + ((d && d.reason) || ''), { kind: 'warn', pos: 'tr', title, ms: 12000 });
                 playPreset('warnBeep');
             } catch (e) {}
@@ -2225,7 +2215,7 @@
         // v1.0.16: สลิปที่ไม่มี QR / อ่านยอดไม่ได้ (รอแม่ค้าใส่ยอด) = เสียงคอร์ดเฉพาะ + การ์ดส้มกะพริบ ไม่มีเลขคิว
         socket.on('pending_amount_slip', (d) => {
             try {
-                pushNotif('warn', ((d && d.name) ? d.name + ' ' : '') + 'ส่งสลิปที่ระบบอ่านยอดไม่ได้ — รอแม่ค้ากดเช็คสลิปและใส่ยอด');
+                pushNotif('warn', ((d && d.name) ? d.name + ' ' : '') + ((d && d.bankName !== undefined && d.bankName !== null) ? 'ส่งสลิปธนาคาร' + d.bankName + 'ที่ยังตรวจไม่ได้' + (d.delay ? ' (ต้องรอ ~' + d.delay + ' นาทีหลังโอน)' : '') + ' — ให้ลูกค้าส่งรูปเดิมซ้ำทีหลัง' : 'ส่งสลิปที่ระบบอ่านยอดไม่ได้ — รอแม่ค้ากดเช็คสลิปและใส่ยอด'));
                 playPreset('pendingChord');
             } catch (e) {}
         });
@@ -2250,6 +2240,7 @@
             document.getElementById('shippingInput').value = (configData.shippingFee !== undefined && configData.shippingFee !== null) ? configData.shippingFee : 39;
             document.getElementById('thresholdInput').value = configData.freeShippingThreshold || 0;
             document.getElementById('merchantInput').value = configData.merchantAccountName || "";
+            document.getElementById('merchantEnInput').value = configData.merchantAccountNameEn || "";
             document.getElementById('openchatInput').value = configData.openchatLink || "";
         });
         
@@ -2267,11 +2258,12 @@
             const newShipping = document.getElementById('shippingInput').value;
             const newThreshold = document.getElementById('thresholdInput').value;
             const newMerchantName = document.getElementById('merchantInput').value;
+            const newMerchantNameEn = document.getElementById('merchantEnInput').value;
             const newOpenchatLink = document.getElementById('openchatInput').value;
             
             fetch('/api/config', { 
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, 
-                body: JSON.stringify({ newPrices, newShipping, newThreshold, newMerchantName, newOpenchatLink }) 
+                body: JSON.stringify({ newPrices, newShipping, newThreshold, newMerchantName, newMerchantNameEn, newOpenchatLink }) 
             }).then(res => res.json()).then(data => {
                 if (data.success) {
                     const status = document.getElementById('saveStatus');

@@ -1,5 +1,5 @@
 // tests/unit/toast-history.test.js
-// v1.0.16: notification history (20 latest), toast, copy-to-chat messages, red rows in the recent table, chord sound, flash-once.
+// v1.0.16: notification history (20 latest), toast, red rows in the recent table, chord sound, flash-once.
 // Real functions are cut out of public/index.html and run in a vm with small fakes (no browser). What it cannot show: how it looks / sounds.
 'use strict';
 const test = require('node:test');
@@ -30,7 +30,7 @@ function makeCtx(extra = {}) {
     vm.createContext(ctx);
     vm.runInContext(`const NOTIF_HISTORY_MAX = 20; const NOTIF_STORAGE_KEY = 'k'; let __notifHistory = []; let __notifUnread = 0; function renderNotifBadge() {} function renderNotifDrawer() {}
         const __pendingSeen = new Set(); let __pendingSeenReady = false;`, ctx);
-    ['pushNotif', 'buildTopupMessage', 'buildAddressRequestMessage', 'mergeUnrecordedIntoRecent', 'markPendingFlash', 'playToneSequence'].forEach(n => vm.runInContext(grab(n), ctx));
+    ['pushNotif', 'mergeUnrecordedIntoRecent', 'markPendingFlash', 'playToneSequence'].forEach(n => vm.runInContext(grab(n), ctx));
     return { ctx, store };
 }
 const get = (ctx, expr) => vm.runInContext(expr, ctx);
@@ -54,25 +54,6 @@ test('history is saved in sessionStorage (survives F5)', () => {
     const { ctx, store } = makeCtx();
     ctx.pushNotif('ok', 'บันทึกไว้');
     assert.match(store.k, /บันทึกไว้/);
-});
-
-test('copy message for a short-paid customer: says the amount still needed; shipping-fee case is worded differently', () => {
-    const { ctx } = makeCtx();
-    const a = ctx.buildTopupMessage({ name: 'สมหญิง', amount: 100, need: 40, held: false });
-    assert.match(a, /คุณสมหญิง/); assert.match(a, /100 บาท/); assert.match(a, /โอนเพิ่มอีก 40 บาท/);
-    const b = ctx.buildTopupMessage({ name: 'สมหญิง', amount: 100, need: 40, held: true });
-    assert.match(b, /ค่าส่ง/); assert.match(b, /40 บาท/);
-    assert.notEqual(a, b);
-    const c = ctx.buildTopupMessage({ name: 'X', amount: 0, need: 1234, held: false });
-    assert.match(c, /ได้รับสลิปแล้ว/); assert.match(c, /1,234 บาท/);
-});
-
-test('copy message asking for the address names the customer and asks for the four things Kerry needs', () => {
-    const { ctx } = makeCtx();
-    const m = ctx.buildAddressRequestMessage('สมชาย');
-    assert.match(m, /คุณสมชาย/);
-    ['ที่อยู่', 'รหัสไปรษณีย์', 'เบอร์โทร', 'ชื่อ'].forEach(w => assert.ok(m.includes(w), w));
-    assert.match(ctx.buildAddressRequestMessage(''), /คุณลูกค้า/);
 });
 
 test('recent table: unrecorded slips (wrong account / duplicate) come first as red rows without an amount; download failures are not added; max 30', () => {
@@ -127,6 +108,6 @@ test('static guards: the page wires every new event, has the bell + toast roots,
     ['id="notifBellBtn"', 'id="notifDrawer"', 'id="toastStackTR"', 'id="toastStackBL"', 'id="notifBadge"'].forEach(s => assert.ok(html.includes(s), s));
     assert.ok(/warnBeep:\s*\{\s*freqs:\s*\[600, 0, 600\]/.test(html), 'warning beep is 600Hz x2');
     assert.ok(/pendingChord:\s*\{\s*freqs:\s*\[\[/.test(html), 'chord preset');
-    assert.ok(html.includes('topup-copy-btn') && html.includes('addr-copy-btn'), 'copy buttons on the orange card and the no-address card');
+    assert.ok(!/topup-copy-btn|addr-copy-btn|buildTopupMessage|buildAddressRequestMessage|function copyText/.test(html), 'v1.0.17: no copy-message buttons at all (owner decision)');
     assert.ok(!/mixkit|new Audio\(/.test(html), 'no sound file from the internet');
 });

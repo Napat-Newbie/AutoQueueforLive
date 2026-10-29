@@ -94,6 +94,7 @@
                 <div class="summary-item">
                     <div class="label">🧾 จำนวนสลิปที่ทำรายการ</div>
                     <div class="value"><span id="sumSlips">0</span> <span style="font-size: 0.5em; color: #666; font-weight: 400;">ใบ</span></div>
+                    <div id="sumSlipsNote" style="font-size: 0.8em; color: #888; margin-top: 4px;"></div>
                 </div>
             </div>
         </div>
@@ -119,7 +120,7 @@
             </div>
             
             <div class="report-card">
-                <h3>👥 รายชื่อลูกค้าที่สั่งซื้อ (แบ่งตามวัน)</h3>
+                <h3>👥 รายชื่อลูกค้าที่ได้รับสินค้า (แบ่งตามวัน)</h3>
                 <div id="customer-summary-list" style="max-height: 250px; overflow-y: auto; padding-right: 10px;">
                     <div style="color: #888; text-align: center;">กำลังประมวลผลข้อมูล...</div>
                 </div>
@@ -181,69 +182,86 @@
             return escapeHtml(formatRoundLabel(r)) + badge;
         }
 
+        // v1.0.17: ข้อความ/สีของสถานะ (เดิม abnormal_pending โชว์เป็นภาษาอังกฤษดิบ ๆ และ cleared ถูกแสดงเป็น "เสร็จสิ้น" เหมือนสลิปที่จ่ายของแล้ว)
+        function statusInfo(status) {
+            switch (status) {
+                case 'waiting': return { cls: 'status-waiting', text: 'รอเรียกคิว' };
+                case 'called': return { cls: 'status-called', text: 'กำลังเล่น' };
+                case 'completed': return { cls: 'status-completed', text: 'เสร็จสิ้น' };
+                case 'cleared': return { cls: 'status-default', text: 'เคลียร์ออกจากคิว' };
+                case 'skipped': return { cls: 'status-skipped', text: 'ถูกข้าม' };
+                case 'accumulated': return { cls: 'status-accumulated', text: 'สะสมยอด' };
+                case 'abnormal_pending': return { cls: 'status-accumulated', text: 'รอตรวจรูปสลิป' };
+                case 'rejected': return { cls: 'status-skipped', text: 'ปัดตก/ยกเลิก' };
+                default: return { cls: 'status-default', text: String(status || '-') };
+            }
+        }
+
+        // v1.0.17: ตัวเลขสรุปของหน้า -- สลิปที่ปัดตก/ยกเลิก (rejected) ไม่นับใน ยอดเงิน / สิทธิ์ / จำนวนสลิป / สรุปสินค้า / รายชื่อลูกค้า
+        // (แถวของมันยังแสดงในตารางให้เห็นว่าเคยมี) ลูกค้านับตามรหัส LINE (customerKey) ไม่ใช่ตามชื่อ เพราะชื่อ LINE ซ้ำกันได้
+        function summarizeHistory(rows) {
+            const s = { totalAmount: 0, totalDraws: 0, totalSlips: 0, rejectedSlips: 0, productCounts: {}, dailyCustomers: {} };
+            (rows || []).forEach(item => {
+                if (item.status === 'rejected') { s.rejectedSlips += 1; return; }
+                s.totalAmount += (Number(item.amount) || 0);
+                s.totalDraws += (Number(item.draws) || 0);
+                s.totalSlips += 1;
+                if (item.draws > 0 && item.status !== 'skipped') {   // นับเฉพาะบิลที่มีการจ่ายของออกไป
+                    const payloadParts = (item.ref || '').split('|');
+                    if (payloadParts[1]) {
+                        payloadParts[1].split(',').forEach(prod => {
+                            const match = prod.trim().match(/(.+)\s+x(\d+)$/);
+                            if (match) {
+                                const name = match[1].trim();
+                                s.productCounts[name] = (s.productCounts[name] || 0) + parseInt(match[2], 10);
+                            } else {
+                                const name = prod.trim();
+                                if (name) s.productCounts[name] = (s.productCounts[name] || 0) + 1;
+                            }
+                        });
+                    }
+                    const day = item.date;
+                    if (!s.dailyCustomers[day]) s.dailyCustomers[day] = new Map();
+                    const key = item.customerKey || item.name || '-';
+                    if (!s.dailyCustomers[day].has(key)) s.dailyCustomers[day].set(key, item.name);
+                }
+            });
+            return s;
+        }
+
+        // ชื่อ LINE ซ้ำกันคนละคน -> ใส่ "(คนที่ 2)" ต่อท้ายให้แยกออก
+        function customerLabels(customerMap) {
+            const seen = {}; const labels = [];
+            customerMap.forEach((name) => {
+                const n = name || 'ลูกค้า';
+                seen[n] = (seen[n] || 0) + 1;
+                labels.push(seen[n] > 1 ? n + ' (คนที่ ' + seen[n] + ')' : n);
+            });
+            return labels;
+        }
+
         function renderHistoryTable(data) {
             const tbody = document.getElementById('history-table-body');
             tbody.innerHTML = '';
-            
-            let totalAmount = 0; let totalDraws = 0; let totalSlips = 0;
-            
-            // 🆕 ตัวแปรสำหรับเก็บข้อมูล Report
-            let productCounts = {};
-            let dailyCustomers = {};
-            
+
             if(!data || data.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 40px; color: #999;">ไม่มีข้อมูลสลิปในช่วงวันที่เลือก</td></tr>';
                 document.getElementById('sumAmount').innerText = "0.00";
                 document.getElementById('sumDraws').innerText = "0";
                 document.getElementById('sumSlips').innerText = "0";
+                document.getElementById('sumSlipsNote').innerText = '';
                 document.getElementById('product-summary-list').innerHTML = '<li style="color: #999; justify-content: center;">ไม่พบข้อมูลสินค้า</li>';
                 document.getElementById('customer-summary-list').innerHTML = '<div style="color: #999; text-align: center;">ไม่พบข้อมูลลูกค้า</div>';
                 return;
             }
 
+            const summary = summarizeHistory(data);
+
             data.forEach(item => {
-                const isRejected = (item.status === 'rejected');
-                
-                // ไม่นับยอดเงินและสินค้าของสลิปที่ถูกปัดตก/ยกเลิก
-                if (!isRejected) {
-                    totalAmount += (Number(item.amount) || 0);
-                    totalDraws += (Number(item.draws) || 0);
-                }
-                totalSlips += 1;
-
-                let badgeClass = 'status-default'; let statusText = item.status;
-                if(item.status === 'waiting') { badgeClass = 'status-waiting'; statusText = 'รอเรียกคิว'; }
-                else if(item.status === 'called') { badgeClass = 'status-called'; statusText = 'กำลังเล่น'; }
-                else if(item.status === 'completed' || item.status === 'cleared') { badgeClass = 'status-completed'; statusText = 'เสร็จสิ้น'; }
-                else if(item.status === 'skipped') { badgeClass = 'status-skipped'; statusText = 'ถูกข้าม'; }
-                else if(item.status === 'accumulated') { badgeClass = 'status-accumulated'; statusText = 'สะสมยอด'; }
-                else if(item.status === 'rejected') { badgeClass = 'status-skipped'; statusText = 'ปัดตก/ยกเลิก'; }
-
+                const st = statusInfo(item.status);
                 const payloadParts = (item.ref || '').split('|');
                 const safeRef = escapeHtml(payloadParts[0] ? payloadParts[0].replace('-test-', '***').substring(0, 18) : '-');
                 const breakdownHtml = payloadParts[1] ? `<br><span style="color:#1a73e8; font-size: 0.9em; font-weight:500;">📦 ${escapeHtml(payloadParts[1])}</span>` : '';
-
-                // 🆕 ลอจิกทำ Report แยกสินค้า
-                if (item.draws > 0 && item.status !== 'skipped') { // นับเฉพาะบิลที่มีการจ่ายของออกไป
-                    if (payloadParts[1]) {
-                        let items = payloadParts[1].split(',');
-                        items.forEach(prod => {
-                            let match = prod.trim().match(/(.+)\s+x(\d+)$/);
-                            if (match) {
-                                let name = match[1].trim();
-                                let qty = parseInt(match[2], 10);
-                                productCounts[name] = (productCounts[name] || 0) + qty;
-                            } else {
-                                let name = prod.trim();
-                                if (name) productCounts[name] = (productCounts[name] || 0) + 1;
-                            }
-                        });
-                    }
-
-                    // 🆕 ลอจิกทำ Report รายชื่อลูกค้าตามวัน (ป้องกันชื่อซ้ำในวันเดียวกันด้วย Set)
-                    if (!dailyCustomers[item.date]) dailyCustomers[item.date] = new Set();
-                    dailyCustomers[item.date].add(item.name);
-                }
 
                 // สร้างตารางประวัติสลิปปกติ
                 const tr = document.createElement('tr');
@@ -254,23 +272,24 @@
                     <td><strong>${escapeHtml(item.name)}</strong> <br><span style="font-size:0.85em; color:#00b900;">${item.lineName ? '📱 '+escapeHtml(item.lineName) : ''}</span></td>
                     <td style="font-weight: 500; color:#111;">฿${item.amount.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
                     <td style="color:#4caf50; font-weight:500;">🎟️ ${item.draws} ชิ้น ${breakdownHtml}</td>
-                    <td><span class="badge ${badgeClass}">${statusText}</span></td>
+                    <td><span class="badge ${st.cls}">${escapeHtml(st.text)}</span></td>
                     <td style="font-size: 0.85em; color: #aaa; font-family: monospace;">${safeRef}...</td>
                 `;
                 tbody.appendChild(tr);
             });
 
             // 🆕 อัปเดตตัวเลขรวมด้านบน
-            document.getElementById('sumAmount').innerText = totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-            document.getElementById('sumDraws').innerText = totalDraws;
-            document.getElementById('sumSlips').innerText = totalSlips;
+            document.getElementById('sumAmount').innerText = summary.totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            document.getElementById('sumDraws').innerText = summary.totalDraws;
+            document.getElementById('sumSlips').innerText = summary.totalSlips;
+            document.getElementById('sumSlipsNote').innerText = summary.rejectedSlips > 0 ? 'ไม่รวมที่ปัดตก/ยกเลิก ' + summary.rejectedSlips + ' ใบ (ยังเห็นในตารางด้านล่าง)' : '';
 
             // 🆕 แสดงผล Report ยอดสินค้า
             const productListUI = document.getElementById('product-summary-list');
             productListUI.innerHTML = '';
             let hasProduct = false;
             // จัดเรียงตามยอดขายจากมากไปน้อย
-            const sortedProducts = Object.entries(productCounts).sort((a, b) => b[1] - a[1]);
+            const sortedProducts = Object.entries(summary.productCounts).sort((a, b) => b[1] - a[1]);
             for (let [name, qty] of sortedProducts) {
                 hasProduct = true;
                 productListUI.innerHTML += `<li><span>${escapeHtml(name)}</span> <strong>${qty} ชิ้น</strong></li>`;
@@ -282,15 +301,15 @@
             customerListUI.innerHTML = '';
             let hasCustomer = false;
             // เรียงวันที่จากใหม่ไปเก่า
-            const sortedDates = Object.keys(dailyCustomers).sort((a, b) => b.localeCompare(a));
+            const sortedDates = Object.keys(summary.dailyCustomers).sort((a, b) => b.localeCompare(a));
             for (let dateStr of sortedDates) {
                 hasCustomer = true;
-                let customersArray = Array.from(dailyCustomers[dateStr]);
-                let customersText = customersArray.map(escapeHtml).join(', ');
-                
+                const customerMap = summary.dailyCustomers[dateStr];
+                const customersText = customerLabels(customerMap).map(escapeHtml).join(', ');
+
                 customerListUI.innerHTML += `
                     <div class="customer-date-group">
-                        <div class="customer-date-title">📅 ${formatDisplayDate(dateStr)} <span style="color:#666; font-weight:400; font-size:0.9em;">(${customersArray.length} คน)</span></div>
+                        <div class="customer-date-title">📅 ${escapeHtml(formatDisplayDate(dateStr))} <span style="color:#666; font-weight:400; font-size:0.9em;">(${customerMap.size} คน)</span></div>
                         <div class="customer-names">${customersText}</div>
                     </div>
                 `;
@@ -336,7 +355,7 @@
                     <th style="padding:8px 10px; text-align:right;">ยอดโอน</th>
                     <th style="padding:8px 10px; text-align:right;">สินค้าที่ออก</th>
                     <th style="padding:8px 10px; text-align:right;">สลิป</th>
-                    <th style="padding:8px 10px; text-align:right;">ลูกค้า</th>
+                    <th style="padding:8px 10px; text-align:right;" title="นับลูกค้าที่โอนเงินเข้ามาในรอบนั้นทุกคน (รวมคนที่ยอดยังไม่พอ/รอตรวจรูป) ต่างจากรายชื่อด้านบนที่นับเฉพาะคนที่ได้รับสินค้า">ลูกค้าที่โอน</th>
                 </tr></thead><tbody>${rows}</tbody></table>`;
         }
 

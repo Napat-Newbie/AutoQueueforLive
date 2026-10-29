@@ -147,6 +147,7 @@ let liveIssueLogs = [];
 // 📨 v1.0.16: เวลาที่รูปสลิปล่าสุดเข้ามาที่โปรแกรม (ในหน่วยความจำ นับตั้งแต่เปิดโปรแกรม) ให้หน้าจอบอกว่า "สลิปล่าสุดเข้ามาเมื่อกี่นาทีก่อน"
 let lastSlipIngestAt = null;
 var merchantAccountName = process.env.MERCHANT_ACCOUNT_NAME || "";
+var merchantAccountNameEn = "";   // v1.0.17: ชื่อบัญชีร้านภาษาอังกฤษ (ไม่บังคับ) ใช้เทียบชื่อผู้รับตอนที่ SlipOK ตอบชื่อเป็นอังกฤษ เช่น สลิป TrueMoney
 
 // 📢 ระบบ Discord Webhook Remote Monitoring & Auto-Diagnosis (เปิด/ปิดผ่าน .env)
 const DISCORD_WEBHOOK_URL = (process.env.DISCORD_WEBHOOK_URL || '').trim();
@@ -1131,6 +1132,7 @@ async function loadConfig() {
             if (item.key === 'shipping_fee') { const n = parseInt(item.value, 10); if (Number.isFinite(n)) shippingFee = n; }
             if (item.key === 'free_shipping_threshold') { const n = parseInt(item.value, 10); if (Number.isFinite(n)) freeShippingThreshold = n; }
             if (item.key === 'merchant_account_name') merchantAccountName = item.value;
+            if (item.key === 'merchant_account_name_en') merchantAccountNameEn = item.value || '';
             if (item.key === 'openchat_link') openchatLink = item.value; 
             if (item.key === 'slipok_package_limit') slipokPackageLimit = parseInt(item.value) || 100;
             if (item.key === 'active_live_session') {
@@ -1144,7 +1146,7 @@ async function loadConfig() {
 }
 loadConfig();
 
-app.get('/api/config', (req, res) => res.json({ prices: rawPriceString, shippingFee, freeShippingThreshold, merchantAccountName, openchatLink }));
+app.get('/api/config', (req, res) => res.json({ prices: rawPriceString, shippingFee, freeShippingThreshold, merchantAccountName, merchantAccountNameEn, openchatLink }));
 
 
 // ================= 🔐 AUTHENTICATION & SECURITY LAYER =================
@@ -1308,7 +1310,7 @@ app.use((req, res, next) => {
 });
 
 app.post('/api/config', async (req, res) => {
-    const { newPrices, newShipping, newThreshold, newMerchantName, newOpenchatLink } = req.body;
+    const { newPrices, newShipping, newThreshold, newMerchantName, newMerchantNameEn, newOpenchatLink } = req.body;
     try {
         if (newPrices !== undefined) { 
             rawPriceString = newPrices; priceList = parsePrices(newPrices); 
@@ -1320,6 +1322,7 @@ app.post('/api/config', async (req, res) => {
         if (Number.isFinite(shipNum) && shipNum >= 0) { shippingFee = shipNum; await supabase.from('configs').upsert([{ key: 'shipping_fee', value: String(shipNum) }]); }
         if (Number.isFinite(threshNum) && threshNum >= 0) { freeShippingThreshold = threshNum; await supabase.from('configs').upsert([{ key: 'free_shipping_threshold', value: String(threshNum) }]); }
         if (newMerchantName !== undefined) { merchantAccountName = newMerchantName.trim(); await supabase.from('configs').upsert([{ key: 'merchant_account_name', value: merchantAccountName }]); }
+        if (newMerchantNameEn !== undefined) { merchantAccountNameEn = String(newMerchantNameEn || '').trim(); await supabase.from('configs').upsert([{ key: 'merchant_account_name_en', value: merchantAccountNameEn }]); }
         if (newOpenchatLink !== undefined) { openchatLink = newOpenchatLink.trim(); await supabase.from('configs').upsert([{ key: 'openchat_link', value: openchatLink }]); }
         addLog('INFO', 'อัปเดตการตั้งค่าสินค้า/ค่าจัดส่งสำเร็จ');
         res.json({ success: true });
@@ -2008,6 +2011,7 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
                     amount: slip.amount, draws: slip.draws || 0, time: slip.trans_time, status: statusGroup,
                     isPendingAmount: isPendingAmount, imageUrl: imageUrl, date: slip.trans_date,
                     outOfRound: slip.arrived_out_of_round === 1,   // v1.0.16: ป้าย "โอนนอกรอบ" (เงินมาตอนไม่มีไลฟ์)
+                    bankDelay: isPendingAmount ? (bankDelayHints.get(slip.id) || undefined) : undefined,   // v1.0.17: สลิปธนาคารที่ต้องรอ (Code 1010)
                     slips: [{ id: slip.id, breakdown: breakdown || '' }],
                     rawBreakdowns: breakdown ? [breakdown] : []
                 });
@@ -2200,7 +2204,7 @@ app.get('/api/history_data', async (req, res) => {
             
             let safeRef = `${transRef}|${breakdownStr}`;
 
-            return { id: slip.id, date: slip.trans_date, time: slip.trans_time, name: slip.sender_name, lineName: slip.line_name, amount: slip.amount, draws: slip.draws || 0, status: slip.status, ref: safeRef, sessionId: slip.session_id || null, outOfRound: slip.arrived_out_of_round === 1 };   // v1.0.16: ธง "โอนนอกรอบ" ใช้บอกในหน้าประวัติว่ายอดนี้เข้ามาตอนไม่มีไลฟ์แล้วถูกผูกเข้ารอบไหน
+            return { id: slip.id, date: slip.trans_date, time: slip.trans_time, name: slip.sender_name, lineName: slip.line_name, amount: slip.amount, draws: slip.draws || 0, status: slip.status, ref: safeRef, sessionId: slip.session_id || null, outOfRound: slip.arrived_out_of_round === 1, customerKey: slip.line_id || null };   // v1.0.16: ธง "โอนนอกรอบ" ใช้บอกในหน้าประวัติว่ายอดนี้เข้ามาตอนไม่มีไลฟ์แล้วถูกผูกเข้ารอบไหน
         });
 
         // v1.0.15: สรุปยอดโอนแยกตามรอบไลฟ์ (นับทั้งรอบ แม้ไลฟ์ข้ามเที่ยงคืน / ไม่นับสลิปที่ปัดตก)
@@ -3412,12 +3416,78 @@ let providerQuotaState = {
     message: ''
 };
 
+// ===== v1.0.17: แปลรหัส Error ของ SlipOK ให้ตรงความหมายตามเอกสาร (https://slipok.com/api-documentation/error-status-code/) =====
+// เดิมทุกรหัสถูก log เป็น ERROR ว่า "สลิปอาจไม่ถูกต้อง หรือวงเงินเครดิตหมด" และรหัส 1009/1006/1008 ถูกนับเป็น "เครดิตหมด" ผิดๆ
+// level: WARN = เหตุการณ์ปกติของลูกค้า/ธนาคาร (ไม่ส่ง Dev Report) | ERROR = ตั้งค่าผิด/แพ็กเกจหมด/ไม่รู้จัก (ควรดู)
+function classifySlipOkError(httpStatus, body) {
+    const code = body ? Number(body.code) : NaN;
+    const d = (body && body.data) || {};
+    const T = (kind, level, message, extra) => Object.assign({ kind, level, message, code: Number.isFinite(code) ? code : null }, extra || {});
+    if (code === 1010) {
+        const bank = d.bankName ? 'ธนาคาร' + d.bankName : 'ธนาคารต้นทาง';
+        const delay = Number(d.delay) > 0 ? Number(d.delay) : null;
+        return T('bank_delay', 'WARN', 'สลิป' + bank + 'ยังตรวจไม่ได้ ต้องรอ' + (delay ? 'ประมาณ ' + delay + ' นาที' : 'สักครู่') + 'หลังโอน (SlipOK Code 1010) ไม่ใช่สลิปผิด ระบบเก็บรูปไว้ในคิวรอใส่ยอด ให้ลูกค้าส่งรูปเดิมซ้ำหลังเวลานั้น ระบบจะตรวจให้เอง', { bankName: d.bankName || '', delay });
+    }
+    if (code === 1009) return T('bank_outage', 'WARN', 'ระบบธนาคารขัดข้องชั่วคราว SlipOK ขอให้ตรวจใหม่ในอีก 15 นาที (Code 1009 เอกสาร SlipOK ระบุว่าไม่เสียโควต้า) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1003) return T('quota', 'ERROR', 'แพ็กเกจ SlipOK หมดอายุ (Code 1003) ต้องต่ออายุแพ็กเกจ');
+    if (code === 1004) return T('quota', 'ERROR', 'ใช้เกินโควต้า SlipOK ถึงวงเงินที่กำหนด (Code 1004) ต้องต่อแพ็กเกจ');
+    if (Number(httpStatus) === 402) return T('quota', 'ERROR', 'SlipOK แจ้งว่าเครดิตไม่พอ (HTTP 402)');
+    if (code === 1005 || code === 1006) return T('bad_image', 'WARN', 'รูปที่ลูกค้าส่งมาเปิดอ่านไม่ได้หรือไม่ใช่รูปภาพ (Code ' + code + ') รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1007) return T('no_qr', 'WARN', 'ไม่พบ QR Code ในรูปที่ลูกค้าส่งมา อาจไม่ใช่สลิปหรือถูกครอบตัด (Code 1007) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1008) return T('not_payment_qr', 'WARN', 'QR ในรูปไม่ใช่ QR ตรวจสอบการชำระเงิน (Code 1008) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1011) return T('qr_expired', 'WARN', 'QR หมดอายุ หรือไม่พบรายการโอนจริง (Code 1011) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1013 || code === 1014) return T('mismatch', 'WARN', 'SlipOK แจ้งว่ายอดหรือบัญชีผู้รับไม่ตรง (Code ' + code + ') รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1000 || code === 1001 || code === 1002) return T('config', 'ERROR', 'ตั้งค่า SlipOK ไม่ถูกต้อง (Code ' + code + ' ตรวจ API Key และ Branch ID ในหน้าตั้งค่า)');
+    if (!body) return T('other', 'ERROR', 'เชื่อมต่อ SlipOK ไม่ได้ (เน็ตสะดุดหรือบริการล่ม) สลิปถูกเก็บไว้ในคิวรอใส่ยอด');
+    return T('other', 'ERROR', 'SlipOK ตอบกลับข้อผิดพลาดที่ไม่รู้จัก' + (Number.isFinite(code) ? ' (Code ' + code + ')' : '') + (httpStatus ? ' HTTP ' + httpStatus : ''));
+}
+// ป้ายบนการ์ดรอใส่ยอด: สลิปธนาคารที่ต้องรอ (เก็บในหน่วยความจำ หายตอนปิดโปรแกรม = การ์ดกลับไปใช้ข้อความทั่วไป)
+const bankDelayHints = new Map();
+function rememberBankDelayHint(slipId, info) {
+    if (!slipId || !info) return;
+    bankDelayHints.set(slipId, { bankName: info.bankName || '', delay: info.delay || null, at: Date.now() });
+    if (bankDelayHints.size > 300) bankDelayHints.delete(bankDelayHints.keys().next().value);
+}
+// ===== v1.0.17: กันนับยอดซ้ำระหว่าง "สลิปที่แม่ค้ากรอกยอดเอง" กับ "สลิปใบเดียวกันที่ตรวจผ่านทีหลัง" =====
+// เวลาโอนบนสลิปที่ตรวจผ่าน ต้องไม่เกินเวลาที่รูปเข้ามาในระบบ (รูปมาหลังโอนเสมอ) -- ถ้าโอนใหม่ทีหลังรูปแรก เวลาโอนจะใหม่กว่า ถือเป็นเงินก้อนใหม่ ไม่ใช่ใบเดิม
+function stampToSec(dateStr, timeStr) {
+    const d = String(dateStr || '').match(/^(\d{4})(\d{2})(\d{2})$/);
+    const t = String(timeStr || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!d || !t) return null;
+    return Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]), Number(t[3] || 0)) / 1000;
+}
+const MANUAL_MATCH_TOLERANCE_SEC = 120;   // เผื่อนาฬิกาเครื่องร้านกับนาฬิกาธนาคารต่างกันเล็กน้อย
+function pickManualMatch(rows, amount, transferSec, toleranceSec = MANUAL_MATCH_TOLERANCE_SEC) {
+    if (transferSec === null || transferSec === undefined || !Number.isFinite(Number(amount))) return null;
+    for (const r of rows || []) {
+        if (Math.abs(Number(r.amount) - Number(amount)) > 0.005) continue;
+        const arrive = stampToSec(r.trans_date, r.trans_time);
+        if (arrive === null) continue;
+        if (arrive + toleranceSec >= transferSec) return r;
+    }
+    return null;
+}
+
+// ===== v1.0.17: เช็กว่าสลิปโอนเข้าบัญชีร้านหรือไม่ =====
+// SlipOK ตอบชื่อผู้รับได้ 3 ช่อง (displayName / name / accountName) และบางสลิป (เช่น TrueMoney) ตอบเป็นอังกฤษล้วน
+// จึงเทียบ "ทุกช่อง" กับ "ทุกชื่อของร้าน" (ไทย + อังกฤษ) ผ่านถ้ามีอย่างน้อย 1 คู่ที่ชื่อร้านเป็นส่วนหนึ่งของชื่อผู้รับ (ไม่สนตัวพิมพ์เล็กใหญ่)
+// ไม่ได้ตั้งชื่อร้านเลย = ไม่เช็ก
+function receiverMatchesShop(receiver, shopNames) {
+    const wanted = (shopNames || []).map(n => String(n || '').trim().toLowerCase()).filter(Boolean);
+    if (wanted.length === 0) return { checked: false, ok: true, shown: '' };
+    const r = receiver || {};
+    const texts = [];
+    [r.displayName, r.name, r.accountName].forEach(t => { const s = String(t || '').trim(); if (s && !texts.includes(s)) texts.push(s); });
+    const ok = texts.some(t => wanted.some(w => t.toLowerCase().includes(w)));
+    return { checked: true, ok, shown: texts.join(' / ') };
+}
+
 function handleProviderQuotaExhaustion(providerName, error) {
     const errText = (error.response ? JSON.stringify(error.response.data) : error.message).toLowerCase();
     const status = error.response?.status;
     const code = error.response?.data?.code;
     
-    if (status === 402 || code === 1009 || code === 1006 || code === 1008 || errText.includes('quota') || errText.includes('credit') || errText.includes('insufficient') || errText.includes('exceeded')) {
+    if (status === 402 || (providerName === 'slipok' && (code === 1003 || code === 1004)) || errText.includes('quota') || errText.includes('credit') || errText.includes('insufficient') || errText.includes('exceeded')) {
         providerQuotaState = {
             provider: providerName,
             balance: 0,
@@ -3825,7 +3895,8 @@ async function verifyWithSlipOK(imageBuffer) {
             return { success: true, data: error.response.data.data };
         }
         const errData = error.response ? JSON.stringify(error.response.data) : error.message;
-        addLog('ERROR', 'SlipOK ยืนยันสลิปไม่สำเร็จ (สลิปอาจไม่ถูกต้อง หรือวงเงินเครดิต SlipOK หมด)', errData);
+        const slipOkInfo = classifySlipOkError(error.response ? error.response.status : null, error.response ? error.response.data : null);
+        addLog(slipOkInfo.level, slipOkInfo.message, errData);
         return error.response ? error.response.data : null; 
     }
 }
@@ -4229,14 +4300,14 @@ app.post('/webhook', async (req, res) => {
             if (slipResult && slipResult.success) {
                 const slipData = slipResult.data;
 
-                if (merchantAccountName && merchantAccountName.trim() !== "") {
-                    let receiverName = "";
-                    if (slipData.receiver) receiverName = slipData.receiver.displayName || slipData.receiver.name || slipData.receiver.accountName || "";
-                    const searchName = merchantAccountName.trim().toLowerCase();
-                    const actualName = receiverName.toLowerCase();
-                    if (!actualName.includes(searchName)) {
-                        await notifyUnrecordedSlip(lineName, messageId, `สลิปโอนเข้าบัญชี "${receiverName || 'ไม่ทราบชื่อ'}" ไม่ตรงกับชื่อบัญชีร้าน "${merchantAccountName}" (ยอด ${fmtBaht(slipData.amount)} บาท) ระบบไม่ได้บันทึกสลิปนี้`, 'wrong_account');
-                        addLog('WARN', `ตรวจพบสลิปโอนผิดบัญชี: ลูกค้า "${lineName}" โอนเข้าบัญชี "${receiverName}" (ไม่ใช่ "${merchantAccountName}")`);
+                {
+                    const shopNames = [merchantAccountName, merchantAccountNameEn];
+                    const shopCheck = receiverMatchesShop(slipData.receiver, shopNames);
+                    if (shopCheck.checked && !shopCheck.ok) {
+                        const receiverName = shopCheck.shown;
+                        const shopLabel = shopNames.map(n => String(n || '').trim()).filter(Boolean).map(n => '"' + n + '"').join(' หรือ ');
+                        await notifyUnrecordedSlip(lineName, messageId, `สลิปโอนเข้าบัญชี "${receiverName || 'ไม่ทราบชื่อ'}" ไม่ตรงกับชื่อบัญชีร้าน ${shopLabel} (ยอด ${fmtBaht(slipData.amount)} บาท) ระบบไม่ได้บันทึกสลิปนี้`, 'wrong_account');
+                        addLog('WARN', `ตรวจพบสลิปโอนผิดบัญชี: ลูกค้า "${lineName}" โอนเข้าบัญชี "${receiverName}" (ไม่ใช่ ${shopLabel})`);
                         // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้โอนไปที่บัญชี "${receiverName || 'ไม่ทราบชื่อ'}" นะคะ ซึ่งไม่ใช่บัญชีของผักกาดน้า รบกวนคุณลูกค้าเช็คบัญชีผู้รับอีกทีนะคะ 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                         continue;
                     }
@@ -4258,6 +4329,25 @@ app.post('/webhook', async (req, res) => {
                     // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                     continue;
                 }
+
+                // v1.0.17: กันนับยอดซ้ำ -- ถ้าแม่ค้ากรอกยอดสลิปใบนี้เองไปแล้ว (เช่น สลิปธนาคารที่ต้องรอ แล้วลูกค้าส่งรูปเดิมซ้ำตอนตรวจผ่าน)
+                // ให้ผูกรหัสสลิปเข้ากับใบเดิม ไม่สร้างใบใหม่ และถ้ายังมีรูปรอใส่ยอดค้างของลูกค้าคนเดียวกัน ให้เตือนไม่ให้กรอกซ้ำ
+                try {
+                    const transferSec = stampToSec(slipData.transDate, slipData.transTime);
+                    const manualRows = supabase.db.prepare("SELECT id, amount, trans_date, trans_time, status, trans_ref FROM slips WHERE line_id = ? AND qr_payload LIKE 'manual_image%' AND status != 'rejected' AND trans_date >= ? ORDER BY id ASC").all(userId, bangkokDateString(-2));
+                    const keyedMatch = pickManualMatch(manualRows.filter(r => Number(r.amount) > 0 && !r.trans_ref), amount, transferSec);
+                    if (keyedMatch) {
+                        supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(transRef, keyedMatch.id);
+                        await notifyUnrecordedSlip(lineName, messageId, `สลิปรหัส ${transRef} (ยอด ${fmtBaht(amount)} บาท) ตรงกับสลิปที่แม่ค้ากรอกยอดเองไว้ (สลิป #${keyedMatch.id}) ระบบถือเป็นใบเดียวกันและไม่นับยอดซ้ำ ถ้าลูกค้าโอนแยกกัน 2 ครั้งจริง ให้เช็กกับลูกค้า`, 'duplicate');
+                        addLog('WARN', `สลิปรหัส ${transRef} ของ "${lineName}" ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${keyedMatch.id}, ${fmtBaht(amount)} บาท) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ`);
+                        continue;
+                    }
+                    const stillOpen = manualRows.filter(r => Number(r.amount) === 0 && r.status === 'waiting' && (() => { const a = stampToSec(r.trans_date, r.trans_time); return a !== null && transferSec !== null && a + MANUAL_MATCH_TOLERANCE_SEC >= transferSec; })());
+                    if (stillOpen.length > 0) {
+                        addLog('WARN', `ลูกค้า "${lineName}" ส่งสลิปที่ตรวจผ่านแล้ว (${fmtBaht(amount)} บาท) และยังมีรูปรอใส่ยอดค้างอยู่ ${stillOpen.length} ใบ ถ้าเป็นสลิปใบเดียวกัน ให้ปัดตกการ์ดรอใส่ยอดใบเก่า อย่ากรอกยอดซ้ำ`);
+                        io.emit('slip_warning', { kind: 'check_pending', name: lineName, reason: `ส่งสลิปที่ตรวจผ่านแล้ว ${fmtBaht(amount)} บาท แต่ยังมีรูปรอใส่ยอดค้างอยู่ ${stillOpen.length} ใบ ถ้าเป็นใบเดียวกัน ให้ปัดตกการ์ดเก่า อย่ากรอกยอดซ้ำ` });
+                    }
+                } catch (guardErr) { addLog('WARN', 'ตรวจสลิปซ้ำกับยอดที่กรอกเองไม่สำเร็จ (ข้ามขั้นนี้ ระบบบันทึกสลิปตามปกติ): ' + guardErr.message); }
 
                 let customer = supabase.db.prepare('SELECT * FROM customers WHERE line_id = ?').get(userId);
                 let currentBalance = (customer ? customer.balance : 0) + amount; 
@@ -4416,7 +4506,10 @@ app.post('/webhook', async (req, res) => {
                 }]).select().single();
 
                 if (inserted) {
-                    io.emit('pending_amount_slip', { name: lineName });   // v1.0.16: เสียงคอร์ด + การ์ดกะพริบ (แทน ping ปกติ)
+                    // v1.0.17: ถ้าเหตุผลคือสลิปธนาคารที่ต้องรอ (Code 1010) จำไว้ให้การ์ดบอกเวลาที่ลองใหม่ได้
+                    const bankInfo = (slipResult && Number(slipResult.code) === 1010) ? classifySlipOkError(400, slipResult) : null;
+                    if (bankInfo && bankInfo.kind === 'bank_delay') rememberBankDelayHint(inserted.id, bankInfo);
+                    io.emit('pending_amount_slip', { name: lineName, bankName: bankInfo ? bankInfo.bankName : undefined, delay: bankInfo ? bankInfo.delay : undefined });   // v1.0.16: เสียงคอร์ด + การ์ดกะพริบ (แทน ping ปกติ)
                     broadcastTodayStats();
                     
                     let replyMsg = `ผักกาดขอบคุณสำหรับคำสั่งซื้อมากๆ เลยน้าา 🙏💖\nอย่าลืมพิมพ์ชื่อ ที่อยู่ เบอร์โทรส่งมาให้ผักกาดในแชทนี้ด้วยนะคะ จะได้รีบแพ็คของส่งให้ค่า 📦✨`;

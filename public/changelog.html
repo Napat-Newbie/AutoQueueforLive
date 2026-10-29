@@ -21,7 +21,7 @@
                 <div>
                     <div class="flex items-center space-x-2.5">
                         <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">Version History & Changelog</h1>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.16 (CURRENT)</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.17 (CURRENT)</span>
                     </div>
                     <p class="text-xs text-zinc-400 mt-0.5">บันทึกประวัติการปรับปรุง แก้ไขบั๊ก และฟีเจอร์ใหม่ของ AutoQueue for Live ทั้งหมด</p>
                 </div>
@@ -34,12 +34,37 @@
         <!-- Timeline Container -->
         <div class="space-y-6">
 
+            <!-- v1.0.17 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.17</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">30 ตุลาคม 2026</span>
+                </div>
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">✨ ปรับปรุง:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>เอาปุ่ม "📋 คัดลอกข้อความ" ออกทั้งหมด (ทั้งบนการ์ดสีส้มและการ์ดที่ยังไม่มีที่อยู่)</li>
+                            <li>แผงควบคุมด้านบนไม่ตรึงตามหน้าจออีกแล้ว ตรึงเฉพาะ "ยอดโอนรวม": เมื่อเลื่อนจนการ์ดยอดโอนรวมพ้นจอ จะมีป้ายเล็กแสดงยอดเดิมลอยที่มุมซ้ายบน (คลิกทะลุได้ ไม่บังปุ่ม)</li>
+                            <li>หน้าต่างบอกว่าอัปเดตมีอะไรบ้าง (ก่อนอัปเดตและหลังอัปเดต) ไม่ยาวจนเกินขอบจออีกแล้ว รายการที่ยาวมีแถบเลื่อนอยู่ในกล่อง และปุ่มด้านล่างยังกดได้</li>
+                            <li>หน้าประวัติ: สลิปที่ปัดตก/ยกเลิกไม่ถูกนับใน ยอดเงิน สิทธิ์ จำนวนสลิป สรุปสินค้า และรายชื่อลูกค้าอีก (แถวยังเห็นในตาราง) จำนวนสลิปบอกว่าไม่รวมที่ปัดตกกี่ใบ</li>
+                            <li>หน้าประวัติ: ลูกค้านับตามรหัส LINE ไม่ใช่ตามชื่อ ลูกค้า 2 คนที่ชื่อ LINE ซ้ำกันไม่ถูกรวมเป็นคนเดียว และสถานะ "รอตรวจรูปสลิป" กับ "เคลียร์ออกจากคิว" แสดงเป็นภาษาไทย (เดิมขึ้นเป็นภาษาอังกฤษ / เหมือน "เสร็จสิ้น")</li>
+                            <li>สลิปธนาคารที่ต้องรอหลังโอน (เช่น ธนาคารกรุงเทพ รอประมาณ 7 นาที, SlipOK รหัส 1010) ไม่ขึ้น Error "เครดิตหมด" อีก การ์ดรอใส่ยอดบอกชื่อธนาคารและเวลาที่ให้ลูกค้าส่งรูปเดิมซ้ำ</li>
+                            <li>รหัสของ SlipOK อ่านตรงความหมายตามเอกสาร: ธนาคารขัดข้อง / รูปไม่ถูกต้อง / QR ไม่ใช่การชำระเงิน ไม่ถูกนับเป็น "เครดิตหมด" (เดิมทำให้ขึ้นแถบแดงหลอกและสลิปปกติใบถัดไปถูกส่งเข้าคิวตรวจเอง) เครดิตหมดจริงจับจากรหัสแพ็กเกจหมดอายุ/ใช้เกินโควต้า</li>
+                            <li>กันนับยอดซ้ำ: ถ้าแม่ค้ากรอกยอดสลิปเองแล้วลูกค้าส่งสลิปใบเดิมซ้ำตอนตรวจผ่าน ระบบผูกเป็นใบเดียวกัน ไม่นับยอดและสิทธิ์ซ้ำ พร้อมการ์ดแดงแจ้ง (ถ้าลูกค้าโอนใหม่จริงทีหลัง ยอดใหม่ยังถูกนับ) และเตือนเมื่อลูกค้ามีรูปรอใส่ยอดค้างอยู่</li>
+                            <li>หน้าตั้งค่ามีช่อง "ชื่อบัญชีร้าน (อังกฤษ)" เพิ่ม (ไม่บังคับ) ให้สลิป TrueMoney ที่ SlipOK ตอบชื่อผู้รับเป็นภาษาอังกฤษ ไม่ถูกตีว่าโอนผิดบัญชี ถ้าร้านตั้งชื่อบัญชีเป็นภาษาไทย ให้เข้าไปใส่ชื่ออังกฤษ (ส่วนต้นของชื่อก็พอ) หลังอัปเดต</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
             <!-- v1.0.16 -->
             <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
                     <div class="flex items-center space-x-3">
                         <span class="text-lg font-bold text-white">🚀 Version 1.0.16</span>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
                     </div>
                     <span class="text-xs text-zinc-400 font-mono">29 ตุลาคม 2026</span>
                 </div>

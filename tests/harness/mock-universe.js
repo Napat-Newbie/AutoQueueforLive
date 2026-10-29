@@ -46,7 +46,7 @@ class MockUniverse {
     profile(userId, displayName) { this.profiles.set(userId, displayName); }
 
     /** SlipOK reads slip `key` as a valid transfer. */
-    slipOk(key, { amount, transRef, receiverName = 'TestShop', transDate = '20261029', transTime = '11:00:00' }) {
+    slipOk(key, { amount, transRef, receiverName = 'TestShop', receiverNameEn, transDate = '20261029', transTime = '11:00:00' }) {
         this.slips.set(key, {
             status: 200,
             body: {
@@ -54,7 +54,7 @@ class MockUniverse {
                 data: {
                     success: true, message: 'ok', transRef, transDate, transTime, amount,
                     sender: { displayName: 'Sender', name: 'Sender' },
-                    receiver: { displayName: receiverName, name: receiverName },
+                    receiver: { displayName: receiverName, name: receiverNameEn !== undefined ? receiverNameEn : receiverName },
                 },
             },
         });
