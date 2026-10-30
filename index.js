@@ -3809,6 +3809,120 @@ function rememberBankDelayHint(slipId, info) {
     bankDelayHints.set(slipId, { bankName: info.bankName || '', delay: info.delay || null, at: Date.now() });
     if (bankDelayHints.size > 300) bankDelayHints.delete(bankDelayHints.keys().next().value);
 }
+
+// ===== v1.0.17: ตรวจสลิปซ้ำเองหลังพ้นเวลารอ (Code 1010) =====
+// สลิปธนาคารที่ต้องรอ (เช่น กรุงเทพ ~7 นาที) ระบบเก็บรูปไว้แล้วตั้งเวลายิงตรวจซ้ำจากไฟล์เดิม สูงสุด 2 ครั้ง
+// (ครั้งแรกพ้นเวลารอ +1 นาที, ครั้งที่สองอีก 4 นาที) แทนการรอให้ลูกค้าส่งรูปเดิมซ้ำ
+// ผลตรวจเดินกฎชุดเดียวกับเส้นทางปกติ: ข้อมูลไม่ครบ/โอนผิดบัญชี/สลิปซ้ำ = ไม่บันทึก (แจ้งการ์ดแดง ไม่ปัดการ์ดเอง)
+// ถ้าแม่ค้าใส่ยอดไปก่อนแล้ว = ผูกรหัสเข้าใบเดิมผ่านหน้าต่างเวลาของ pickManualMatch (กันนับซ้ำ)
+// ถ้ายังไม่ใส่ = อัปเกรดการ์ดด้วยคณิตเดียวกับ /api/queue/manual_amount เดิมทุกบรรทัด
+// ข้อจำกัด: ตัวจับเวลาอยู่ในหน่วยความจำ ถ้าโปรแกรมรีสตาร์ทระหว่างรอ การ์ดกลับไปอยู่ในทางแม่ค้า (ใส่ยอดเอง/ขอให้ลูกค้าส่งซ้ำ) ตามพฤติกรรมเดิม
+const bankRecheckTimers = new Map();   // slipId -> Timeout
+function bankRecheckDelayMs(delayMin, attempt) {
+    const env = Number(process.env.AQ_BANK_RECHECK_DELAY_MS);   // ชุดทดสอบย่อเวลารอ
+    if (Number.isFinite(env) && env > 0) return env;
+    return attempt === 1 ? ((Number(delayMin) || 7) + 1) * 60000 : 4 * 60000;
+}
+function scheduleBankDelayRecheck(slipId, imageFile, delayMin, attempt = 1) {
+    if (bankRecheckTimers.has(slipId)) return;
+    const t = setTimeout(() => {
+        bankRecheckTimers.delete(slipId);
+        runBankDelayRecheck(slipId, imageFile, delayMin, attempt).catch(e => addLog('WARN', `ตรวจสลิปซ้ำเองหลังพ้นเวลารอ (สลิป #${slipId}) ไม่สำเร็จ: ${e.message}`));
+    }, bankRecheckDelayMs(delayMin, attempt));
+    t.unref();
+    bankRecheckTimers.set(slipId, t);
+}
+async function runBankDelayRecheck(slipId, imageFile, delayMin, attempt) {
+    const slip = supabase.db.prepare('SELECT * FROM slips WHERE id = ?').get(slipId);
+    if (!slip || ['rejected', 'completed', 'cleared'].includes(slip.status)) return;   // การ์ดถูกจัดการไปแล้ว — เลิกตรวจซ้ำเงียบ ๆ
+    let imageBuffer;
+    try { imageBuffer = await fs.promises.readFile(imageFile); }
+    catch (e) { addLog('WARN', `อ่านรูปสลิป #${slipId} กลับมาตรวจซ้ำไม่ได้ (${e.message}) ให้แม่ค้าใส่ยอดเองหรือขอให้ลูกค้าส่งรูปซ้ำ`); return; }
+
+    const slipResult = await verifySlipWithProvider(imageBuffer);
+    if (!slipResult || !slipResult.success) {
+        const info = (slipResult && Number(slipResult.code) === 1010) ? classifySlipOkError(400, slipResult) : null;
+        if (info && info.kind === 'bank_delay' && attempt === 1) {
+            addLog('INFO', `ธนาคารยังไม่ยืนยันสลิป #${slipId} ของ "${slip.line_name || 'ลูกค้า'}" หลังพ้นเวลารอ — ระบบจะลองตรวจซ้ำอีกครั้ง (ครั้งที่ 2 จาก 2)`);
+            scheduleBankDelayRecheck(slipId, imageFile, delayMin, 2);
+        } else if (info && info.kind === 'bank_delay') {
+            addLog('WARN', `ระบบพยายามตรวจสลิปซ้ำเอง 2 ครั้งแล้วยังไม่สำเร็จ (สลิป #${slipId} ของ "${slip.line_name || 'ลูกค้า'}"${info.bankName ? ' ธนาคาร' + info.bankName : ''}ยังไม่ยืนยัน) — ให้แม่ค้ากดเช็คสลิปแล้วใส่ยอดเอง หรือให้ลูกค้าส่งรูปเดิมซ้ำ`);
+        } else {
+            addLog('WARN', `ตรวจสลิปซ้ำเองหลังพ้นเวลารอไม่สำเร็จ (สลิป #${slipId}): ${slipResult && slipResult.message ? slipResult.message : 'ไม่ทราบสาเหตุ'} — การ์ดรอใส่ยอดยังอยู่ตามเดิม`);
+        }
+        return;
+    }
+
+    // ตรวจข้อมูลครบก่อนใช้ผลตรวจ (กฎเดียวกับเส้นทาง webhook)
+    const d = slipResult.data || {};
+    const amt = Number(d.amount);
+    const ref = String(d.transRef || '').trim();
+    const isSyntheticRef = /^(EASY|THUNDER|SLIPVERIFY)_\d{13}$/.test(ref);
+    if (!Number.isFinite(amt) || amt <= 0 || amt > 1000000 || !ref || isSyntheticRef) {
+        addLog('WARN', `ตรวจสลิปซ้ำเองได้ผลแต่ข้อมูลไม่ครบ (สลิป #${slipId}, ยอด ${d.amount}, รหัส ${ref || '-'}) ให้แม่ค้าตรวจเอง`);
+        return;
+    }
+
+    // โอนผิดบัญชี: ไม่บันทึก แจ้งการ์ดแดง (ไม่ปัดการ์ดเอง — แม่ค้ากดปัดตกเอง)
+    const shopNames = [merchantAccountName, merchantAccountNameEn];
+    const shopCheck = receiverMatchesShop(d.receiver, shopNames);
+    if (shopCheck.checked && !shopCheck.ok) {
+        const shopLabel = shopNames.map(n => String(n || '').trim()).filter(Boolean).map(n => `"${n}"`).join(' หรือ ');
+        await notifyUnrecordedSlip(slip.line_name || 'ลูกค้า', null, `สลิปรหัส ${ref} (ยอด ${fmtBaht(amt)} บาท) ที่ระบบตรวจซ้ำหลังพ้นเวลารอ โอนเข้าบัญชี "${shopCheck.shown || 'ไม่ทราบชื่อ'}" ไม่ตรงกับชื่อบัญชีร้าน ${shopLabel} ระบบไม่ได้นับยอดนี้`, 'wrong_account');
+        addLog('WARN', `ตรวจสลิปซ้ำเองเจอโอนผิดบัญชี: สลิป #${slipId} ของ "${slip.line_name || 'ลูกค้า'}" โอนเข้า "${shopCheck.shown}" (ไม่ใช่ ${shopLabel}) — ไม่บันทึก`);
+        return;
+    }
+
+    // สลิปซ้ำ: รหัสถูกบันทึกไปแล้ว (เช่น ลูกค้าส่งรูปซ้ำเองก่อนที่ระบบจะตรวจซ้ำทัน) — ไม่นับซ้ำ ทิ้งการ์ดไว้ให้แม่ค้าปัดตกเอง
+    const existing = supabase.db.prepare("SELECT id FROM slips WHERE trans_ref = ? AND trans_ref IS NOT NULL AND trans_ref != '' AND id != ? LIMIT 1").get(ref, slipId);
+    if (existing) {
+        addLog('WARN', `ตรวจสลิปซ้ำเอง (สลิป #${slipId}) เจอรหัส ${ref} ถูกบันทึกไปแล้ว (สลิป #${existing.id}) — ไม่นับซ้ำ ถ้าเป็นการ์ดรอใส่ยอดของสลิปเดิม ให้ปัดตกการ์ดนี้`);
+        return;
+    }
+
+    // แม่ค้าใส่ยอดไปก่อนแล้ว: ผูกรหัสเข้าใบเดิมเมื่อเข้าหน้าต่างเวลาของ pickManualMatch (กันนับซ้ำ)
+    if (Number(slip.amount) > 0) {
+        if (slip.trans_ref) return;   // มีรหัสแล้ว (เช่น ตรวจซ้ำชนกัน) ไม่ทำซ้ำ
+        const transferSec = stampToSec(d.transDate, d.transTime);
+        if (pickManualMatch([slip], amt, transferSec)) {
+            supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(ref, slipId);
+            await notifyUnrecordedSlip(slip.line_name || 'ลูกค้า', null, `สลิปรหัส ${ref} (ยอด ${fmtBaht(amt)} บาท) ที่ระบบตรวจซ้ำหลังพ้นเวลารอ ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (สลิป #${slipId}) ระบบถือเป็นใบเดียวกันและไม่นับยอดซ้ำ`, 'duplicate');
+            addLog('WARN', `ระบบตรวจสลิปซ้ำเอง: รหัส ${ref} ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${slipId}) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ`);
+            bankDelayHints.delete(slipId);
+            await broadcastTodayStats();
+        } else {
+            addLog('WARN', `ระบบตรวจสลิปซ้ำเองได้ยอด ${fmtBaht(amt)} บาท (รหัส ${ref}) แต่ไม่ตรงเงื่อนไขเวลา/ยอดกับที่แม่ค้ากรอกไว้ (${fmtBaht(slip.amount)} บาท, สลิป #${slipId}) — ให้แม่ค้าตรวจสอบเอง`);
+        }
+        return;
+    }
+
+    // ยังไม่มียอด: อัปเกรดการ์ดด้วยคณิตเดียวกับ /api/queue/manual_amount (เงินเป็นข้อเท็จจริงจากสลิปที่ตรวจผ่านแล้ว)
+    let { data: customer } = await supabase.from('customers').select('*').eq('line_id', slip.line_id).single();
+    const currentBalance = (customer ? customer.balance : 0) + amt;
+    const pastDrawsToday = countPastDraws(slip.line_id, { excludeId: slipId, excludeRejected: true });
+    const hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
+    const virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
+    const result = calculateBestDraws(virtualBalance, pastDrawsToday, { holdExactPrice: true });
+    const breakdownStr = result.breakdown.join(', ');
+    const parts = String(slip.qr_payload || '').split('|');   // คงรูป manual_image|url|breakdown เดิม (ปุ่มดูรูปและหน้าต่างแก้ไขสินค้าใช้อยู่)
+    if (parts[0] === 'manual_image') parts[2] = breakdownStr;
+    else parts = ['manual_image', '', breakdownStr];
+
+    await supabase.from('slips').update({
+        amount: amt, draws: result.draws, trans_ref: ref,
+        qr_payload: parts.join('|'),
+        status: result.draws > 0 ? slip.status : 'accumulated'   // ยอดไม่พอ = การ์ดส้มสะสมยอด เหมือนใส่ยอดเอง
+    }).eq('id', slipId);
+
+    const finalBalance = walletAfter(result, currentBalance);
+    if (customer) await supabase.from('customers').update({ balance: finalBalance }).eq('line_id', slip.line_id);
+    else if (slip.line_id) await supabase.from('customers').insert([{ line_id: slip.line_id, name: slip.line_name || 'ลูกค้า LINE', balance: finalBalance }]);
+
+    bankDelayHints.delete(slipId);
+    const drawsTxt = result.draws > 0 ? `ได้ ${result.draws} ชิ้น` : 'ยอดยังไม่พอ (เข้าการ์ดส้มรอโอนเพิ่ม)';
+    addLog('SUCCESS', `🔄 ระบบตรวจสลิปซ้ำเองหลังพ้นเวลารอสำเร็จ — ${slip.line_name || 'ลูกค้า'} ${fmtBaht(amt)} บาท ${drawsTxt} (สลิป #${slipId}, อ้างอิง ${ref}, เงินคงเหลือในกระเป๋า ${finalBalance} บาท)`);
+    await broadcastTodayStats();
+}
 // ===== v1.0.17: กันนับยอดซ้ำระหว่าง "สลิปที่แม่ค้ากรอกยอดเอง" กับ "สลิปใบเดียวกันที่ตรวจผ่านทีหลัง" =====
 // ถือว่าเป็นใบเดียวกันเมื่อเวลาโอนอยู่ในหน้าต่าง [รูปเข้า - 60 นาที, รูปเข้า + 120 วินาที]:
 // ราวบน (โอนไม่ช้ากว่ารูป + 120 วิ) เผื่อนาฬิการ้าน/ธนาคารเพี้ยนเล็กน้อย -- โอนใหม่ทีหลังรูปแรกคือเงินก้อนใหม่
@@ -4873,7 +4987,10 @@ app.post('/webhook', async (req, res) => {
                 if (inserted) {
                     // v1.0.17: ถ้าเหตุผลคือสลิปธนาคารที่ต้องรอ (Code 1010) จำไว้ให้การ์ดบอกเวลาที่ลองใหม่ได้
                     const bankInfo = (slipResult && Number(slipResult.code) === 1010) ? classifySlipOkError(400, slipResult) : null;
-                    if (bankInfo && bankInfo.kind === 'bank_delay') rememberBankDelayHint(inserted.id, bankInfo);
+                    if (bankInfo && bankInfo.kind === 'bank_delay') {
+                        rememberBankDelayHint(inserted.id, bankInfo);
+                        scheduleBankDelayRecheck(inserted.id, filePath, bankInfo.delay);   // v1.0.17: ระบบตรวจซ้ำเองหลังพ้นเวลารอ (ไม่ต้องรอลูกค้าส่งรูปซ้ำ)
+                    }
                     io.emit('pending_amount_slip', { name: lineName, bankName: bankInfo ? bankInfo.bankName : undefined, delay: bankInfo ? bankInfo.delay : undefined });   // v1.0.16: เสียงคอร์ด + การ์ดกะพริบ (แทน ping ปกติ)
                     broadcastTodayStats();
                     
