@@ -135,3 +135,18 @@ test('dedicated channel also receives the second message when the round is busy 
     assert.match(warnText, /สลิปซ้ำ|ซ้ำกับลูกค้า/, 'duplicate warn has analysis text');
     assert.match(warnText, /> วิเคราะห์:|> ควรทำ:/, 'warn detail explains the cause');
 }, null, ENDLIVE));
+
+// v1.0.17: AI เสริมความเห็น (getAiOpinionsForUnknownIssues) — มี key แต่รอบนั้นทุกปัญหามีกฎวิเคราะห์อยู่แล้ว ต้องไม่ยิงเรียก Gemini เลย (ประหยัดโควตา)
+test('AI opinion helper stays silent when every issue already has a rule (no wasted Gemini quota)', () => withSandbox(async sb => {
+    await sb.startLive();
+    await pay(sb, 'Ualice', 'Alice', 'm1', 'k1', 140, 'Q1'); await sb.waitForSlips(1);
+    await pay(sb, 'Ubob', 'Bob', 'm2', 'k2', 140, 'Q2', 'Somebody Else');   // WARN ที่มีกฎ (wrong_account)
+    const fs = require('fs'); const path = require('path');
+    const logPath = () => path.join(sb.dir, 'system.log');
+    await sb.waitFor(() => { try { return /สลิปโอนผิดบัญชี/.test(fs.readFileSync(logPath(), 'utf8')); } catch (e) { return false; } }, 8000, 'wrong-account WARN not logged');
+
+    await sb.endLive();
+    await sb.waitFor(() => summaryEmbeds(sb)[0], 8000, 'summary missing');
+    assert.equal(sb.mock.geminis.length, 0, 'no Gemini call: the round has no unknown-issue group');
+    assert.deepEqual(sb.unexpectedCalls(), []);
+}, null, { DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/12345/main-alert-hook', GEMINI_API_KEY: 'test-gemini-key' }));

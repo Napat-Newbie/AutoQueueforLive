@@ -2506,7 +2506,7 @@ function analyzeLiveIssues(issues) {
         const norm = msg.split('"').map((s, i) => i % 2 === 1 ? '"…"' : s.replace(/\d+/g, '#')).join('');
         const key = type + '|' + (rule ? rule.key : 'raw:' + norm.slice(0, 120));
         let g = map.get(key);
-        if (!g) { g = { type, key: rule ? rule.key : 'raw', rule, count: 0, messages: [] }; map.set(key, g); }
+        if (!g) { g = { type, key: rule ? rule.key : ('raw[' + type + ']:' + norm.slice(0, 100)), rule, count: 0, messages: [] }; map.set(key, g); }
         g.count++;
         if (g.messages.length < 50) g.messages.push(msg);
     });
@@ -2514,6 +2514,8 @@ function analyzeLiveIssues(issues) {
 }
 
 // ข้อความของ 1 กลุ่มในสรุป: เกิดอะไรขึ้น (ข้อเท็จจริงจาก log) / วิเคราะห์ (จากกฎ) / ควรทำ
+// v1.0.17: กลุ่มที่ยังไม่มีกฎ (rule = null) และมีความเห็นจาก AI (g.aiNote จาก getAiOpinionsForUnknownIssues)
+// จะแสดงเป็นข้อสันนิษฐานกำกับชัดว่ายังไม่ยืนยัน — ไม่แอบอ้างเป็นคำวิเคราะห์ของระบบ
 function renderLiveIssueGroup(g) {
     const clip = (t, n) => { const x = String(t || '').replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 1) + '…' : x; };
     const rule = g.rule;
@@ -2533,7 +2535,8 @@ function renderLiveIssueGroup(g) {
         else icon = '❔';
     }
     const title = rule ? rule.title : 'ข้อความที่ระบบยังไม่มีคำวิเคราะห์เฉพาะ';
-    const meaning = rule ? rule.meaning : 'ยังไม่มีคำวิเคราะห์เฉพาะสำหรับข้อความนี้ (ระบบไม่เดาสาเหตุ)';
+    const meaning = rule ? rule.meaning
+        : (g.aiNote ? '🤖 ความเห็นจาก AI (ยังไม่ยืนยัน): ' + clip(g.aiNote, 260) : 'ยังไม่มีคำวิเคราะห์เฉพาะสำหรับข้อความนี้ (ระบบไม่เดาสาเหตุ)');
     const action = rule ? rule.action : 'ค้นข้อความด้านบนใน system.log ของร้านเพื่อดูรายละเอียดเต็ม';
     const out = icon + ' ' + label + title + (g.count > 1 ? ' — ' + g.count + ' ครั้ง' : '') + '\n' +
         '> เกิดอะไรขึ้น: ' + detail + '\n> วิเคราะห์: ' + meaning + '\n> ควรทำ: ' + action;
@@ -2569,7 +2572,7 @@ function summarizeLiveProducts(rows) {
 // session = { id, startTimeStr, endTimeStr, startTime, endTime, holdMerge } / stats = { slips, amount, draws, customers, byStatus, rejected?, products? } / issues = [{type:'ERROR'|'WARN', message}]
 // v1.0.17: + สลิปที่ปัดตก + สินค้าที่ออก + วิเคราะห์ปัญหาแยกกลุ่ม (analyzeLiveIssues) และคืนเป็น "หลาย embed" (1-2 อัน) เมื่อเนื้อหาล้นข้อจำกัด Discord
 // v1.0.17 (ตามคำขอเจ้าของร้าน): รายละเอียด WARN ไม่ถูกตัดทิ้ง — เกิน 1 ข้อความก็แบ่งเป็นข้อความที่ 2
-function buildEndOfLiveReportEmbeds(session, stats, issues, meta = {}) {
+function buildEndOfLiveReportEmbeds(session, stats, issues, meta = {}, aiNotes = {}) {
     const fmtB = (n) => { const v = Math.round(Number(n) * 100) / 100; return Number.isInteger(v) ? String(v) : v.toFixed(2); };
     const durMs = (session.endTime || 0) - (session.startTime || 0);
     const h = Math.floor(durMs / 3600000), m = Math.floor((durMs % 3600000) / 60000);
@@ -2577,6 +2580,8 @@ function buildEndOfLiveReportEmbeds(session, stats, issues, meta = {}) {
     const errCount = (issues || []).filter(i => i.type === 'ERROR').length;
     const warnCount = (issues || []).filter(i => i.type === 'WARN').length;
     const groups = analyzeLiveIssues(issues);
+    // v1.0.17: แนบความเห็น AI เฉพาะกลุ่มที่ยังไม่มีกฎ (ผู้เรียกสร้าง aiNotes จาก getAiOpinionsForUnknownIssues)
+    if (aiNotes && typeof aiNotes === 'object') groups.forEach(g => { if (!g.rule && aiNotes[g.key]) g.aiNote = aiNotes[g.key]; });
     const errGroups = groups.filter(g => g.type === 'ERROR');
     const warnGroups = groups.filter(g => g.type === 'WARN');
     const st = stats.byStatus || {};
@@ -2661,8 +2666,44 @@ function buildEndOfLiveReportEmbeds(session, stats, issues, meta = {}) {
 }
 
 // คืน embed แรกเมื่อผู้เรียกต้องการแค่อันเดียว (ใช้ภายใน/ทดสอบ)
-function buildEndOfLiveReportEmbed(session, stats, issues, meta = {}) {
-    return buildEndOfLiveReportEmbeds(session, stats, issues, meta)[0];
+function buildEndOfLiveReportEmbed(session, stats, issues, meta = {}, aiNotes = {}) {
+    return buildEndOfLiveReportEmbeds(session, stats, issues, meta, aiNotes)[0];
+}
+
+// 🤖 v1.0.17: ขอ "ข้อสันนิษฐาน" จาก Gemini สำหรับกลุ่ม log ที่ยังไม่มีกฎวิเคราะห์ (เรียกครั้งเดียวต่อการจบไลฟ์ สูงสุด 8 กลุ่ม)
+// หลักการ: กฎของระบบยังเป็นคำวิเคราะห์หลัก (พิสูจน์ได้) — AI เป็นแค่ความเห็นเสริมกำกับชัดว่า "ยังไม่ยืนยัน"
+// พังหรือเกินโควตาเมื่อไหร่: คืน {} เงียบๆ รายงานสรุปยังออกตามปกติทุกกรณี และไม่ขอ AI เลยถ้าไม่มีกลุ่มที่ไม่รู้จัก
+async function getAiOpinionsForUnknownIssues(rawGroups) {
+    const out = {};
+    if (!process.env.GEMINI_API_KEY || !Array.isArray(rawGroups) || rawGroups.length === 0) return out;
+    try {
+        const list = rawGroups.slice(0, 8).map((g, i) => `${i + 1}. [${g.type}] ${String(g.messages[0] || '').replace(/\s+/g, ' ').slice(0, 200)}`);
+        const prompt = `คุณคือผู้ช่วยวิเคราะห์ log ของโปรแกรมจัดคิวร้านขายของไลฟ์ ข้อความต่อไปนี้คือ log ที่ระบบยังไม่มีคำวิเคราะห์เฉพาะ
+กรุณาให้ "ข้อสันนิษฐาน" ว่าน่าจะเกิดจากอะไร และควรตรวจอะไรต่อ ตอบเป็น JSON array เท่านั้น รูปแบบ [{"i":1,"opinion":"..."}]
+กติกา: ภาษาไทย ไม่เกิน 2 ประโยคต่อข้อ ระบุเฉพาะสิ่งที่อนุมานได้จากข้อความ ห้ามแต่งตัวเลขหรือชื่อที่ไม่มีใน log ถ้าไม่แน่ใจให้บอกว่าไม่แน่ใจ
+
+${list.join('\n')}`;
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
+        const res = await axios.post(url, {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: 'application/json' }
+        }, { timeout: 8000 });
+
+        const rawJson = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!rawJson) return out;
+        const parsed = JSON.parse(rawJson);
+        const arr = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.opinions) ? parsed.opinions : []);
+        rawGroups.slice(0, 8).forEach((g, i) => {
+            const hit = arr.find(x => x && Number(x.i) === i + 1 && x.opinion && String(x.opinion).trim() !== '');
+            if (hit) out[g.key] = String(hit.opinion).trim().slice(0, 300);
+        });
+        if (Object.keys(out).length > 0) addLog('INFO', `สรุปหลังจบไลฟ์: ได้ความเห็นเสริมจาก AI สำหรับปัญหาที่ยังไม่มีคำวิเคราะห์ ${Object.keys(out).length} กลุ่ม (แสดงกำกับว่ายังไม่ยืนยัน)`);
+    } catch (e) {
+        // ไม่ WARN รบกวน: การขาดความเห็น AI ไม่ใช่ปัญหาของร้าน — บันทึกเบาๆ ไว้เท่านั้น
+        addLog('INFO', `สรุปหลังจบไลฟ์: ขอความเห็นเสริมจาก AI ไม่สำเร็จ (${String(e.message).slice(0, 80)}) แสดงผลด้วยคำวิเคราะห์ของกฎตามปกติ`);
+    }
+    return out;
 }
 
 // 🏁 v1.0.16: ดึงสถิติของรอบที่เพิ่งจบ + รวบรวม Error/WARN ของรอบ ส่งเข้า Discord 1 ข้อความ (ทุกครั้งที่จบไลฟ์)
@@ -2680,7 +2721,11 @@ async function sendEndOfLiveReport(endedSession) {
         const prodRows = supabase.db.prepare("SELECT qr_payload, status, draws FROM slips WHERE session_id = ? AND status NOT IN ('rejected', 'skipped') AND draws > 0").all(sid);
         const stats = { slips: row.n || 0, amount: row.amt || 0, draws: row.dr || 0, customers: row.cust || 0, byStatus, rejected: rejRow.n || 0, products: summarizeLiveProducts(prodRows) };
 
-        const embeds = buildEndOfLiveReportEmbeds(endedSession, stats, issues, { version: getAppVersionSafe(), shopLabel: getShopLabel() });
+        // 🤖 v1.0.17: กลุ่มปัญหาที่ยังไม่มีกฎวิเคราะห์ → ขอความเห็นเสริมจาก Gemini (ครั้งเดียว จำกัดเวลา พังก็ข้ามได้เสมอ)
+        const rawGroups = analyzeLiveIssues(issues).filter(g => !g.rule);
+        const aiNotes = await getAiOpinionsForUnknownIssues(rawGroups);
+
+        const embeds = buildEndOfLiveReportEmbeds(endedSession, stats, issues, { version: getAppVersionSafe(), shopLabel: getShopLabel() }, aiNotes);
         // v1.0.17: มีช่องแยกสำหรับสรุปหลังจบไลฟ์ (DISCORD_LIVE_SUMMARY_WEBHOOK_URL) ให้ส่งเฉพาะช่องนั้น
         // ถ้ายังไม่ได้ตั้ง ไหลไปช่องแจ้งเตือนหลัก → ช่องกิจกรรม → ช่อง Dev Report ตามลำดับ เพื่อให้สรุปมาถึงทุกครั้ง
         const url = getLiveSummaryWebhook() || DISCORD_WEBHOOK_URL || getActivityWebhook() || getDevReportWebhook();

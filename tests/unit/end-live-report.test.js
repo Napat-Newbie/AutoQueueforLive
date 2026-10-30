@@ -223,3 +223,64 @@ test('summarizeLiveProducts: same rule as the history page (no rejected / skippe
     assert.equal(r.pieces, 7);
     assert.deepEqual(JSON.parse(JSON.stringify(env().summarizeLiveProducts([]))), { list: [], pieces: 0 });
 });
+
+// ---- v1.0.17: ความเห็นเสริมจาก AI สำหรับกลุ่มที่ยังไม่มีกฎ ----
+test('AI opinion (aiNotes) is shown ONLY for unknown groups, clearly marked as unconfirmed', () => {
+    const x = env();
+    const issues = [
+        E('ERROR', 'เกิดเหตุแปลกใหม่ที่ไม่มีในกฎ: foo bar'),
+        E('WARN', 'ตรวจพบสลิปซ้ำ: ลูกค้า "A" ส่งสลิปรหัส X ที่เคยบันทึกไปแล้ว')
+    ];
+    const groups = x.analyzeLiveIssues(issues);
+    const rawKey = groups.find(g => !g.rule).key;
+    const ruleKey = groups.find(g => g.rule).key;
+    const notes = {};
+    notes[rawKey] = 'น่าจะเกิดจาก X ควรตรวจ Y';
+    notes[ruleKey] = 'ความเห็นแปลกปลอมที่ห้ามปรากฏ';
+    const e = x.buildEndOfLiveReportEmbed(SESSION, STATS(), issues, {}, notes);
+    const all = e.fields.map(f => f.value).join('\n');
+    assert.match(all, /🤖 ความเห็นจาก AI \(ยังไม่ยืนยัน\): น่าจะเกิดจาก X ควรตรวจ Y/);
+    assert.doesNotMatch(all, /ความเห็นแปลกปลอม/, 'rule groups never take an AI note');
+    // ไม่ส่ง aiNotes -> พฤติกรรมเดิม
+    const e2 = x.buildEndOfLiveReportEmbed(SESSION, STATS(), issues, {}, {});
+    assert.match(e2.fields.map(f => f.value).join('\n'), /ยังไม่มีคำวิเคราะห์เฉพาะ/);
+});
+
+test('getAiOpinionsForUnknownIssues: one batched Gemini call, JSON parsed back by index; 429/no-key/empty -> {} and never throws', async () => {
+    const calls = [];
+    const mkAxios = (status, text) => ({ post: async (url, body) => { calls.push({ url, body }); if (status !== 200) { const e = new Error('429'); e.response = { status }; throw e; } return { data: { candidates: [{ content: { parts: [{ text }] } }] } }; } });
+    const path = require('path');
+    const { load } = require('../harness/extract');
+    const IDX = path.join(__dirname, '..', '..', 'index.js');
+    const FNS = ['getAiOpinionsForUnknownIssues', 'analyzeLiveIssues', 'getLiveIssueRules'];
+    const MSGS = [E('ERROR', 'ปัญหาแปลกกลุ่มที่ 1 ที่ไม่มีกฎ xyz'), E('WARN', 'ปัญหาแปลกกลุ่มที่ 2 ที่ไม่มีกฎ abc')];
+    // สำเร็จ
+    const okCtx = load(IDX, {
+        functions: FNS,
+        globals: { axios: mkAxios(200, JSON.stringify([{ i: 1, opinion: 'สันนิษฐานข้อ 1' }, { i: 2, opinion: 'สันนิษฐานข้อ 2' }])), process: { env: { GEMINI_API_KEY: 'test-key' } }, addLog: () => {} }
+    });
+    const okRaw = okCtx.analyzeLiveIssues(MSGS).filter(g => !g.rule);
+    assert.equal(okRaw.length, 2, 'both test messages are unknown to the rules');
+    const notes = await okCtx.getAiOpinionsForUnknownIssues(okRaw);
+    assert.equal(calls.length, 1, 'exactly one batched call');
+    assert.match(calls[0].url, /gemini-3\.5-flash-lite/);
+    assert.ok(calls[0].body.contents[0].parts[0].text.includes('ปัญหาแปลกกลุ่มที่ 1'), 'both messages in one prompt');
+    assert.equal(Object.keys(notes).length, 2);
+    assert.match(notes[okRaw[0].key], /สันนิษฐานข้อ 1/);
+    // 429 -> {}
+    const qCtx = load(path.join(__dirname, '..', '..', 'index.js'), {
+        functions: ['getAiOpinionsForUnknownIssues'],
+        globals: { axios: mkAxios(429, ''), process: { env: { GEMINI_API_KEY: 'test-key' } }, addLog: () => {} }
+    });
+    assert.equal(Object.keys(await qCtx.getAiOpinionsForUnknownIssues([{ type: 'ERROR', key: 'raw:x', rule: null, messages: ['x'] }])).length, 0);
+    // ไม่มี key -> ไม่ยิงเรียกเลย
+    const nCalls = calls.length;
+    const noKeyCtx = load(path.join(__dirname, '..', '..', 'index.js'), {
+        functions: ['getAiOpinionsForUnknownIssues'],
+        globals: { axios: mkAxios(200, '[]'), process: { env: {} }, addLog: () => {} }
+    });
+    assert.equal(Object.keys(await noKeyCtx.getAiOpinionsForUnknownIssues([{ type: 'ERROR', key: 'raw:y', rule: null, messages: ['y'] }])).length, 0);
+    assert.equal(calls.length, nCalls, 'no call without a key');
+    // รายการว่าง -> ไม่เรียก
+    assert.equal(Object.keys(await okCtx.getAiOpinionsForUnknownIssues([])).length, 0);
+});
