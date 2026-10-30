@@ -2,6 +2,26 @@
 // ถ้าโปรแกรมหลักปิดตัวเองผิดปกติ ระบบจะเปิดใหม่ให้อัตโนมัติภายใน 5 วินาที (สูงสุด 5 ครั้งใน 10 นาที กันวนไม่จบ)
 // ปิดปกติ (ปุ่มปิดโปรแกรม / ติดตั้งอัปเดต / เปิดซ้ำ) = รหัส 0 -> ตัวเฝ้าปิดตามทันที ไม่เปิดใหม่
 // ตั้ง AQ_NO_SUPERVISOR=1 เพื่อปิดตัวเฝ้า
+// v1.0.17: ตัวอ่าน .env แบบง่ายของตัวเฝ้า — แยกเป็นฟังก์ชันเพื่อให้เทสต์ (tests/unit/env-parser.test.js) ตัดไปตรวจได้
+// ทำตัวเหมือนตัวอ่านมาตรฐานในจุดที่เคยพลาด: รองรับ "export " นำหน้า, ตัดคอมเมนต์ท้ายบรรทัด (# ที่มีช่องว่างนำหน้า)
+// และค่าครอบด้วย "..."/'...' — ไม่ใช่ตัวอ่าน .env เต็มรูปแบบ (multiline/escape) เพราะตัวเฝ้าต้องการแค่ webhook ตัวเดียว
+function parseEnvLines(text) {
+    const env = {};
+    String(text || '').split(/\r?\n/).forEach(l => {
+        const m = l.match(/^\s*(?:export\s+)?([A-Za-z0-9_]+)\s*=\s*(.*)$/);
+        if (!m) return;
+        let v = m[2];
+        const q = v.charAt(0);
+        if (q === '"' || q === "'") {              // ค่าครอบด้วย quote: หยุดที่ quote ปิด ไม่สนข้อความหลังจากนั้น
+            const end = v.indexOf(q, 1);
+            v = end > 0 ? v.slice(1, end) : v.slice(1);
+        } else {
+            v = v.replace(/\s+#.*$/, '');          // คอมเมนต์ท้ายบรรทัด: # ที่มีช่องว่างนำหน้า (URL ที่มี # ติด ๆ กันไม่โดนตัด)
+        }
+        env[m[1]] = v.trim();
+    });
+    return env;
+}
 if (!process.env.AQ_SUPERVISED && process.env.AQ_NO_SUPERVISOR !== '1') {
     const { spawn } = require('child_process');
     const fsSup = require('fs');
@@ -15,8 +35,7 @@ if (!process.env.AQ_SUPERVISED && process.env.AQ_NO_SUPERVISOR !== '1') {
         const finish = () => { if (!finished) { finished = true; process.exit(code || 1); } };
         try {
             const envText = fsSup.readFileSync(pathSup.join(__dirname, '.env'), 'utf8');
-            const env = {};
-            envText.split(/\r?\n/).forEach(l => { const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, ''); });
+            const env = parseEnvLines(envText);
             const url = env.DISCORD_DEVREPORT_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL || '';
             if (!/^https:\/\/(discord|discordapp)\.com\/api\/webhooks\//.test(url)) { finish(); return; }
             let version = '?';
@@ -3557,47 +3576,67 @@ app.post('/api/queue/reject_slip', async (req, res) => {
 // ห้ามแตะ: ยอดเงินที่โอนมาจริง (amount), สถานะ, เงินในกระเป๋าลูกค้า — เงินเป็นข้อเท็จจริงจากสลิป ส่วนการ์ดที่ยังค้างในคิวเท่านั้นที่แก้ได้
 app.post('/api/queue/edit_items', async (req, res) => {
     try {
-        const slipId = Number(req.body && req.body.slipId);
-        const items = Array.isArray(req.body && req.body.items) ? req.body.items : null;
-        if (!Number.isInteger(slipId) || slipId <= 0 || !items) {
-            return res.status(400).json({ success: false, message: 'ข้อมูลไม่ถูกต้อง (ต้องระบุ slipId และรายการสินค้า)' });
+        // v1.0.17: รับได้ทั้งรูปเดิม { slipId, items } (การ์ดเดียว) และรูปใหม่ { edits: [{slipId, items}, ...] } (การ์ดรวมบิลหลายสลิป)
+        // ตรวจความถูกต้องครบทุกใบก่อน แล้วค่อยบันทึกทีเดียว — กัน "แก้ครึ่งเดียว" แบบตอนหน้าเว็บส่งทีละใบแล้วใบหลังล้ม (HANDOFF §5)
+        const rawEdits = Array.isArray(req.body && req.body.edits) ? req.body.edits
+            : (req.body && req.body.slipId !== undefined && req.body.items !== undefined) ? [{ slipId: req.body.slipId, items: req.body.items }]
+            : null;
+        if (!rawEdits || rawEdits.length === 0 || rawEdits.length > 10) {
+            return res.status(400).json({ success: false, message: 'ข้อมูลไม่ถูกต้อง (ต้องระบุ slipId และรายการสินค้า รับได้ครั้งละไม่เกิน 10 ใบ)' });
         }
 
-        // ตรวจรายการ: ชื่อ 1-60 ตัวอักษรหลังตัดช่องว่าง, จำนวนเป็นจำนวนเต็ม 0-99, ห้ามชื่อซ้ำ (qty=0 ตัดทิ้ง)
-        const clean = [];
-        for (const it of items) {
-            const name = String((it && it.name) || '').trim().slice(0, 60);
-            const qty = Number(it && it.qty);
-            if (!name || name.includes('|') || !Number.isInteger(qty) || qty < 0 || qty > 99) {   // "|" คือตัวคั่นข้อมูลในสลิป ห้ามอยู่ในชื่อสินค้า
-                return res.status(400).json({ success: false, message: `รายการสินค้าหรือจำนวนไม่ถูกต้อง: "${name || '?'}" x${qty}` });
+        const plan = [];   // ตรวจทุกใบให้ผ่านหมดก่อน — ถ้าใบใดไม่ผ่าน จะไม่บันทึกอะไรเลย
+        for (const edit of rawEdits) {
+            const slipId = Number(edit && edit.slipId);
+            const items = Array.isArray(edit && edit.items) ? edit.items : null;
+            if (!Number.isInteger(slipId) || slipId <= 0 || !items) {
+                return res.status(400).json({ success: false, message: 'ข้อมูลไม่ถูกต้อง (ต้องระบุ slipId และรายการสินค้า)' });
             }
-            if (qty > 0 && !clean.some(c => c.name === name)) clean.push({ name, qty });
-        }
-        const breakdown = clean.map(c => `${c.name} x${c.qty}`).join(', ');
-        const draws = clean.reduce((s, c) => s + c.qty, 0);
-        if (draws <= 0) {
-            // v1.0.17: การ์ดที่ไม่มีสินค้าเหลืออยู่เลยไม่มีความหมายในคิว — จะเอาการ์ดออก ใช้ปุ่มปัดตกรูปแทน
-            return res.status(400).json({ success: false, message: 'รวมสินค้าต้องมากกว่า 0 ชิ้น — ถ้าต้องการเอาการ์ดนี้ออกจากคิว ใช้ปุ่มปัดตกรูปแทน' });
+
+            // ตรวจรายการ: ชื่อ 1-60 ตัวอักษรหลังตัดช่องว่าง, จำนวนเป็นจำนวนเต็ม 0-99, ห้ามชื่อซ้ำ (qty=0 ตัดทิ้ง)
+            const clean = [];
+            for (const it of items) {
+                const name = String((it && it.name) || '').trim().slice(0, 60);
+                const qty = Number(it && it.qty);
+                if (!name || name.includes('|') || !Number.isInteger(qty) || qty < 0 || qty > 99) {   // "|" คือตัวคั่นข้อมูลในสลิป ห้ามอยู่ในชื่อสินค้า
+                    return res.status(400).json({ success: false, message: `รายการสินค้าหรือจำนวนไม่ถูกต้อง: "${name || '?'}" x${qty} (สลิป #${slipId})` });
+                }
+                if (qty > 0 && !clean.some(c => c.name === name)) clean.push({ name, qty });
+            }
+            const breakdown = clean.map(c => `${c.name} x${c.qty}`).join(', ');
+            const draws = clean.reduce((s, c) => s + c.qty, 0);
+            if (draws <= 0) {
+                // v1.0.17: การ์ดที่ไม่มีสินค้าเหลืออยู่เลยไม่มีความหมายในคิว — จะเอาการ์ดออก ใช้ปุ่มปัดตกรูปแทน
+                return res.status(400).json({ success: false, message: `รวมสินค้าต้องมากกว่า 0 ชิ้น (สลิป #${slipId}) — ถ้าต้องการเอาการ์ดนี้ออกจากคิว ใช้ปุ่มปัดตกรูปแทน` });
+            }
+
+            const slip = supabase.db.prepare('SELECT * FROM slips WHERE id = ?').get(slipId);
+            if (!slip) return res.status(404).json({ success: false, message: `ไม่พบสลิป #${slipId}` });
+            if (!['waiting', 'called', 'skipped', 'abnormal_pending'].includes(slip.status)) {
+                return res.status(409).json({ success: false, message: `แก้ไขได้เฉพาะการ์ดที่ยังค้างอยู่ในคิวเท่านั้น (สลิป #${slipId} จบแล้ว/ปัดตกแล้ว)` });
+            }
+
+            // คงส่วนอื่นของ qr_payload ไว้: ปกติคือ "รหัสอ้างอิง|breakdown" ส่วนของ manual_image คือ "manual_image|url|breakdown"
+            const parts = String(slip.qr_payload || '').split('|');
+            const isManual = slip.qr_payload && slip.qr_payload.startsWith('manual_image');
+            const oldBreakdown = isManual ? (parts[2] || '') : (parts[1] || '');
+            if (isManual) parts[2] = breakdown;
+            else if (parts.length > 1) parts[1] = breakdown;
+            else parts.push(breakdown);
+
+            plan.push({ slip, slipId, draws, breakdown, oldBreakdown, payload: parts.join('|') });
         }
 
-        const slip = supabase.db.prepare('SELECT * FROM slips WHERE id = ?').get(slipId);
-        if (!slip) return res.status(404).json({ success: false, message: 'ไม่พบสลิปนี้' });
-        if (!['waiting', 'called', 'skipped', 'abnormal_pending'].includes(slip.status)) {
-            return res.status(409).json({ success: false, message: 'แก้ไขได้เฉพาะการ์ดที่ยังค้างอยู่ในคิวเท่านั้น (ไม่รวมที่จบแล้ว/ปัดตกแล้ว)' });
+        // ผ่านครบทุกใบแล้ว — บันทึกทีเดียว (better-sqlite3 ซิงโครนัส ไม่มีคำขออื่นแทรกกลางคัน)
+        const results = [];
+        for (const p of plan) {
+            supabase.db.prepare('UPDATE slips SET draws = ?, qr_payload = ? WHERE id = ?').run(p.draws, p.payload, p.slipId);
+            addLog('INFO', `🖥️ แม่ค้าแก้ไขรายการสินค้า — ${p.slip.line_name || 'ลูกค้า'}: เดิม "${p.oldBreakdown || '-'}" → ใหม่ "${p.breakdown || '-'}" รวม ${p.draws} ชิ้น (สลิป #${p.slipId}, ยอดโอน ${p.slip.amount} บาท ไม่เปลี่ยน)`);
+            results.push({ slipId: p.slipId, draws: p.draws, breakdown: p.breakdown });
         }
-
-        // คงส่วนอื่นของ qr_payload ไว้: ปกติคือ "รหัสอ้างอิง|breakdown" ส่วนของ manual_image คือ "manual_image|url|breakdown"
-        const parts = String(slip.qr_payload || '').split('|');
-        const isManual = slip.qr_payload && slip.qr_payload.startsWith('manual_image');
-        const oldBreakdown = isManual ? (parts[2] || '') : (parts[1] || '');
-        if (isManual) parts[2] = breakdown;
-        else if (parts.length > 1) parts[1] = breakdown;
-        else parts.push(breakdown);
-
-        supabase.db.prepare('UPDATE slips SET draws = ?, qr_payload = ? WHERE id = ?').run(draws, parts.join('|'), slipId);
-        addLog('INFO', `🖥️ แม่ค้าแก้ไขรายการสินค้า — ${slip.line_name || 'ลูกค้า'}: เดิม "${oldBreakdown || '-'}" → ใหม่ "${breakdown || '-'}" รวม ${draws} ชิ้น (สลิป #${slipId}, ยอดโอน ${slip.amount} บาท ไม่เปลี่ยน)`);
         await broadcastTodayStats();
-        res.json({ success: true, draws, breakdown });
+        if (results.length === 1) return res.json({ success: true, draws: results[0].draws, breakdown: results[0].breakdown, results });
+        res.json({ success: true, results });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -3611,6 +3650,7 @@ app.get('/api/queue/edit_items_context', (req, res) => {
     try {
         const slipIds = String(req.query.slipIds || '').split(',').map(Number).filter(n => Number.isInteger(n) && n > 0);
         if (slipIds.length === 0) return res.status(400).json({ success: false, message: 'ต้องระบุ slipIds' });
+        if (slipIds.length > 10) return res.status(400).json({ success: false, message: 'รับได้ครั้งละไม่เกิน 10 สลิป' });   // v1.0.17: การ์บุ๊กรวมบิลมีสลิปได้แค่ 2-3 ใบ — เกินนี้คือคำขอผิดปกติ
         const rows = slipIds.map(id => supabase.db.prepare('SELECT id, line_id, draws, status FROM slips WHERE id = ?').get(id));
         if (rows.some(r => !r)) return res.status(404).json({ success: false, message: 'ไม่พบสลิป' });
         const lineId = rows[0].line_id;

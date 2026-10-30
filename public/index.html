@@ -1991,15 +1991,17 @@
             const zeroProblem = editItemsZeroProblem(st.slips);
             if (zeroProblem) { alert(zeroProblem); return; }
             try {
-                for (const slip of st.slips) {
-                    const items = Object.keys(slip.qty).filter(n => (slip.qty[n] || 0) > 0).map(n => ({ name: n, qty: slip.qty[n] }));
-                    const r = await fetch('/api/queue/edit_items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slipId: slip.id, items }) });
-                    const j = await r.json();
-                    if (!j.success) { alert('แก้ไขไม่สำเร็จ (สลิป #' + slip.id + '): ' + (j.message || j.error || '')); return; }
-                }
+                // v1.0.17: ส่งทุกสลิปในคำขอเดียว — เซิร์ฟเวอร์ตรวจครบทุกใบก่อนบันทึก ถ้าใบใดไม่ผ่านจะไม่มีอะไรถูกบันทึกเลย (กันแก้ครึ่งเดียว)
+                const edits = st.slips.map(slip => ({
+                    slipId: slip.id,
+                    items: Object.keys(slip.qty).filter(n => (slip.qty[n] || 0) > 0).map(n => ({ name: n, qty: slip.qty[n] }))
+                }));
+                const r = await fetch('/api/queue/edit_items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ edits }) });
+                const j = await r.json();
+                if (!j.success) { alert('แก้ไขไม่สำเร็จ (ยังไม่ได้บันทึกอะไรเลย): ' + (j.message || j.error || '')); return; }
                 document.getElementById('editItemsModal').style.display = 'none';
                 // การ์ดคิวรีเฟรชเองผ่าน socket — ไม่ต้องโหลดหน้าใหม่
-            } catch (e) { alert('แก้ไขไม่สำเร็จ: ' + e.message); }
+            } catch (e) { alert('แก้ไขไม่สำเร็จ (ไม่แน่ใจว่าบันทึกหรือยัง — ปิดหน้าต่างนี้แล้วเปิดดูรายการอีกครั้ง): ' + e.message); }
         }
 
         // 💬 แสดงรายชื่อลูกค้าที่รอโอนเพิ่ม (ไม่เข้าคิว) ให้แม่ค้าทักได้ทัน
