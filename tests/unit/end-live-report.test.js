@@ -12,7 +12,7 @@ const { load } = require('../harness/extract');
 const INDEX = path.join(__dirname, '..', '..', 'index.js');
 function env() {
     return load(INDEX, {
-        functions: ['buildEndOfLiveReportEmbed', 'assessErrorForDevReport', 'analyzeLiveIssues', 'getLiveIssueRules', 'renderLiveIssueGroup',
+        functions: ['buildEndOfLiveReportEmbed', 'buildEndOfLiveReportEmbeds', 'assessErrorForDevReport', 'analyzeLiveIssues', 'getLiveIssueRules', 'renderLiveIssueGroup',
             'quotedNamesOf', 'summarizeLiveProducts', 'classifySlipOkError'],
         consts: ['SEVERITY_STYLE']
     });
@@ -102,12 +102,12 @@ test('repeated problems are grouped (digits ignored) and counted; distinct ones 
     assert.match(v, /9 รายการ \(1 ประเภท\)/);
     assert.match(v, /9 ครั้ง/);
 
-    const distinct = Array.from({ length: 9 }, (_, i) => E('ERROR', `เหตุการณ์แปลกแบบที่ ${'ก'.repeat(i + 1)} เกิดขึ้น`));
+    const distinct = Array.from({ length: 15 }, (_, i) => E('ERROR', `เหตุการณ์แปลกแบบที่ ${'ก'.repeat(i + 1)} เกิดขึ้น`));
     e = env().buildEndOfLiveReportEmbed(SESSION, STATS(), distinct, {});
     v = e.fields.filter(f => /Error/.test(f.name)).map(f => f.value).join('\n');
     assert.match(v, /และอีก 3 ประเภท/);
-    assert.match(v, /เหตุการณ์แปลกแบบที่ ก{6} เกิดขึ้น/);
-    assert.doesNotMatch(v, /เหตุการณ์แปลกแบบที่ ก{7} เกิดขึ้น/);
+    assert.match(v, /เหตุการณ์แปลกแบบที่ ก{12} เกิดขึ้น/);
+    assert.doesNotMatch(v, /เหตุการณ์แปลกแบบที่ ก{13} เกิดขึ้น/);
 });
 
 test('real SlipOK messages (from classifySlipOkError) are all recognised by a rule, ERROR/WARN level kept', () => {
@@ -167,16 +167,39 @@ test('every rule is complete and the rule keys are unique', () => {
     }
 });
 
-test('a pile of long, varied problems still fits one Discord embed (<= 6000 chars, <= 25 fields, <= 1024 per value)', () => {
+test('a pile of long, varied problems fits Discord by SPLITTING into 2 embeds — every embed legal, WARN detail kept', () => {
     const issues = [];
     for (let i = 0; i < 40; i++) issues.push(E(i % 2 ? 'ERROR' : 'WARN', `เหตุผิดปกติแบบ${'ข'.repeat(i + 1)} ${'ยาวมาก'.repeat(60)}`));
     issues.push(E('WARN', 'ตรวจพบสลิปโอนผิดบัญชี: ลูกค้า "ก" โอนเข้าบัญชี "ข" (ไม่ใช่ ร้าน)'));
     const list = Array.from({ length: 40 }, (_, i) => ({ name: 'สินค้า' + 'ย'.repeat(40) + i, qty: 1 }));
-    const e = env().buildEndOfLiveReportEmbed(SESSION, STATS({ rejected: 2, products: { pieces: 40, list } }), issues, { shopLabel: '[ร้านตัวอย่าง]', version: '1.0.17' });
-    const total = e.title.length + e.footer.text.length + e.fields.reduce((a, f) => a + f.name.length + f.value.length, 0);
-    assert.ok(total <= 6000, 'embed total ' + total);
-    assert.ok(e.fields.length <= 25);
-    e.fields.forEach(f => { assert.ok(f.value.length <= 1024, f.name + ' ' + f.value.length); assert.ok(f.name.length <= 256); });
+    const embeds = env().buildEndOfLiveReportEmbeds(SESSION, STATS({ rejected: 2, products: { pieces: 40, list } }), issues, { shopLabel: '[ร้านตัวอย่าง]', version: '1.0.17' });
+    assert.ok(embeds.length <= 2, 'at most two embeds');
+    embeds.forEach(e => {
+        const total = e.title.length + e.footer.text.length + e.fields.reduce((a, f) => a + f.name.length + f.value.length, 0);
+        assert.ok(total <= 6000, 'embed total ' + total);
+        assert.ok(e.fields.length <= 25);
+        e.fields.forEach(f => { assert.ok(f.value.length <= 1024, f.name + ' ' + f.value.length); assert.ok(f.name.length <= 256); });
+    });
+    // ตามคำขอเจ้าของร้าน: รายละเอียด WARN ต้องไม่หายไปเพราะข้อมูลเยอะ
+    const warnText = embeds.flatMap(e => e.fields.filter(f => /คำเตือน|WARN/.test(f.name)).map(f => f.value)).join('\n');
+    assert.match(warnText, /> วิเคราะห์:/, 'warn analysis lines survive the split');
+    assert.match(warnText, /และอีก \d+ ประเภท/, 'groups beyond the cap are counted honestly with a system.log pointer');
+    const errText = embeds.flatMap(e => e.fields.filter(f => /Error/.test(f.name)).map(f => f.value)).join('\n');
+    assert.match(errText, /> ควรทำ:/, 'error guidance still present');
+});
+
+test('moderate round still produces a single embed (no needless second message)', () => {
+    const x = env();
+    const issues = [
+        E('ERROR', 'บันทึกสลิปอัตโนมัติของ "B" ไม่สำเร็จ (SQLITE_BUSY) ส่งเข้าคิวให้แอดมินตรวจเอง'),
+        E('WARN', 'ตรวจพบสลิปซ้ำ: ลูกค้า "C" ส่งสลิปรหัส X ที่เคยบันทึกไปแล้ว'),
+        E('WARN', 'ตรวจพบสลิปโอนผิดบัญชี: ลูกค้า "D" โอนเข้าบัญชี "E" (ไม่ใช่ ร้านTest)'),
+    ];
+    const embeds = x.buildEndOfLiveReportEmbeds(SESSION, STATS(), issues, {});
+    assert.equal(embeds.length, 1);
+    assert.match(field(embeds[0], 'WARN').value, /2 รายการ \(2 ประเภท\)/);
+    assert.match(field(embeds[0], 'WARN').value, /สลิปซ้ำ/);
+    assert.match(field(embeds[0], 'WARN').value, /บัญชีที่ไม่ใช่ของร้าน/);
 });
 
 test('held round (รอรวมกับรอบหน้า) is called out in the report', () => {

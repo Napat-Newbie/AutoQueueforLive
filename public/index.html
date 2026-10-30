@@ -941,7 +941,9 @@
                         <label for="wizDiscordActivity" style="font-size: 0.85em; display: block; margin-bottom: 2px;">ช่อง 1: บันทึกการใช้งานทุกกิจกรรม (สรุปทุก 1 นาที)</label>
                         <input type="text" id="wizDiscordActivity" placeholder="https://discord.com/api/webhooks/..." style="width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Kanit'; margin-bottom: 8px;">
                         <label for="wizDiscordDevReport" style="font-size: 0.85em; display: block; margin-bottom: 2px;">ช่อง 2: รายงาน Error ความรุนแรง และแนวทางแก้ไขในเวอร์ชันถัดไป</label>
-                        <input type="text" id="wizDiscordDevReport" placeholder="https://discord.com/api/webhooks/..." style="width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Kanit';">
+                        <input type="text" id="wizDiscordDevReport" placeholder="https://discord.com/api/webhooks/..." style="width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Kanit'; margin-bottom: 8px;">
+                        <label for="wizDiscordLiveSummary" style="font-size: 0.85em; display: block; margin-bottom: 2px;">ช่อง 3: สรุปหลังจบไลฟ์ — สถิติรอบ + Error/WARN พร้อมสาเหตุ ส่งทุกครั้งที่กดจบไลฟ์ (เว้นว่าง = ส่งช่องแจ้งเตือนหลักตามเดิม)</label>
+                        <input type="text" id="wizDiscordLiveSummary" placeholder="https://discord.com/api/webhooks/..." style="width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Kanit';">
                     </div>
 
                     <!-- 3. VISUAL PROVIDER SELECTOR WITH LOGOS & PRESETS -->
@@ -3581,6 +3583,8 @@
                             document.getElementById('wizDiscordActivity').placeholder = data.discordActivitySet ? `ตั้งค่าแล้ว (${data.discordActivitySet}) - วางลิงก์ใหม่เพื่อเปลี่ยน` : 'ยังไม่ได้ตั้งค่า - วางลิงก์ Webhook';
                             document.getElementById('wizDiscordDevReport').value = '';
                             document.getElementById('wizDiscordDevReport').placeholder = data.discordDevReportSet ? `ตั้งค่าแล้ว (${data.discordDevReportSet}) - วางลิงก์ใหม่เพื่อเปลี่ยน` : 'ยังไม่ได้ตั้งค่า - วางลิงก์ Webhook';
+                            document.getElementById('wizDiscordLiveSummary').value = '';
+                            document.getElementById('wizDiscordLiveSummary').placeholder = data.discordLiveSummarySet ? `ตั้งค่าแล้ว (${data.discordLiveSummarySet}) - วางลิงก์ใหม่เพื่อเปลี่ยน` : 'ยังไม่ได้ตั้งค่า - สรุปจะส่งช่องแจ้งเตือนหลัก';
                         }
                         document.getElementById('wizSlipOkKey').value = data.slipokApiKey || '';
                         document.getElementById('wizSlipOkBranch').value = data.slipokBranchId || '';
@@ -3604,6 +3608,7 @@
                 geminiApiKey: document.getElementById('wizGeminiKey').value.trim(),
                 discordActivityWebhook: document.getElementById('wizDiscordActivity') ? document.getElementById('wizDiscordActivity').value.trim() : '',
                 discordDevReportWebhook: document.getElementById('wizDiscordDevReport') ? document.getElementById('wizDiscordDevReport').value.trim() : '',
+                discordLiveSummaryWebhook: document.getElementById('wizDiscordLiveSummary') ? document.getElementById('wizDiscordLiveSummary').value.trim() : '',
                 slipokApiKey: document.getElementById('wizSlipOkKey').value.trim(),
                 slipokBranchId: document.getElementById('wizSlipOkBranch').value.trim(),
                 easyslipToken: document.getElementById('wizEasySlipToken').value.trim(),

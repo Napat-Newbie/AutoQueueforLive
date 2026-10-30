@@ -354,6 +354,8 @@ function maskDiscordWebhook(u) {
 }
 function getActivityWebhook() { const u = (process.env.DISCORD_ACTIVITY_WEBHOOK_URL || '').trim(); return isValidDiscordWebhook(u) ? u : ''; }
 function getDevReportWebhook() { const u = (process.env.DISCORD_DEVREPORT_WEBHOOK_URL || '').trim(); return isValidDiscordWebhook(u) ? u : ''; }
+// v1.0.17: ช่องแยกสำหรับ "สรุปหลังจบไลฟ์" โดยเฉพาะ (เจ้าของร้านขอแยก channel) — ถ้าไม่ได้ตั้งไว้ สรุปจะไหลไปช่องแจ้งเตือนหลักตามเดิม
+function getLiveSummaryWebhook() { const u = (process.env.DISCORD_LIVE_SUMMARY_WEBHOOK_URL || '').trim(); return isValidDiscordWebhook(u) ? u : ''; }
 function getAppVersionSafe() { try { return require('./package.json').version; } catch (e) { return '?'; } }
 function getShopLabel() {
     const n = (merchantAccountName || process.env.MERCHANT_ACCOUNT_NAME || '').trim();
@@ -1487,7 +1489,8 @@ app.get('/api/admin/setup_keys', (req, res) => {
         customApiKey: process.env.CUSTOM_API_KEY ? `${process.env.CUSTOM_API_KEY.substring(0, 6)}...` : '',
         // 📡 แสดงแค่ว่าตั้งค่าแล้วหรือยัง (เลขท้ายรหัสช่อง) ไม่ส่งลิงก์เต็มกลับไป
         discordActivitySet: maskDiscordWebhook(process.env.DISCORD_ACTIVITY_WEBHOOK_URL),
-        discordDevReportSet: maskDiscordWebhook(process.env.DISCORD_DEVREPORT_WEBHOOK_URL)
+        discordDevReportSet: maskDiscordWebhook(process.env.DISCORD_DEVREPORT_WEBHOOK_URL),
+        discordLiveSummarySet: maskDiscordWebhook(process.env.DISCORD_LIVE_SUMMARY_WEBHOOK_URL)
     });
 });
 
@@ -1543,8 +1546,8 @@ app.post('/api/admin/setup_keys', async (req, res) => {
         }
         // 📡 Discord 2 ช่องของผู้พัฒนา: แก้ได้เฉพาะผู้พัฒนา และต้องเป็นลิงก์ Discord Webhook จริงเท่านั้น (ว่าง = ไม่เปลี่ยน)
         if (isDreamdev) {
-            const { discordActivityWebhook, discordDevReportWebhook } = req.body;
-            for (const [envName, val] of [['DISCORD_ACTIVITY_WEBHOOK_URL', discordActivityWebhook], ['DISCORD_DEVREPORT_WEBHOOK_URL', discordDevReportWebhook]]) {
+            const { discordActivityWebhook, discordDevReportWebhook, discordLiveSummaryWebhook } = req.body;
+            for (const [envName, val] of [['DISCORD_ACTIVITY_WEBHOOK_URL', discordActivityWebhook], ['DISCORD_DEVREPORT_WEBHOOK_URL', discordDevReportWebhook], ['DISCORD_LIVE_SUMMARY_WEBHOOK_URL', discordLiveSummaryWebhook]]) {
                 const v = String(val || '').trim();
                 if (!v) continue;
                 if (!isValidDiscordWebhook(v)) throw new Error('ลิงก์ Discord Webhook ไม่ถูกต้อง (ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/)');
@@ -2564,8 +2567,9 @@ function summarizeLiveProducts(rows) {
 
 // 🏁 v1.0.16: ตัวสร้าง embed สรุปหลังจบไลฟ์ (pure function — ตัดมาทดสอบแบบ unit test ได้ตรงๆ)
 // session = { id, startTimeStr, endTimeStr, startTime, endTime, holdMerge } / stats = { slips, amount, draws, customers, byStatus, rejected?, products? } / issues = [{type:'ERROR'|'WARN', message}]
-// v1.0.17: + สลิปที่ปัดตก + สินค้าที่ออก + วิเคราะห์ปัญหาแยกกลุ่ม (analyzeLiveIssues) เก็บไม่เกินขีดจำกัดของ Discord (embed รวม 6000 ตัวอักษร)
-function buildEndOfLiveReportEmbed(session, stats, issues, meta = {}) {
+// v1.0.17: + สลิปที่ปัดตก + สินค้าที่ออก + วิเคราะห์ปัญหาแยกกลุ่ม (analyzeLiveIssues) และคืนเป็น "หลาย embed" (1-2 อัน) เมื่อเนื้อหาล้นข้อจำกัด Discord
+// v1.0.17 (ตามคำขอเจ้าของร้าน): รายละเอียด WARN ไม่ถูกตัดทิ้ง — เกิน 1 ข้อความก็แบ่งเป็นข้อความที่ 2
+function buildEndOfLiveReportEmbeds(session, stats, issues, meta = {}) {
     const fmtB = (n) => { const v = Math.round(Number(n) * 100) / 100; return Number.isInteger(v) ? String(v) : v.toFixed(2); };
     const durMs = (session.endTime || 0) - (session.startTime || 0);
     const h = Math.floor(durMs / 3600000), m = Math.floor((durMs % 3600000) / 60000);
@@ -2614,36 +2618,51 @@ function buildEndOfLiveReportEmbed(session, stats, issues, meta = {}) {
         return out.map((v, i) => ({ name: i === 0 ? name : contName, value: v, inline: false }));
     };
     const sizeOf = (arr) => (`🏁 สรุปหลังจบไลฟ์ ${meta.shopLabel || ''}`).length + 120 + arr.reduce((a, f) => a + f.name.length + f.value.length, 0);
-    const problemFields = (maxErr, maxWarn) => {
-        const out = [];
-        if (errCount === 0) out.push({ name: `🚨 Error ที่เจอในรอบนี้ (0)`, value: 'ไม่พบ Error ในรอบนี้ 🎉', inline: false });
-        else {
-            const shown = errGroups.slice(0, maxErr).map(renderLiveIssueGroup);
-            if (errGroups.length > maxErr) shown.push(`… และอีก ${errGroups.length - maxErr} ประเภท (ดูทั้งหมดใน system.log ของร้าน)`);
-            const head = `${errCount} รายการ (${errGroups.length} ประเภท)`;
-            pack(`🚨 Error ที่เจอในรอบนี้ (${errCount})`, '🚨 Error (ต่อ)', [head].concat(shown)).forEach(f => out.push(f));
-        }
-        if (warnCount > 0) {
-            const shown = warnGroups.slice(0, maxWarn).map(renderLiveIssueGroup);
-            if (warnGroups.length > maxWarn) shown.push(`… และอีก ${warnGroups.length - maxWarn} ประเภท (ดูทั้งหมดใน system.log ของร้าน)`);
-            const head = `${warnCount} รายการ (${warnGroups.length} ประเภท)`;
-            pack(`⚠️ คำเตือน (WARN) (${warnCount})`, '⚠️ คำเตือน (ต่อ)', [head].concat(shown)).forEach(f => out.push(f));
-        }
-        return out;
+    // v1.0.17: รายละเอียด WARN ห้ามหาย — ถ้าทั้งรอบใส่ข้อความเดียวไม่ไหว แบ่งเป็น 2 ข้อความ (สถิติ+Error / WARN)
+    // แทนที่จะตัดกลุ่ม WARN ทิ้งเหลือแค่ตัวเลขอย่างเดิม (เจ้าของร้านขอดูสาเหตุของทุกคำเตือน)
+    const errBlock = (maxErr) => {
+        if (errCount === 0) return [{ name: `🚨 Error ที่เจอในรอบนี้ (0)`, value: 'ไม่พบ Error ในรอบนี้ 🎉', inline: false }];
+        const shown = errGroups.slice(0, maxErr).map(renderLiveIssueGroup);
+        if (errGroups.length > maxErr) shown.push(`… และอีก ${errGroups.length - maxErr} ประเภท (ดูทั้งหมดใน system.log ของร้าน)`);
+        const head = `${errCount} รายการ (${errGroups.length} ประเภท)`;
+        return pack(`🚨 Error ที่เจอในรอบนี้ (${errCount})`, '🚨 Error (ต่อ)', [head].concat(shown));
     };
-    let chosen = problemFields(6, 6);
-    for (const lim of [[6, 4], [6, 2], [4, 1], [3, 0], [2, 0]]) {
-        if (sizeOf(fields.concat(chosen)) <= 5800 && fields.length + chosen.length <= 25) break;
-        chosen = problemFields(lim[0], lim[1]);
-    }
-    chosen.forEach(f => fields.push(f));
-
-    return {
-        title: `🏁 สรุปหลังจบไลฟ์ ${meta.shopLabel || ''}`.trim(),
-        color: errCount > 0 ? 15158332 : (warnCount > 0 ? 16753920 : 3066993),
-        fields,
+    const warnBlock = (maxWarn) => {
+        if (warnCount === 0) return [];
+        const shown = warnGroups.slice(0, maxWarn).map(renderLiveIssueGroup);
+        if (warnGroups.length > maxWarn) shown.push(`… และอีก ${warnGroups.length - maxWarn} ประเภท (ดูทั้งหมดใน system.log ของร้าน)`);
+        const head = `${warnCount} รายการ (${warnGroups.length} ประเภท)`;
+        return pack(`⚠️ คำเตือน (WARN) (${warnCount})`, '⚠️ คำเตือน (ต่อ)', [head].concat(shown));
+    };
+    const shrinkToFit = (block, maxList, baseFields, baseSize) => {
+        for (const n of maxList) {
+            const b = block(n);
+            if (baseSize + sizeOf(b) <= 5800 && baseFields + b.length <= 25) return b;
+        }
+        return block(maxList[maxList.length - 1]);
+    };
+    const mkEmbed = (fs, suffix, color) => ({
+        title: `🏁 สรุปหลังจบไลฟ์ ${meta.shopLabel || ''}${suffix}`.trim(),
+        color, fields: fs,
         footer: { text: `AutoQueueforLive v${meta.version || '?'} • รหัสรอบ ${session.id || '-'}` }
-    };
+    });
+    const colorOf = (errs) => errs > 0 ? 15158332 : (warnCount > 0 ? 16753920 : 3066993);
+
+    const errFields = shrinkToFit(errBlock, [12, 10, 8, 6, 4], fields.length, sizeOf(fields));
+    const warnFields = shrinkToFit(warnBlock, [12, 8, 6, 4, 3, 2], 0, 0);   // ต่ำสุด 2 ประเภท + บรรทัดชี้ system.log — ไม่มีทางเหลือแค่ตัวเลข
+    const all = fields.concat(errFields, warnFields);
+    if (sizeOf(all) <= 5800 && all.length <= 25) {
+        return [mkEmbed(all, '', colorOf(errCount))];
+    }
+    return [
+        mkEmbed(fields.concat(errFields), '', colorOf(errCount)),
+        mkEmbed(warnFields, ' (ต่อ — คำเตือนของรอบนี้)', 16753920)
+    ];
+}
+
+// คืน embed แรกเมื่อผู้เรียกต้องการแค่อันเดียว (ใช้ภายใน/ทดสอบ)
+function buildEndOfLiveReportEmbed(session, stats, issues, meta = {}) {
+    return buildEndOfLiveReportEmbeds(session, stats, issues, meta)[0];
 }
 
 // 🏁 v1.0.16: ดึงสถิติของรอบที่เพิ่งจบ + รวบรวม Error/WARN ของรอบ ส่งเข้า Discord 1 ข้อความ (ทุกครั้งที่จบไลฟ์)
@@ -2661,11 +2680,12 @@ async function sendEndOfLiveReport(endedSession) {
         const prodRows = supabase.db.prepare("SELECT qr_payload, status, draws FROM slips WHERE session_id = ? AND status NOT IN ('rejected', 'skipped') AND draws > 0").all(sid);
         const stats = { slips: row.n || 0, amount: row.amt || 0, draws: row.dr || 0, customers: row.cust || 0, byStatus, rejected: rejRow.n || 0, products: summarizeLiveProducts(prodRows) };
 
-        const embed = buildEndOfLiveReportEmbed(endedSession, stats, issues, { version: getAppVersionSafe(), shopLabel: getShopLabel() });
-        // ส่งเข้าช่องแจ้งเตือนหลัก ถ้าไม่ได้ตั้งไว้ก็ไหลไปช่องกิจกรรม/ช่อง Dev Report ที่ตั้งไว้แทน เพื่อให้สรุปมาถึงทุกครั้ง
-        const url = DISCORD_WEBHOOK_URL || getActivityWebhook() || getDevReportWebhook();
+        const embeds = buildEndOfLiveReportEmbeds(endedSession, stats, issues, { version: getAppVersionSafe(), shopLabel: getShopLabel() });
+        // v1.0.17: มีช่องแยกสำหรับสรุปหลังจบไลฟ์ (DISCORD_LIVE_SUMMARY_WEBHOOK_URL) ให้ส่งเฉพาะช่องนั้น
+        // ถ้ายังไม่ได้ตั้ง ไหลไปช่องแจ้งเตือนหลัก → ช่องกิจกรรม → ช่อง Dev Report ตามลำดับ เพื่อให้สรุปมาถึงทุกครั้ง
+        const url = getLiveSummaryWebhook() || DISCORD_WEBHOOK_URL || getActivityWebhook() || getDevReportWebhook();
         if (!url) return;
-        discordAlertQueue.push({ url, payload: { embeds: [embed] } });
+        embeds.forEach(embed => discordAlertQueue.push({ url, payload: { embeds: [embed] } }));
         await processDiscordQueue();
     } catch (e) {
         console.error('ส่งสรุปหลังจบไลฟ์เข้า Discord ไม่สำเร็จ:', e.message);
