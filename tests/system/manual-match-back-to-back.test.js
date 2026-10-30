@@ -69,14 +69,42 @@ test('window edge: transfer #2 made exactly 120 s after the keyed image arrived 
 
 // ---- more ways the same guard can be wrong (from the Gemini review, each re-derived from the code before being written down) ----
 
-// pickManualMatch has an UPPER bound only (arrive + 120 s >= transfer). It has no LOWER bound, so a genuine payment made long BEFORE the keyed image
-// (here: yesterday 18:00, never recorded because it was lost) is "linked" to today's keyed slip and dropped.
-test('an older real payment (yesterday 18:00, own bank reference) of the same amount is NOT the keyed slip of today and must be counted', { todo: 'pickManualMatch has no lower time bound: yesterday\'s unrecorded 140 is linked to today\'s keyed 140 and dropped' }, () => withSandbox(async sb => {
+// pickManualMatch had an UPPER bound only (arrive + 120 s >= transfer). v1.0.17 review (owner decision 2026-10-31):
+// a LOWER bound of 60 minutes was added, so a genuine payment made long BEFORE the keyed image (here: yesterday 18:00,
+// never recorded because it was lost) is no longer "linked" to today's keyed slip and dropped.
+test('an older real payment (yesterday 18:00, own bank reference) of the same amount is NOT the keyed slip of today and must be counted', () => withSandbox(async sb => {
     await firstTransferKeyed(sb, 140);   // keyed today, image arrived 10:00:00
     sb.mock.slipOk('kyest', { amount: 140, transRef: 'YEST001', transDate: bkkDate(-1), transTime: '18:00:00' });
     await sb.sendSlip('Ualice', 'm2', 'kyest'); await processed(sb, 'Ualice', 2);
     assert.equal((await sb.stats()).stats.totalAmount, 280);
     assert.ok(sb.slips().some(s => s.trans_ref === 'YEST001' && s.status !== 'rejected'), 'yesterday\'s payment has its own slip');
+}));
+
+// The same 60-minute window, near its edges, for the still-open-pending warning (same "same payment?" question):
+// a transfer 50 minutes before the pending image is plausibly the same payment; one 16 hours old is not.
+const fs = require('fs');
+const path = require('path');
+const readLog = (sb) => { try { return fs.readFileSync(path.join(sb.dir, 'system.log'), 'utf8'); } catch (e) { return ''; } };
+test('still-open pending warning: transfer 50 min before the pending image warns; 16 hours before stays silent', () => withSandbox(async sb => {
+    sb.mock.profile('Ualice', 'Alice');
+    sb.mock.slips.set('kbbl', { status: 400, body: BBL() });
+    await sb.sendSlip('Ualice', 'm1', 'kbbl'); await sb.waitForSlips(1); await sleep(300);
+    const id = sb.slips()[0].id;
+    sb.exec('UPDATE slips SET trans_date = ?, trans_time = ? WHERE id = ?', bkkDate(), '10:00:00', id);   // pending, amount 0, never keyed
+    sb.mock.slipOk('krecent', { amount: 140, transRef: 'RECENT01', transDate: bkkDate(), transTime: '09:10:00' });
+    await sb.sendSlip('Ualice', 'm2', 'krecent'); await processed(sb, 'Ualice', 2);
+    await sb.waitFor(() => /รูปรอใส่ยอดค้างอยู่ 1 ใบ/.test(readLog(sb)), 8000, 'a near-time transfer should warn about the still-open pending card');
+}));
+test('still-open pending warning: a transfer 8 hours before the pending image does not warn (outside the window)', () => withSandbox(async sb => {
+    sb.mock.profile('Ualice', 'Alice');
+    sb.mock.slips.set('kbbl', { status: 400, body: BBL() });
+    await sb.sendSlip('Ualice', 'm1', 'kbbl'); await sb.waitForSlips(1); await sleep(300);
+    const id = sb.slips()[0].id;
+    sb.exec('UPDATE slips SET trans_date = ?, trans_time = ? WHERE id = ?', bkkDate(), '10:00:00', id);
+    sb.mock.slipOk('kold', { amount: 140, transRef: 'OLD00001', transDate: bkkDate(), transTime: '02:00:00' });
+    await sb.sendSlip('Ualice', 'm2', 'kold'); await processed(sb, 'Ualice', 2); await sleep(800);
+    assert.ok(!/รูปรอใส่ยอดค้างอยู่/.test(readLog(sb)), 'an old transfer is not the same payment — no warning');
+    assert.ok(sb.slips().some(s => s.trans_ref === 'OLD00001'), 'the verified slip is recorded on its own');
 }));
 
 // The tolerance exists for clock differences; beyond it the SAME slip is counted twice. Shop PC clock 2.5 min behind the bank clock:

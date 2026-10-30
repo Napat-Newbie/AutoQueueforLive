@@ -3810,21 +3810,25 @@ function rememberBankDelayHint(slipId, info) {
     if (bankDelayHints.size > 300) bankDelayHints.delete(bankDelayHints.keys().next().value);
 }
 // ===== v1.0.17: กันนับยอดซ้ำระหว่าง "สลิปที่แม่ค้ากรอกยอดเอง" กับ "สลิปใบเดียวกันที่ตรวจผ่านทีหลัง" =====
-// เวลาโอนบนสลิปที่ตรวจผ่าน ต้องไม่เกินเวลาที่รูปเข้ามาในระบบ (รูปมาหลังโอนเสมอ) -- ถ้าโอนใหม่ทีหลังรูปแรก เวลาโอนจะใหม่กว่า ถือเป็นเงินก้อนใหม่ ไม่ใช่ใบเดิม
+// ถือว่าเป็นใบเดียวกันเมื่อเวลาโอนอยู่ในหน้าต่าง [รูปเข้า - 60 นาที, รูปเข้า + 120 วินาที]:
+// ราวบน (โอนไม่ช้ากว่ารูป + 120 วิ) เผื่อนาฬิการ้าน/ธนาคารเพี้ยนเล็กน้อย -- โอนใหม่ทีหลังรูปแรกคือเงินก้อนใหม่
+// ราวล่าง (โอนไม่เก่ากว่ารูปเกิน 60 นาที, เจ้าของร้านตกลง 2026-10-31) กันสลิปเก่าของเมื่อวานที่ไม่เคยบันทึก
+//   ถูกดูดรวมกับยอดที่แม่ค้ากรอกของวันนี้จนเงินหาย -- 60 นาที = รอธนาคารยืนยัน ~8 นาที + เผื่อลูกค้าส่งรูปซ้ำช้า
 function stampToSec(dateStr, timeStr) {
     const d = String(dateStr || '').match(/^(\d{4})(\d{2})(\d{2})$/);
     const t = String(timeStr || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
     if (!d || !t) return null;
     return Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]), Number(t[3] || 0)) / 1000;
 }
-const MANUAL_MATCH_TOLERANCE_SEC = 120;   // เผื่อนาฬิกาเครื่องร้านกับนาฬิกาธนาคารต่างกันเล็กน้อย
-function pickManualMatch(rows, amount, transferSec, toleranceSec = MANUAL_MATCH_TOLERANCE_SEC) {
+const MANUAL_MATCH_TOLERANCE_SEC = 120;    // ราวบน: เผื่อนาฬิกาเครื่องร้านกับนาฬิกาธนาคารต่างกันเล็กน้อย
+const MANUAL_MATCH_MAX_AGE_SEC = 60 * 60;  // ราวล่าง: การโอนต้องไม่เก่ากว่ารูปที่เข้ามาเกิน 60 นาที
+function pickManualMatch(rows, amount, transferSec, toleranceSec = MANUAL_MATCH_TOLERANCE_SEC, maxAgeSec = MANUAL_MATCH_MAX_AGE_SEC) {
     if (transferSec === null || transferSec === undefined || !Number.isFinite(Number(amount))) return null;
     for (const r of rows || []) {
         if (Math.abs(Number(r.amount) - Number(amount)) > 0.005) continue;
         const arrive = stampToSec(r.trans_date, r.trans_time);
         if (arrive === null) continue;
-        if (arrive + toleranceSec >= transferSec) return r;
+        if (arrive + toleranceSec >= transferSec && transferSec >= arrive - maxAgeSec) return r;
     }
     return null;
 }
@@ -4703,7 +4707,7 @@ app.post('/webhook', async (req, res) => {
                         addLog('WARN', `สลิปรหัส ${transRef} ของ "${lineName}" ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${keyedMatch.id}, ${fmtBaht(amount)} บาท) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ`);
                         continue;
                     }
-                    const stillOpen = manualRows.filter(r => Number(r.amount) === 0 && r.status === 'waiting' && (() => { const a = stampToSec(r.trans_date, r.trans_time); return a !== null && transferSec !== null && a + MANUAL_MATCH_TOLERANCE_SEC >= transferSec; })());
+                    const stillOpen = manualRows.filter(r => Number(r.amount) === 0 && r.status === 'waiting' && (() => { const a = stampToSec(r.trans_date, r.trans_time); return a !== null && transferSec !== null && a + MANUAL_MATCH_TOLERANCE_SEC >= transferSec && a - MANUAL_MATCH_MAX_AGE_SEC <= transferSec; })());   // หน้าต่างเดียวกับ pickManualMatch
                     if (stillOpen.length > 0) {
                         addLog('WARN', `ลูกค้า "${lineName}" ส่งสลิปที่ตรวจผ่านแล้ว (${fmtBaht(amount)} บาท) และยังมีรูปรอใส่ยอดค้างอยู่ ${stillOpen.length} ใบ ถ้าเป็นสลิปใบเดียวกัน ให้ปัดตกการ์ดรอใส่ยอดใบเก่า อย่ากรอกยอดซ้ำ`);
                         io.emit('slip_warning', { kind: 'check_pending', name: lineName, reason: `ส่งสลิปที่ตรวจผ่านแล้ว ${fmtBaht(amount)} บาท แต่ยังมีรูปรอใส่ยอดค้างอยู่ ${stillOpen.length} ใบ ถ้าเป็นใบเดียวกัน ให้ปัดตกการ์ดเก่า อย่ากรอกยอดซ้ำ` });
