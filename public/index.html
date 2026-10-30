@@ -1980,8 +1980,16 @@
             }
             document.getElementById('editItemsBody').innerHTML = html;
         }
+        // v1.0.17: กันบันทึกจนเหลือ 0 ชิ้นทั้งหมด — การ์ดที่ไม่มีสินค้าไม่มีความหมายในคิว จะเอาการ์ดออกให้ใช้ปุ่มปัดตกรูปแทน
+        // คืนข้อความเตือนเมื่อยอดรวมทั้งหน้าต่างเป็น 0, null = บันทึกได้ (สลิปเดี่ยวที่เหลือ 0 ท่ามกลางหลายใบ ให้ตัว API ปฏิเสธเอง)
+        function editItemsZeroProblem(slips) {
+            const total = slips.reduce((sum, s) => sum + Object.values(s.qty || {}).reduce((a, b) => a + (Number(b) || 0), 0), 0);
+            return total > 0 ? null : 'ยังไม่ได้เลือกสินค้าเลย (รวม 0 ชิ้น) — ถ้าต้องการเอาการ์ดนี้ออกจากคิว ใช้ปุ่มปัดตกรูปแทน';
+        }
         async function saveEditItems() {
             const st = __editItemsState; if (!st) return;
+            const zeroProblem = editItemsZeroProblem(st.slips);
+            if (zeroProblem) { alert(zeroProblem); return; }
             try {
                 for (const slip of st.slips) {
                     const items = Object.keys(slip.qty).filter(n => (slip.qty[n] || 0) > 0).map(n => ({ name: n, qty: slip.qty[n] }));

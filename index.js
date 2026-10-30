@@ -3575,6 +3575,10 @@ app.post('/api/queue/edit_items', async (req, res) => {
         }
         const breakdown = clean.map(c => `${c.name} x${c.qty}`).join(', ');
         const draws = clean.reduce((s, c) => s + c.qty, 0);
+        if (draws <= 0) {
+            // v1.0.17: การ์ดที่ไม่มีสินค้าเหลืออยู่เลยไม่มีความหมายในคิว — จะเอาการ์ดออก ใช้ปุ่มปัดตกรูปแทน
+            return res.status(400).json({ success: false, message: 'รวมสินค้าต้องมากกว่า 0 ชิ้น — ถ้าต้องการเอาการ์ดนี้ออกจากคิว ใช้ปุ่มปัดตกรูปแทน' });
+        }
 
         const slip = supabase.db.prepare('SELECT * FROM slips WHERE id = ?').get(slipId);
         if (!slip) return res.status(404).json({ success: false, message: 'ไม่พบสลิปนี้' });

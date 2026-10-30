@@ -22,8 +22,10 @@ function grab(name) {   // the function is indented inside <script>, so cut it b
     return html.slice(start, i);
 }
 vm.runInContext(grab('editItemsShippingNote'), ctx);
+vm.runInContext(grab('editItemsZeroProblem'), ctx);
 // (other, before, now, fee, threshold)
 const note = (...a) => ctx.editItemsShippingNote(...a);
+const zeroProblem = (slips) => ctx.editItemsZeroProblem(slips);
 
 test('3 items in the round with threshold 3 -> free shipping', () => {
     const n = note(0, 3, 3, 39, 3);
@@ -76,5 +78,21 @@ test('free-shipping shop (threshold 0/1 or fee 0): always free, never warns abou
     assert.equal(note(0, 1, 1, 0, 3).free, true);
     assert.equal(note(0, 1, 1, 39, 0).warnings.length, 0);
 });
+
+// v1.0.17 review: ปุ่ม "แก้ไขสินค้า" ต้องไม่ยอมให้บันทึกจนเหลือ 0 ชิ้น — การ์ดที่ไม่มีสินค้าไม่มีความหมายในคิว
+// ฝั่งเว็บตรวจ "ยอดรวมทั้งหน้าต่าง = 0" ก่อนส่ง, ฝั่ง API ปฏิเสธรายสลิปอีกชั้น (ดู tests/system/edit-items.test.js)
+test('editItemsZeroProblem: a zero-total edit is blocked with a hint to use the reject button', () => {
+    const msg = zeroProblem([{ id: 7, qty: { A: 0 } }]);
+    assert.match(msg, /0 ชิ้น/);
+    assert.match(msg, /ปัดตกรูป/);
+    assert.match(zeroProblem([{ id: 7, qty: {} }, { id: 8, qty: { B: 0 } }]), /ปัดตกรูป/, 'empty qty maps count as zero too');
+});
+
+test('editItemsZeroProblem: at least one item somewhere -> null (save proceeds; a lone zero slip is the API layer call)', () => {
+    assert.equal(zeroProblem([{ id: 3, qty: { A: 1 } }]), null);
+    assert.equal(zeroProblem([{ id: 3, qty: { A: 2 } }, { id: 9, qty: { B: 1 } }]), null);
+    assert.equal(zeroProblem([{ id: 3, qty: { A: 2 } }, { id: 9, qty: {} }]), null);
+});
+
 
 

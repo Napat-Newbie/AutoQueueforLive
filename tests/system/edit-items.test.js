@@ -60,14 +60,19 @@ test('merchant edits the item list: card, Kerry file and log all reflect the cor
     await waitForLog(sb, /แม่ค้าแก้ไขรายการสินค้า — Alice: เดิม "A x1" → ใหม่ "B x1"/);
 }));
 
-test('editing to zero items is allowed (merchant removes wrongly granted items)', () => withSandbox(async sb => {
+test('editing to zero items is rejected — a card with no items has no meaning in the queue (v1.0.17 review: use the reject button instead)', () => withSandbox(async sb => {
     await slipFor(sb, 'Ubob', 'Bob', 'm2', 'k2', 140, 'EDIT2');
     await sb.waitForSlips(1);
     const slipId = sb.slips()[0].id;
+    assert.equal(sb.slips()[0].draws, 1, 'precondition: auto-picked 1 item');
+
     const r = await sb.post('/api/queue/edit_items', { slipId, items: [{ name: 'A', qty: 0 }] });
-    assert.equal(r.json.success, true);
-    assert.equal(r.json.draws, 0);
-    assert.equal(sb.slips()[0].draws, 0);
+    assert.equal(r.status, 400);
+    assert.match(r.json.message, /ปัดตกรูป/, 'the error points the merchant at the right button');
+    assert.equal(sb.slips()[0].draws, 1, 'record untouched (still the auto-picked item)');
+    assert.match(sb.slips()[0].qr_payload, /A x1/);
+
+    assert.equal((await sb.post('/api/queue/edit_items', { slipId, items: [] })).status, 400, 'empty item list is the same 0-piece case');
 }));
 
 test('validation: only pending cards can be edited; bad quantities are rejected', () => withSandbox(async sb => {
