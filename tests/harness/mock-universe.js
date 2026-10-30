@@ -17,7 +17,7 @@ class MockUniverse {
         this.slips = new Map();        // key -> { status, body }  (SlipOK answer for the slip whose image contains `SLIP:<key>`)
         this.replies = [];             // text pushed/replied to customers
         this.discords = [];            // webhook payloads the app sent to Discord: { path, body }
-        this.geminis = [];             // every Gemini API call: { path, body }
+        this.geminis = [];             // every Gemini API call: { path, url (as the app built it), headers, body }
         this.geminiReply = null;       // scripted response text (a JSON string); null -> 500 so accidental calls fail loudly
     }
 
@@ -113,7 +113,7 @@ class MockUniverse {
             }
             // Gemini API (recorded; scripted reply via this.geminiReply, otherwise 500) — ใช้ทดสอบ AI เสริมความเห็นในสรุปหลังจบไลฟ์
             if (u.host === 'generativelanguage.googleapis.com') {
-                this.geminis.push({ path: u.pathname, body: JSON.parse(body.toString('utf8') || '{}') });
+                this.geminis.push({ path: u.pathname, url: orig, headers: { ...req.headers }, body: JSON.parse(body.toString('utf8') || '{}') });
                 if (this.geminiReply === null) return reply(500, { error: { message: 'no scripted gemini reply' } });
                 return reply(200, { candidates: [{ content: { parts: [{ text: this.geminiReply }] } }] });
             }

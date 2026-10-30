@@ -2684,11 +2684,11 @@ async function getAiOpinionsForUnknownIssues(rawGroups) {
 
 ${list.join('\n')}`;
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent`;
         const res = await axios.post(url, {
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { responseMimeType: 'application/json' }
-        }, { timeout: 8000 });
+        }, { timeout: 8000, headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY } });
 
         const rawJson = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!rawJson) return out;
@@ -4393,11 +4393,11 @@ async function parseThaiAddressWithAI(text, defaultName = 'ลูกค้า LI
 
 ข้อความ: "${text}"`;
 
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent`;
             const res = await axios.post(url, {
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: { responseMimeType: 'application/json' }
-            }, { timeout: 4000 });
+            }, { timeout: 4000, headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY } });
 
             const rawJson = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
             if (rawJson) {
