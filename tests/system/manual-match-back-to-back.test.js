@@ -14,12 +14,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const processed = (sb, user, times = 1) => sb.waitFor(() => sb.mock.calls.filter(c => c.path === `/v2/bot/profile/${user}`).length >= times, 10000, `slip of ${user} not processed`).then(() => sleep(500));
 
 /** transfer #1 image (1010) reaches the shop at 10:00:00 and is keyed as `amount` */
-async function firstTransferKeyed(sb, amount = 140) {
+async function firstTransferKeyed(sb, amount = 140, arrival = '10:00:00') {
     sb.mock.profile('Ualice', 'Alice');
     sb.mock.slips.set('kbbl', { status: 400, body: BBL() });
     await sb.sendSlip('Ualice', 'm1', 'kbbl'); await sb.waitForSlips(1); await sleep(300);
     const id = sb.slips()[0].id;
-    sb.exec('UPDATE slips SET trans_date = ?, trans_time = ? WHERE id = ?', bkkDate(), '10:00:00', id);
+    sb.exec('UPDATE slips SET trans_date = ?, trans_time = ? WHERE id = ?', bkkDate(), arrival, id);
     const r = await sb.post('/api/queue/manual_amount', { slipId: id, amount });
     assert.equal(r.json.success, true);
     return id;
@@ -64,4 +64,36 @@ test('window edge: transfer #2 made exactly 120 s after the keyed image arrived 
     await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
     assert.equal(sb.slips().length, 1, 'linked to the keyed slip, no new slip');
     assert.equal((await sb.stats()).stats.totalAmount, 140);
+}));
+
+
+// ---- more ways the same guard can be wrong (from the Gemini review, each re-derived from the code before being written down) ----
+
+// pickManualMatch has an UPPER bound only (arrive + 120 s >= transfer). It has no LOWER bound, so a genuine payment made long BEFORE the keyed image
+// (here: yesterday 18:00, never recorded because it was lost) is "linked" to today's keyed slip and dropped.
+test('an older real payment (yesterday 18:00, own bank reference) of the same amount is NOT the keyed slip of today and must be counted', { todo: 'pickManualMatch has no lower time bound: yesterday\'s unrecorded 140 is linked to today\'s keyed 140 and dropped' }, () => withSandbox(async sb => {
+    await firstTransferKeyed(sb, 140);   // keyed today, image arrived 10:00:00
+    sb.mock.slipOk('kyest', { amount: 140, transRef: 'YEST001', transDate: bkkDate(-1), transTime: '18:00:00' });
+    await sb.sendSlip('Ualice', 'm2', 'kyest'); await processed(sb, 'Ualice', 2);
+    assert.equal((await sb.stats()).stats.totalAmount, 280);
+    assert.ok(sb.slips().some(s => s.trans_ref === 'YEST001' && s.status !== 'rejected'), 'yesterday\'s payment has its own slip');
+}));
+
+// The tolerance exists for clock differences; beyond it the SAME slip is counted twice. Shop PC clock 2.5 min behind the bank clock:
+// the image is stamped 10:02:30 while the bank says the transfer was 10:05:00.
+test('same slip re-sent, shop clock 2.5 minutes behind the bank clock (arrival 10:02:30, bank time 10:05:00) -> must be linked, not counted twice', { todo: 'skew beyond MANUAL_MATCH_TOLERANCE_SEC (120 s) makes the same slip count twice' }, () => withSandbox(async sb => {
+    await firstTransferKeyed(sb, 140, '10:02:30');
+    sb.mock.slipOk('ksame', { amount: 140, transRef: 'SAME001', transDate: bkkDate(), transTime: '10:05:00' });
+    await sb.sendSlip('Ualice', 'm2', 'ksame'); await processed(sb, 'Ualice', 2);
+    assert.equal(sb.slips().length, 1, 'one slip, linked');
+    assert.equal((await sb.stats()).stats.totalAmount, 140);
+}));
+
+// Known limitation (characterization, passes today): the amounts must match to 0.005 baht. If the shop keyed a rounded amount, the same slip counts again.
+test('shop keyed 140 but the slip says 140.50 -> no link, both are counted (documents the exact-amount rule)', () => withSandbox(async sb => {
+    await firstTransferKeyed(sb, 140);
+    sb.mock.slipOk('kcent', { amount: 140.5, transRef: 'CENT001', transDate: bkkDate(), transTime: '09:55:00' });
+    await sb.sendSlip('Ualice', 'm2', 'kcent'); await processed(sb, 'Ualice', 2);
+    assert.equal(sb.slips().length, 2);
+    assert.equal((await sb.stats()).stats.totalAmount, 280.5);
 }));
