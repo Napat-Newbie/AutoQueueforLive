@@ -144,7 +144,10 @@ app.get('/api/subagents/telemetry', (req, res) => {
 let activeLiveSession = null; // { id: 'LIVE_timestamp', startTime: Date.now(), endTime: null }
 // 🏁 v1.0.16: Error/WARN ที่เกิดระหว่างรอบไลฟ์ (เก็บตอน addLog) เพื่อสรุปให้ครบทุกครั้งที่แม่ค้ากดจบไลฟ์
 let liveIssueLogs = [];
+// 📨 v1.0.16: เวลาที่รูปสลิปล่าสุดเข้ามาที่โปรแกรม (ในหน่วยความจำ นับตั้งแต่เปิดโปรแกรม) ให้หน้าจอบอกว่า "สลิปล่าสุดเข้ามาเมื่อกี่นาทีก่อน"
+let lastSlipIngestAt = null;
 var merchantAccountName = process.env.MERCHANT_ACCOUNT_NAME || "";
+var merchantAccountNameEn = "";   // v1.0.17: ชื่อบัญชีร้านภาษาอังกฤษ (ไม่บังคับ) ใช้เทียบชื่อผู้รับตอนที่ SlipOK ตอบชื่อเป็นอังกฤษ เช่น สลิป TrueMoney
 
 // 📢 ระบบ Discord Webhook Remote Monitoring & Auto-Diagnosis (เปิด/ปิดผ่าน .env)
 const DISCORD_WEBHOOK_URL = (process.env.DISCORD_WEBHOOK_URL || '').trim();
@@ -351,6 +354,8 @@ function maskDiscordWebhook(u) {
 }
 function getActivityWebhook() { const u = (process.env.DISCORD_ACTIVITY_WEBHOOK_URL || '').trim(); return isValidDiscordWebhook(u) ? u : ''; }
 function getDevReportWebhook() { const u = (process.env.DISCORD_DEVREPORT_WEBHOOK_URL || '').trim(); return isValidDiscordWebhook(u) ? u : ''; }
+// v1.0.17: ช่องแยกสำหรับ "สรุปหลังจบไลฟ์" โดยเฉพาะ (เจ้าของร้านขอแยก channel) — ถ้าไม่ได้ตั้งไว้ สรุปจะไหลไปช่องแจ้งเตือนหลักตามเดิม
+function getLiveSummaryWebhook() { const u = (process.env.DISCORD_LIVE_SUMMARY_WEBHOOK_URL || '').trim(); return isValidDiscordWebhook(u) ? u : ''; }
 function getAppVersionSafe() { try { return require('./package.json').version; } catch (e) { return '?'; } }
 function getShopLabel() {
     const n = (merchantAccountName || process.env.MERCHANT_ACCOUNT_NAME || '').trim();
@@ -1129,6 +1134,7 @@ async function loadConfig() {
             if (item.key === 'shipping_fee') { const n = parseInt(item.value, 10); if (Number.isFinite(n)) shippingFee = n; }
             if (item.key === 'free_shipping_threshold') { const n = parseInt(item.value, 10); if (Number.isFinite(n)) freeShippingThreshold = n; }
             if (item.key === 'merchant_account_name') merchantAccountName = item.value;
+            if (item.key === 'merchant_account_name_en') merchantAccountNameEn = item.value || '';
             if (item.key === 'openchat_link') openchatLink = item.value; 
             if (item.key === 'slipok_package_limit') slipokPackageLimit = parseInt(item.value) || 100;
             if (item.key === 'active_live_session') {
@@ -1142,7 +1148,7 @@ async function loadConfig() {
 }
 loadConfig();
 
-app.get('/api/config', (req, res) => res.json({ prices: rawPriceString, shippingFee, freeShippingThreshold, merchantAccountName, openchatLink }));
+app.get('/api/config', (req, res) => res.json({ prices: rawPriceString, shippingFee, freeShippingThreshold, merchantAccountName, merchantAccountNameEn, openchatLink }));
 
 
 // ================= 🔐 AUTHENTICATION & SECURITY LAYER =================
@@ -1306,7 +1312,7 @@ app.use((req, res, next) => {
 });
 
 app.post('/api/config', async (req, res) => {
-    const { newPrices, newShipping, newThreshold, newMerchantName, newOpenchatLink } = req.body;
+    const { newPrices, newShipping, newThreshold, newMerchantName, newMerchantNameEn, newOpenchatLink } = req.body;
     try {
         if (newPrices !== undefined) { 
             rawPriceString = newPrices; priceList = parsePrices(newPrices); 
@@ -1318,6 +1324,7 @@ app.post('/api/config', async (req, res) => {
         if (Number.isFinite(shipNum) && shipNum >= 0) { shippingFee = shipNum; await supabase.from('configs').upsert([{ key: 'shipping_fee', value: String(shipNum) }]); }
         if (Number.isFinite(threshNum) && threshNum >= 0) { freeShippingThreshold = threshNum; await supabase.from('configs').upsert([{ key: 'free_shipping_threshold', value: String(threshNum) }]); }
         if (newMerchantName !== undefined) { merchantAccountName = newMerchantName.trim(); await supabase.from('configs').upsert([{ key: 'merchant_account_name', value: merchantAccountName }]); }
+        if (newMerchantNameEn !== undefined) { merchantAccountNameEn = String(newMerchantNameEn || '').trim(); await supabase.from('configs').upsert([{ key: 'merchant_account_name_en', value: merchantAccountNameEn }]); }
         if (newOpenchatLink !== undefined) { openchatLink = newOpenchatLink.trim(); await supabase.from('configs').upsert([{ key: 'openchat_link', value: openchatLink }]); }
         addLog('INFO', 'อัปเดตการตั้งค่าสินค้า/ค่าจัดส่งสำเร็จ');
         res.json({ success: true });
@@ -1482,7 +1489,8 @@ app.get('/api/admin/setup_keys', (req, res) => {
         customApiKey: process.env.CUSTOM_API_KEY ? `${process.env.CUSTOM_API_KEY.substring(0, 6)}...` : '',
         // 📡 แสดงแค่ว่าตั้งค่าแล้วหรือยัง (เลขท้ายรหัสช่อง) ไม่ส่งลิงก์เต็มกลับไป
         discordActivitySet: maskDiscordWebhook(process.env.DISCORD_ACTIVITY_WEBHOOK_URL),
-        discordDevReportSet: maskDiscordWebhook(process.env.DISCORD_DEVREPORT_WEBHOOK_URL)
+        discordDevReportSet: maskDiscordWebhook(process.env.DISCORD_DEVREPORT_WEBHOOK_URL),
+        discordLiveSummarySet: maskDiscordWebhook(process.env.DISCORD_LIVE_SUMMARY_WEBHOOK_URL)
     });
 });
 
@@ -1538,8 +1546,8 @@ app.post('/api/admin/setup_keys', async (req, res) => {
         }
         // 📡 Discord 2 ช่องของผู้พัฒนา: แก้ได้เฉพาะผู้พัฒนา และต้องเป็นลิงก์ Discord Webhook จริงเท่านั้น (ว่าง = ไม่เปลี่ยน)
         if (isDreamdev) {
-            const { discordActivityWebhook, discordDevReportWebhook } = req.body;
-            for (const [envName, val] of [['DISCORD_ACTIVITY_WEBHOOK_URL', discordActivityWebhook], ['DISCORD_DEVREPORT_WEBHOOK_URL', discordDevReportWebhook]]) {
+            const { discordActivityWebhook, discordDevReportWebhook, discordLiveSummaryWebhook } = req.body;
+            for (const [envName, val] of [['DISCORD_ACTIVITY_WEBHOOK_URL', discordActivityWebhook], ['DISCORD_DEVREPORT_WEBHOOK_URL', discordDevReportWebhook], ['DISCORD_LIVE_SUMMARY_WEBHOOK_URL', discordLiveSummaryWebhook]]) {
                 const v = String(val || '').trim();
                 if (!v) continue;
                 if (!isValidDiscordWebhook(v)) throw new Error('ลิงก์ Discord Webhook ไม่ถูกต้อง (ต้องขึ้นต้นด้วย https://discord.com/api/webhooks/)');
@@ -1997,14 +2005,17 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
                 existing.amount += slip.amount;
                 existing.draws += slip.draws || 0;
                 existing.slipIds.push(slip.id);
+                existing.slips.push({ id: slip.id, breakdown: breakdown || '' });   // v1.0.16: ไว้ให้ปุ่ม "แก้ไขสินค้า" แก้รายการรายสลิป
                 if (slip.arrived_out_of_round === 1) existing.outOfRound = true;
                 if (breakdown) existing.rawBreakdowns.push(breakdown);
             } else {
                 groupMap[statusGroup].set(key, {
                     id: slip.id, slipIds: [slip.id], name: slip.sender_name, lineName: slip.line_name,
                     amount: slip.amount, draws: slip.draws || 0, time: slip.trans_time, status: statusGroup,
-                    isPendingAmount: isPendingAmount, imageUrl: imageUrl,
+                    isPendingAmount: isPendingAmount, imageUrl: imageUrl, date: slip.trans_date,
                     outOfRound: slip.arrived_out_of_round === 1,   // v1.0.16: ป้าย "โอนนอกรอบ" (เงินมาตอนไม่มีไลฟ์)
+                    bankDelay: isPendingAmount ? (bankDelayHints.get(slip.id) || undefined) : undefined,   // v1.0.17: สลิปธนาคารที่ต้องรอ (Code 1010)
+                    slips: [{ id: slip.id, breakdown: breakdown || '' }],
                     rawBreakdowns: breakdown ? [breakdown] : []
                 });
             }
@@ -2015,6 +2026,27 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
         queues.called = processGroup(groupMap.called);
         queues.skipped = processGroup(groupMap.skipped);
         queues.abnormal_pending = processGroup(groupMap.abnormal_pending);
+
+        // v1.0.16: ไอคอน 📍 บนการ์ดคิว -- ลูกค้าคนนี้มีที่อยู่จัดส่งครบ (เบอร์โทร + รหัสไปรษณีย์ + ที่อยู่) แล้วหรือยัง (กติกาเดียวกับหน้าต่าง Kerry)
+        try {
+            const lineIdBySlipAll = new Map(queueData.map(s => [s.id, s.line_id]));
+            const allCards = [...queues.waiting, ...queues.called, ...queues.skipped, ...queues.abnormal_pending];
+            const uids = [...new Set(allCards.map(q => lineIdBySlipAll.get(q.id)).filter(Boolean))];
+            const addrByUid = {};
+            for (let i = 0; i < uids.length; i += 400) {
+                const keys = uids.slice(i, i + 400).map(u => `cust_addr_${u}`);
+                const ph = keys.map(() => '?').join(',');
+                supabase.db.prepare(`SELECT key, value FROM configs WHERE key IN (${ph})`).all(...keys).forEach(r => {
+                    try { addrByUid[r.key.replace('cust_addr_', '')] = JSON.parse(r.value); } catch (e) {}
+                });
+            }
+            allCards.forEach(q => {
+                const uid = lineIdBySlipAll.get(q.id);
+                if (!uid) return;
+                const a = addrByUid[uid];
+                q.hasAddress = !!(a && a.phone && a.postcode && (a.address || typeof a === 'string'));
+            });
+        } catch (e) { /* ไอคอนที่อยู่เป็นข้อมูลเสริม: ล้มเหลวต้องไม่กระทบคิว */ }
 
         // 📍 ลูกค้าที่เคยโอนไม่ครบ (การ์ดสีส้ม) แล้วโอนเพิ่มจนครบ: ครองตำแหน่งคิวเดิมตามเวลาที่ส่งสลิปใบแรกที่ยังไม่ครบ
         try {
@@ -2097,7 +2129,7 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
         const scopeIsCurrent = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
         if (scopeIsCurrent) imageFails = currentLineImageFailures();
     } catch (e) { imageFails = []; }
-    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.length }, queues, topups, recentSlips, imageFails };
+    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.filter(q => !q.isPendingAmount).length }, queues, topups, recentSlips, imageFails };
 }
 
 let broadcastTimer = null;
@@ -2175,7 +2207,7 @@ app.get('/api/history_data', async (req, res) => {
             
             let safeRef = `${transRef}|${breakdownStr}`;
 
-            return { id: slip.id, date: slip.trans_date, time: slip.trans_time, name: slip.sender_name, lineName: slip.line_name, amount: slip.amount, draws: slip.draws || 0, status: slip.status, ref: safeRef, sessionId: slip.session_id || null, outOfRound: slip.arrived_out_of_round === 1 };   // v1.0.16: ธง "โอนนอกรอบ" ใช้บอกในหน้าประวัติว่ายอดนี้เข้ามาตอนไม่มีไลฟ์แล้วถูกผูกเข้ารอบไหน
+            return { id: slip.id, date: slip.trans_date, time: slip.trans_time, name: slip.sender_name, lineName: slip.line_name, amount: slip.amount, draws: slip.draws || 0, status: slip.status, ref: safeRef, sessionId: slip.session_id || null, outOfRound: slip.arrived_out_of_round === 1, customerKey: slip.line_id || null };   // v1.0.16: ธง "โอนนอกรอบ" ใช้บอกในหน้าประวัติว่ายอดนี้เข้ามาตอนไม่มีไลฟ์แล้วถูกผูกเข้ารอบไหน
         });
 
         // v1.0.15: สรุปยอดโอนแยกตามรอบไลฟ์ (นับทั้งรอบ แม้ไลฟ์ข้ามเที่ยงคืน / ไม่นับสลิปที่ปัดตก)
@@ -2321,15 +2353,237 @@ app.post('/api/queue/dismiss_image_fail', async (req, res) => {
 });
 
 // 🔴 LIVE SESSION API -----------------------------------------
+// 🔎 v1.0.17: วิเคราะห์ปัญหาที่เจอในรอบไลฟ์ — กฎตายตัวจับจาก "ข้อความ log ที่โปรแกรมเขียนเอง" (ไม่ใช้ AI ไม่เดาสาเหตุ)
+// หลักการ: แต่ละกฎบอกเฉพาะสิ่งที่ข้อความนั้น / เอกสาร SlipOK / พฤติกรรมของโค้ดยืนยันได้ ข้อความที่ไม่ตรงกฎใดจะแสดงดิบ ๆ พร้อมบอกตรง ๆ ว่ายังไม่มีคำวิเคราะห์
+// ข้อควรระวังตอนแก้: ตัวดึงฟังก์ชันของเทสต์ (tests/harness/extract.js) ไม่รู้จัก regex ที่มีเครื่องหมายคำพูดหรือ backtick อยู่ข้างใน — ใช้ split แทน
+function quotedNamesOf(message) {
+    return String(message || '').split('"').filter((_, i) => i % 2 === 1);
+}
+
+function getLiveIssueRules() {
+    const OPEN_CARD = 'เปิดรูปในการ์ดรอใส่ยอด ถ้าเป็นสลิปจริงให้ใส่ยอดเอง ถ้าไม่ใช่สลิปให้ปัดตก';
+    return [
+        { key: 'bank_delay', test: /Code 1010/, severity: 'LOW',
+          title: 'สลิปธนาคารที่ต้องรอหลังโอนถึงจะตรวจได้ (SlipOK 1010)',
+          detail: (g) => {
+              const seen = [];
+              g.messages.forEach(m => {
+                  const b = m.indexOf('ยังตรวจไม่ได้');
+                  const bank = (m.indexOf('สลิป') === 0 && b > 4) ? m.slice(4, b) : 'ธนาคารต้นทาง';
+                  const mm = m.match(/ประมาณ (\d+) นาที/);
+                  const t = bank + (mm ? ' รอประมาณ ' + mm[1] + ' นาที' : '');
+                  if (!seen.includes(t)) seen.push(t);
+              });
+              return seen.slice(0, 4).join(' • ');
+          },
+          meaning: 'ธนาคารต้นทางของลูกค้ายังไม่ให้ตรวจสลิปจนกว่าจะพ้นเวลาที่กำหนดหลังโอน (ตามเอกสาร SlipOK) ไม่ใช่สลิปผิดหรือสลิปปลอม รูปถูกเก็บไว้ในคิวรอใส่ยอดแล้ว',
+          action: 'ให้ลูกค้าส่งรูปเดิมซ้ำหลังพ้นเวลานั้น ระบบจะตรวจให้ หรือเปิดรูปในการ์ดรอใส่ยอดแล้วใส่ยอดเอง' },
+        { key: 'bank_outage', test: /Code 1009/, severity: 'LOW',
+          title: 'ระบบธนาคารขัดข้องชั่วคราว (SlipOK 1009)',
+          meaning: 'SlipOK แจ้งว่าธนาคารขัดข้องและขอให้ตรวจใหม่ในอีก 15 นาที เอกสาร SlipOK ระบุว่ารหัสนี้ไม่เสียโควต้า รูปถูกเก็บไว้ในคิวรอใส่ยอด',
+          action: 'เปิดรูปในการ์ดรอใส่ยอดแล้วใส่ยอดเอง หรือให้ลูกค้าส่งรูปเดิมซ้ำหลังผ่านไป 15 นาที' },
+        { key: 'quota', test: /Code 100[34]|HTTP 402|เครดิตตรวจสลิป.*หมดแล้ว|โควตา.*หมด/, severity: 'HIGH',
+          title: 'เครดิตหรือแพ็กเกจตรวจสลิปหมด',
+          meaning: 'ผู้ให้บริการตรวจสลิปปฏิเสธเพราะแพ็กเกจหมดอายุหรือใช้เกินโควต้า (SlipOK 1003/1004) หรือเครดิตไม่พอ (HTTP 402) ระหว่างนี้สลิปที่เข้ามาถูกส่งเข้าคิวให้ตรวจภาพเอง หรือสลับไปผู้ให้บริการสำรองถ้าตั้งไว้',
+          action: 'ต่อแพ็กเกจหรือเติมเครดิตที่ผู้ให้บริการ แล้วตรวจการ์ดรอใส่ยอดที่ค้างจากช่วงนั้น' },
+        { key: 'slipok_config', test: /Code 100[012]/, severity: 'HIGH',
+          title: 'ตั้งค่า SlipOK ไม่ถูกต้อง (1000-1002)',
+          meaning: 'โปรแกรมแปลรหัส 1000-1002 ว่า API Key หรือ Branch ID ไม่ถูกต้อง สลิปที่เข้ามาถูกส่งเข้าคิวรอใส่ยอด',
+          action: 'ตรวจ API Key และ Branch ID ในหน้าตั้งค่า' },
+        { key: 'slipok_unreachable', test: /เชื่อมต่อ SlipOK ไม่ได้/, severity: 'HIGH',
+          title: 'เชื่อมต่อ SlipOK ไม่ได้',
+          meaning: 'ไม่ได้รับคำตอบจาก SlipOK อาจเป็นเน็ตของเครื่องร้านสะดุดหรือบริการล่ม (ข้อมูลที่บันทึกไว้แยกไม่ได้ว่าเป็นข้อไหน) สลิปถูกเก็บไว้ในคิวรอใส่ยอด',
+          action: 'ตรวจอินเทอร์เน็ตของเครื่องร้าน แล้วใส่ยอดเองจากการ์ดรอใส่ยอด' },
+        { key: 'slipok_unknown', test: /SlipOK ตอบกลับข้อผิดพลาดที่ไม่รู้จัก/, severity: 'MEDIUM',
+          title: 'SlipOK ตอบรหัสที่โปรแกรมยังไม่รู้จัก',
+          meaning: 'รหัสนี้ไม่อยู่ในรายการที่โปรแกรมแปลความหมายได้ (รหัสอยู่ในข้อความด้านบน)',
+          action: 'เทียบรหัสกับเอกสาร SlipOK แล้วแจ้งผู้พัฒนา' },
+        { key: 'no_qr', test: /Code 1007/, severity: 'LOW',
+          title: 'SlipOK ไม่พบ QR Code ในรูป (1007)',
+          meaning: 'โปรแกรมแปลรหัสนี้ว่าไม่พบ QR Code ในรูป อาจไม่ใช่รูปสลิปหรือถูกครอบตัด ระบบยังบอกไม่ได้ว่ารูปแต่ละใบเป็นเพราะอะไร รูปถูกเก็บไว้ในคิวรอใส่ยอด',
+          action: OPEN_CARD },
+        { key: 'bad_image', test: /Code 100[56]/, severity: 'LOW',
+          title: 'รูปเปิดอ่านไม่ได้หรือไม่ใช่รูปภาพ (1005/1006)',
+          meaning: 'SlipOK อ่านไฟล์ที่ส่งมาเป็นรูปภาพไม่ได้ รูปถูกเก็บไว้ในคิวรอใส่ยอด',
+          action: OPEN_CARD },
+        { key: 'not_payment_qr', test: /Code 1008/, severity: 'LOW',
+          title: 'QR ในรูปไม่ใช่ QR ตรวจสอบการชำระเงิน (1008)',
+          meaning: 'มี QR ในรูป แต่ SlipOK ระบุว่าไม่ใช่ QR สำหรับตรวจสอบการชำระเงิน รูปถูกเก็บไว้ในคิวรอใส่ยอด',
+          action: OPEN_CARD },
+        { key: 'qr_expired', test: /Code 1011/, severity: 'LOW',
+          title: 'QR หมดอายุ หรือไม่พบรายการโอนจริง (1011)',
+          meaning: 'SlipOK ไม่พบรายการโอนจริงของ QR นี้ หรือ QR หมดอายุ ระบบแยกไม่ได้ว่าเป็นกรณีไหน รูปถูกเก็บไว้ในคิวรอใส่ยอด',
+          action: OPEN_CARD },
+        { key: 'mismatch', test: /Code 101[34]/, severity: 'MEDIUM',
+          title: 'SlipOK แจ้งว่ายอดหรือบัญชีผู้รับไม่ตรง (1013/1014)',
+          meaning: 'ผลตรวจจาก SlipOK ว่ายอดหรือบัญชีผู้รับไม่ตรง รูปถูกเก็บไว้ในคิวรอใส่ยอด',
+          action: 'เปิดรูปตรวจกับบัญชีร้านและยอดที่ลูกค้าโอน แล้วใส่ยอดเองหรือปัดตก' },
+        { key: 'wrong_account', test: /ตรวจพบสลิปโอนผิดบัญชี/, severity: 'HIGH',
+          title: 'สลิปโอนเข้าบัญชีที่ไม่ใช่ของร้าน (ไม่บันทึก)',
+          detail: (g) => g.messages.slice(0, 4).map(m => { const n = quotedNamesOf(m); return (n[0] || '?') + ' → ' + (n[1] || '?'); }).join(' • '),
+          meaning: 'ชื่อผู้รับบนสลิปไม่มีชื่อบัญชีร้านที่ตั้งไว้ (ไทยหรืออังกฤษ) อยู่ข้างใน ระบบจึงไม่บันทึกและไม่นับยอด ระบบเช็กจากชื่อ ไม่ได้เช็กเลขบัญชี',
+          action: 'ถ้าลูกค้าโอนผิดจริง แจ้งลูกค้า ถ้าเป็นบัญชีร้านจริง (เช่น สลิป TrueMoney ที่ชื่อผู้รับเป็นภาษาอังกฤษ) ให้ใส่ชื่อบัญชีอังกฤษในหน้าตั้งค่า แล้วให้ลูกค้าส่งสลิปใบเดิมอีกครั้ง' },
+        { key: 'duplicate', test: /ตรวจพบสลิปซ้ำ/, severity: 'LOW',
+          title: 'สลิปซ้ำ (เคยบันทึกไปแล้ว)',
+          meaning: 'รหัสอ้างอิงของสลิปตรงกับสลิปที่บันทึกไว้แล้ว ระบบไม่บันทึกและไม่นับยอดซ้ำ',
+          action: 'ไม่ต้องทำอะไรถ้าลูกค้าส่งซ้ำโดยไม่ได้ตั้งใจ ถ้าลูกค้าบอกว่าโอนใหม่ ให้ตรวจเวลาโอนบนสลิป' },
+        { key: 'linked_keyed', test: /ผูกเป็นใบเดียวกัน/, severity: 'LOW',
+          title: 'สลิปที่ตรวจผ่านตรงกับยอดที่แม่ค้ากรอกเองไว้',
+          meaning: 'ระบบถือเป็นใบเดียวกัน ผูกรหัสสลิปเข้าใบเดิม ไม่สร้างใบใหม่ จึงไม่นับยอดและสิทธิ์ซ้ำ (เงื่อนไข: ลูกค้าคนเดียวกัน ยอดเท่ากัน เวลาโอนไม่หลังเวลาที่รูปเข้า)',
+          action: 'ไม่ต้องทำอะไร ถ้าลูกค้าโอนก้อนใหม่ที่เวลาโอนหลังจากนั้น ระบบนับเป็นใบใหม่ตามปกติ' },
+        { key: 'open_pending', test: /ยังมีรูปรอใส่ยอดค้างอยู่/, severity: 'MEDIUM',
+          title: 'ลูกค้ามีรูปรอใส่ยอดค้าง ทั้งที่มีสลิปตรวจผ่านแล้ว',
+          meaning: 'ระบบแยกไม่ได้ว่ารูปที่ค้างเป็นใบเดียวกับสลิปที่ตรวจผ่านหรือคนละรายการ จึงบันทึกสลิปที่ตรวจผ่านตามปกติ และไม่ปัดตกรูปที่ค้างให้',
+          action: 'เปิดรูปที่ค้าง ถ้าเป็นใบเดียวกันให้ปัดตกการ์ดเก่า อย่ากรอกยอดซ้ำ' },
+        { key: 'incomplete_read', test: /อ่านได้แต่ข้อมูลไม่ครบ/, severity: 'MEDIUM',
+          title: 'ผู้ให้บริการอ่านสลิปได้ไม่ครบ (ส่งเข้าคิวให้ตรวจเอง)',
+          meaning: 'ได้คำตอบจากผู้ให้บริการ แต่ขาดยอดหรือรหัสอ้างอิง ระบบจึงไม่บันทึกอัตโนมัติ และส่งเข้าคิวให้แม่ค้าตรวจเอง',
+          action: 'เปิดรูปในการ์ดรอใส่ยอด แล้วใส่ยอดเอง' },
+        { key: 'image_download', test: /ดาวน์โหลดรูป.*จาก LINE ไม่สำเร็จ/, severity: 'HIGH',
+          title: 'ดึงรูปสลิปจาก LINE ไม่สำเร็จ',
+          meaning: 'โปรแกรมไม่ได้รับรูปสลิปของลูกค้าคนนี้ จึงไม่มีสลิปนั้นในคิว (สาเหตุที่โปรแกรมบันทึกไว้อยู่ในบรรทัด Error ของ system.log)',
+          action: 'เปิดแชทลูกค้าใน LINE OA ดูรูปสลิป แล้วใส่ยอดเอง หรือให้ลูกค้าส่งใหม่' },
+        { key: 'line_reply', test: /ส่ง replyToken ล้มเหลว|ส่งข้อความตอบกลับ LINE ล้มเหลว|Push Message สำรอง/, severity: 'MEDIUM',
+          title: 'ส่งข้อความตอบลูกค้าทาง LINE ไม่สำเร็จ',
+          meaning: 'ข้อความตอบกลับลูกค้าไม่ถูกส่ง สาเหตุที่เป็นไปได้ตามข้อความของโปรแกรม: replyToken หมดอายุหรือเน็ตช้า, Channel Access Token ผิด, หรือโควตาข้อความ LINE เต็ม (แยกไม่ได้ว่าข้อไหน)',
+          action: 'ตรวจ Channel Access Token และโควตาข้อความในบัญชี LINE Official ถ้าเกิดซ้ำ' },
+        { key: 'save_failed', test: /บันทึกสลิปอัตโนมัติ.*ไม่สำเร็จ/, severity: 'HIGH',
+          title: 'บันทึกสลิปอัตโนมัติไม่สำเร็จ (ส่งเข้าคิวให้ตรวจเอง)',
+          meaning: 'ฐานข้อมูลบันทึกสลิปไม่สำเร็จ (ข้อความผิดพลาดของระบบอยู่ในบรรทัดนี้) โปรแกรมส่งสลิปเข้าคิวให้แม่ค้าตรวจเอง',
+          action: 'เปิดการ์ดของลูกค้าคนนั้น ตรวจยอดกับรูปก่อนให้สินค้า ถ้าเกิดซ้ำส่ง system.log ให้ผู้พัฒนา' },
+        { key: 'db_busy', test: /ฐานข้อมูลไม่ว่างชั่วคราว/, severity: 'LOW',
+          title: 'ฐานข้อมูลไม่ว่างชั่วคราว (ลองบันทึกใหม่เอง)',
+          meaning: 'ฐานข้อมูลถูกใช้งานอยู่ตอนบันทึกสลิป โปรแกรมลองบันทึกซ้ำเอง',
+          action: 'ถ้ามี Error "บันทึกสลิปอัตโนมัติ… ไม่สำเร็จ" ของลูกค้าคนเดียวกันตามมา ให้ตรวจการ์ดของคนนั้น' },
+        { key: 'backup_failed', test: /เก็บสลิปสำรองไม่สำเร็จ/, severity: 'CRITICAL',
+          title: 'เก็บสลิปสำรองไม่สำเร็จ (สลิปอาจไม่อยู่ในระบบ)',
+          meaning: 'บันทึกอัตโนมัติและการเก็บสลิปสำรองล้มเหลวทั้งคู่ สลิปของลูกค้าคนนี้อาจไม่อยู่ในคิว',
+          action: 'เปิดแชท LINE ของลูกค้าคนนั้น ตรวจสลิปด้วยตัวเอง' },
+        { key: 'webhook_event', test: /ประมวลผล Webhook Event/, severity: 'HIGH',
+          title: 'ประมวลผลข้อความจาก LINE ไม่สำเร็จ',
+          meaning: 'เกิดข้อผิดพลาดตอนประมวลผลข้อความที่ LINE ส่งมา (สาเหตุอยู่ท้ายบรรทัดด้านบน) ข้อความหรือสลิปนั้นอาจไม่ถูกประมวลผล',
+          action: 'ตรวจแชทลูกค้าที่ส่งมาช่วงเวลานั้น' },
+        { key: 'line_signature', test: /x-line-signature|Channel Secret/, severity: 'MEDIUM',
+          title: 'LINE Webhook ถูกปฏิเสธ หรือยังไม่ได้ตั้ง Channel Secret',
+          meaning: 'ข้อความที่เข้ามาไม่มีลายเซ็นหรือลายเซ็นไม่ตรง จึงถูกปฏิเสธ (กลไกกันคนนอกส่งข้อมูลเข้ามา) หรือยังไม่ได้ตั้ง Channel Secret ระบบจึงตรวจที่มาของข้อความไม่ได้',
+          action: 'ถ้าเกิดกับข้อความจริงจาก LINE ให้ตรวจ Channel Secret ในหน้าตั้งค่า' },
+        { key: 'tunnel', test: /Tunnel|Webhook ซ้ำยังไม่สำเร็จ|อัปเดต LINE Webhook อัตโนมัติ/, severity: 'MEDIUM',
+          title: 'ท่อสัญญาณ (Tunnel) หรือการผูก LINE Webhook มีปัญหา',
+          meaning: 'ท่อเชื่อมต่อหลุดหรือผูกลิงก์กับ LINE ไม่สำเร็จ ในช่วงนั้น LINE อาจส่งสลิปมาไม่ถึงเครื่องร้าน โปรแกรมลองเชื่อมต่อหรือผูกใหม่เอง',
+          action: 'ดูแถบแดงบนหน้าจอ ถ้าเกิดบ่อยให้ตรวจเน็ตร้าน และตรวจแชทลูกค้าช่วงที่ท่อหลุดว่ามีสลิปที่ไม่เข้าระบบหรือไม่' },
+        { key: 'gemini', test: /Gemini AI/, severity: 'LOW',
+          title: 'AI อ่านที่อยู่ไม่สำเร็จ (ใช้ระบบสำรอง)',
+          meaning: 'Gemini อ่านที่อยู่ไม่สำเร็จหรือเกินโควตา โปรแกรมสลับไปอ่านด้วยระบบสำรอง (Regex)',
+          action: 'ตรวจที่อยู่ของลูกค้าที่ส่งมาช่วงนั้นก่อนส่งออก Kerry' },
+        { key: 'other_provider', test: /EasySlip|Thunder|SlipVerify|Custom API/, severity: 'MEDIUM',
+          title: 'ผู้ให้บริการตรวจสลิปอื่นตอบผิดพลาดหรือยังไม่ได้ตั้งค่า',
+          meaning: 'ผู้ให้บริการตอบกลับไม่ถูกต้อง หรือไม่ได้ใส่ Token ในการตั้งค่า (รายละเอียดอยู่ในข้อความด้านบน) โปรแกรมไม่ได้แยกสาเหตุเพิ่ม',
+          action: 'ดูบรรทัดเต็มใน system.log และตรวจการตั้งค่าผู้ให้บริการ' },
+        { key: 'crash', test: /Uncaught Exception|Unhandled Rejection/, severity: 'CRITICAL',
+          title: 'โปรแกรมเจอข้อผิดพลาดที่ไม่ได้ดักไว้',
+          meaning: 'เกิดข้อผิดพลาดนอกจุดที่โค้ดดักไว้ (สาเหตุอยู่ในข้อความด้านบน) โปรแกรมบันทึกรายละเอียดไว้ใน system.log',
+          action: 'เก็บ system.log ส่งให้ผู้พัฒนา' },
+        { key: 'restart', test: /ตัวเฝ้าโปรแกรมเปิดใหม่อัตโนมัติ/, severity: 'HIGH',
+          title: 'โปรแกรมหยุดทำงานแล้วถูกเปิดใหม่อัตโนมัติ',
+          meaning: 'ตัวเฝ้าเปิดโปรแกรมใหม่เพราะโปรแกรมหยุดทำงานผิดปกติ',
+          action: 'ดู supervisor.log และ system.log ช่วงก่อนหน้า ตามที่ข้อความระบุ' },
+        { key: 'disk', test: /พื้นที่เครื่องเหลือน้อย/, severity: 'MEDIUM',
+          title: 'พื้นที่ดิสก์เหลือน้อย',
+          meaning: 'โปรแกรมลบรูปสลิปเก่าให้เองแล้วตามจำนวนที่ระบุในข้อความ',
+          action: 'ย้ายไฟล์ที่ไม่ใช้ออกจากเครื่อง' }
+    ];
+}
+
+// จัดกลุ่ม Error/WARN ของรอบตามกฎด้านบน (ข้อความที่ไม่ตรงกฎใดจัดกลุ่มตามข้อความเมื่อตัดตัวเลขและชื่อออก)
+// คืนรายการกลุ่ม { type, key, rule|null, count, messages[] } เรียง ERROR ก่อน แล้วเรียงตามจำนวนมาก→น้อย
+function analyzeLiveIssues(issues) {
+    const rules = getLiveIssueRules();
+    const map = new Map();
+    (issues || []).forEach(it => {
+        const msg = String((it && it.message) || '');
+        const type = (it && it.type === 'ERROR') ? 'ERROR' : 'WARN';
+        const rule = rules.find(r => r.test.test(msg)) || null;
+        const norm = msg.split('"').map((s, i) => i % 2 === 1 ? '"…"' : s.replace(/\d+/g, '#')).join('');
+        const key = type + '|' + (rule ? rule.key : 'raw:' + norm.slice(0, 120));
+        let g = map.get(key);
+        if (!g) { g = { type, key: rule ? rule.key : ('raw[' + type + ']:' + norm.slice(0, 100)), rule, count: 0, messages: [] }; map.set(key, g); }
+        g.count++;
+        if (g.messages.length < 50) g.messages.push(msg);
+    });
+    return Array.from(map.values()).sort((a, b) => (a.type === b.type ? 0 : (a.type === 'ERROR' ? -1 : 1)) || b.count - a.count);
+}
+
+// ข้อความของ 1 กลุ่มในสรุป: เกิดอะไรขึ้น (ข้อเท็จจริงจาก log) / วิเคราะห์ (จากกฎ) / ควรทำ
+// v1.0.17: กลุ่มที่ยังไม่มีกฎ (rule = null) และมีความเห็นจาก AI (g.aiNote จาก getAiOpinionsForUnknownIssues)
+// จะแสดงเป็นข้อสันนิษฐานกำกับชัดว่ายังไม่ยืนยัน — ไม่แอบอ้างเป็นคำวิเคราะห์ของระบบ
+function renderLiveIssueGroup(g) {
+    const clip = (t, n) => { const x = String(t || '').replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 1) + '…' : x; };
+    const rule = g.rule;
+    let detail = '';
+    if (rule && typeof rule.detail === 'function') detail = rule.detail(g);
+    if (!detail && rule) {
+        const names = [];
+        g.messages.forEach(m => { const n = quotedNamesOf(m)[0]; if (n && !names.includes(n)) names.push(n); });
+        if (names.length) detail = 'ลูกค้า: ' + names.slice(0, 4).join(', ') + (names.length > 4 ? ' และอีก ' + (names.length - 4) + ' คน' : '');
+    }
+    if (!detail) detail = clip(g.messages[0], rule ? 160 : 200);
+    detail = clip(detail, 230);
+
+    let icon = '⚠️', label = '';
+    if (g.type === 'ERROR') {
+        if (rule) { const st = SEVERITY_STYLE[rule.severity] || SEVERITY_STYLE.MEDIUM; icon = st.icon; label = '**' + st.label + '** — '; }
+        else icon = '❔';
+    }
+    const title = rule ? rule.title : 'ข้อความที่ระบบยังไม่มีคำวิเคราะห์เฉพาะ';
+    const meaning = rule ? rule.meaning
+        : (g.aiNote ? '🤖 ความเห็นจาก AI (ยังไม่ยืนยัน): ' + clip(g.aiNote, 260) : 'ยังไม่มีคำวิเคราะห์เฉพาะสำหรับข้อความนี้ (ระบบไม่เดาสาเหตุ)');
+    const action = rule ? rule.action : 'ค้นข้อความด้านบนใน system.log ของร้านเพื่อดูรายละเอียดเต็ม';
+    const out = icon + ' ' + label + title + (g.count > 1 ? ' — ' + g.count + ' ครั้ง' : '') + '\n' +
+        '> เกิดอะไรขึ้น: ' + detail + '\n> วิเคราะห์: ' + meaning + '\n> ควรทำ: ' + action;
+    return out.length > 950 ? out.slice(0, 949) + '…' : out;
+}
+
+// สรุปสินค้าที่ได้สิทธิ์ของรอบ — กติกาเดียวกับหน้าประวัติ (public/history.html summarizeHistory): ไม่นับใบที่ปัดตก/ข้าม และ draws ต้อง > 0
+// breakdown เก็บใน qr_payload: "รหัสอ้างอิง|ชื่อ xจำนวน, ชื่อ xจำนวน" (ใบ manual_image คือ "manual_image|url|breakdown")
+function summarizeLiveProducts(rows) {
+    const counts = {};
+    let pieces = 0;
+    (rows || []).forEach(r => {
+        if (r.status === 'rejected' || r.status === 'skipped' || !(Number(r.draws) > 0)) return;
+        const payload = String(r.qr_payload || '');
+        const parts = payload.split('|');
+        const breakdown = payload.startsWith('manual_image') ? parts[2] : parts[1];
+        if (!breakdown) return;
+        breakdown.split(',').forEach(p => {
+            const t = p.trim();
+            if (!t) return;
+            const m = t.match(/(.+)\s+x(\d+)$/);
+            const name = m ? m[1].trim() : t;
+            const qty = m ? parseInt(m[2], 10) : 1;
+            counts[name] = (counts[name] || 0) + qty;
+            pieces += qty;
+        });
+    });
+    const list = Object.keys(counts).map(n => ({ name: n, qty: counts[n] })).sort((a, b) => (b.qty - a.qty) || a.name.localeCompare(b.name));
+    return { list, pieces };
+}
+
 // 🏁 v1.0.16: ตัวสร้าง embed สรุปหลังจบไลฟ์ (pure function — ตัดมาทดสอบแบบ unit test ได้ตรงๆ)
-// session = { id, startTimeStr, endTimeStr, startTime, endTime, holdMerge } / stats = { slips, amount, draws, customers, byStatus } / issues = [{type:'ERROR'|'WARN', message}]
-function buildEndOfLiveReportEmbed(session, stats, issues, meta = {}) {
+// session = { id, startTimeStr, endTimeStr, startTime, endTime, holdMerge } / stats = { slips, amount, draws, customers, byStatus, rejected?, products? } / issues = [{type:'ERROR'|'WARN', message}]
+// v1.0.17: + สลิปที่ปัดตก + สินค้าที่ออก + วิเคราะห์ปัญหาแยกกลุ่ม (analyzeLiveIssues) และคืนเป็น "หลาย embed" (1-2 อัน) เมื่อเนื้อหาล้นข้อจำกัด Discord
+// v1.0.17 (ตามคำขอเจ้าของร้าน): รายละเอียด WARN ไม่ถูกตัดทิ้ง — เกิน 1 ข้อความก็แบ่งเป็นข้อความที่ 2
+function buildEndOfLiveReportEmbeds(session, stats, issues, meta = {}, aiNotes = {}) {
     const fmtB = (n) => { const v = Math.round(Number(n) * 100) / 100; return Number.isInteger(v) ? String(v) : v.toFixed(2); };
     const durMs = (session.endTime || 0) - (session.startTime || 0);
     const h = Math.floor(durMs / 3600000), m = Math.floor((durMs % 3600000) / 60000);
     const durStr = durMs <= 0 ? 'น้อยกว่า 1 นาที' : (h > 0 ? `${h} ชม. ${m} นาที` : `${m} นาที`);
-    const errors = (issues || []).filter(i => i.type === 'ERROR');
-    const warns = (issues || []).filter(i => i.type === 'WARN');
+    const errCount = (issues || []).filter(i => i.type === 'ERROR').length;
+    const warnCount = (issues || []).filter(i => i.type === 'WARN').length;
+    const groups = analyzeLiveIssues(issues);
+    // v1.0.17: แนบความเห็น AI เฉพาะกลุ่มที่ยังไม่มีกฎ (ผู้เรียกสร้าง aiNotes จาก getAiOpinionsForUnknownIssues)
+    if (aiNotes && typeof aiNotes === 'object') groups.forEach(g => { if (!g.rule && aiNotes[g.key]) g.aiNote = aiNotes[g.key]; });
+    const errGroups = groups.filter(g => g.type === 'ERROR');
+    const warnGroups = groups.filter(g => g.type === 'WARN');
     const st = stats.byStatus || {};
 
     const fields = [
@@ -2337,34 +2591,119 @@ function buildEndOfLiveReportEmbed(session, stats, issues, meta = {}) {
         { name: '🧾 สลิปรอบนี้', value: `${stats.slips} ใบ`, inline: true },
         { name: '👥 ลูกค้า', value: `${stats.customers} คน`, inline: true },
         { name: '💰 ยอดรับรวม', value: `${fmtB(stats.amount)} บาท`, inline: true },
-        { name: '🎟️ สิทธิ์ที่ออก', value: `${stats.draws} ชิ้น`, inline: true },
-        { name: '📋 สถานะคิว', value: `รอ ${st.waiting || 0} • เรียกแล้ว ${st.called || 0} • ข้าม ${st.skipped || 0} • เสร็จ ${st.completed || 0} • รอตรวจ ${st.abnormal_pending || 0}`, inline: false }
+        { name: '🎟️ สิทธิ์ที่ออก', value: `${stats.draws} ชิ้น`, inline: true }
     ];
+    if (stats.rejected !== undefined) fields.push({ name: '🗑️ สลิปที่ปัดตก', value: `${stats.rejected} ใบ (ไม่นับในตัวเลขด้านบน)`, inline: true });
+    fields.push({ name: '📋 สถานะคิว', value: `รอ ${st.waiting || 0} • เรียกแล้ว ${st.called || 0} • ข้าม ${st.skipped || 0} • เสร็จ ${st.completed || 0} • รอตรวจ ${st.abnormal_pending || 0}`, inline: false });
     if (session.holdMerge) fields.push({ name: '🔗 รวมบิล', value: 'รอบนี้ตั้ง "รอรวมกับรอบหน้า" — ยังไม่ต้องแพ็คส่งแยกรอบนี้', inline: false });
 
-    // Error ทั้งหมดของรอบ + แนวทางแก้ไขจากชุดกฎเดียวกับช่อง Dev Report (ไม่ใช้ AI)
-    const MAX_ERR = 6;
-    let errText;
-    if (errors.length === 0) {
-        errText = 'ไม่พบ Error ในรอบนี้ 🎉';
-    } else {
-        errText = errors.slice(0, MAX_ERR).map(e => {
-            const a = assessErrorForDevReport('', e.message);
-            const s = SEVERITY_STYLE[a.severity] || SEVERITY_STYLE.MEDIUM;
-            return `${s.icon} **${s.label}** — ${String(e.message).slice(0, 120)}\n> แนวทางแก้ไข: ${a.fix}`;
-        }).join('\n');
-        if (errors.length > MAX_ERR) errText += `\n… และอีก ${errors.length - MAX_ERR} รายการ (ดูทั้งหมดได้ใน system.log ของร้าน)`;
-        if (errText.length > 1000) errText = errText.slice(0, 1000) + '…';
+    if (stats.products) {
+        const list = stats.products.list || [];
+        const MAXP = 15;
+        let text;
+        if (list.length === 0) text = 'ไม่มีสินค้าที่ได้สิทธิ์ในรอบนี้';
+        else {
+            text = list.slice(0, MAXP).map(p => `${p.name} ×${p.qty}`).join(' • ');
+            if (list.length > MAXP) text += ` • …และอีก ${list.length - MAXP} รายการ`;
+            text += '\n> นับเฉพาะใบที่ได้สิทธิ์ ไม่รวมใบที่ข้ามและที่ปัดตก (กติกาเดียวกับหน้าประวัติ)';
+            if (text.length > 1000) text = text.slice(0, 999) + '…';
+        }
+        fields.push({ name: `🛍️ สินค้าที่ออก (${stats.products.pieces || 0} ชิ้น, ${list.length} รายการ)`, value: text, inline: false });
     }
-    fields.push({ name: `🚨 Error ที่เจอในรอบนี้ (${errors.length})`, value: errText, inline: false });
-    if (warns.length > 0) fields.push({ name: '⚠️ คำเตือน (WARN)', value: `${warns.length} รายการ — รายละเอียดอยู่ใน Logs ของร้าน (เช่น สลิปซ้ำ, โอนผิดบัญชี, รูปโหลดไม่ได้)`, inline: false });
 
-    return {
-        title: `🏁 สรุปหลังจบไลฟ์ ${meta.shopLabel || ''}`.trim(),
-        color: errors.length > 0 ? 15158332 : (warns.length > 0 ? 16753920 : 3066993),
-        fields,
-        footer: { text: `AutoQueueforLive v${meta.version || '?'} • รหัสรอบ ${session.id || '-'}` }
+    // แพ็กกลุ่มปัญหาลงฟิลด์ (ฟิลด์ละไม่เกิน ~1000 ตัวอักษร ตามขีดจำกัด 1024 ของ Discord)
+    const pack = (name, contName, texts) => {
+        const out = [];
+        let cur = '';
+        texts.forEach(t => {
+            if (cur && (cur.length + 2 + t.length) > 1000) { out.push(cur); cur = t; }
+            else cur = cur ? cur + '\n\n' + t : t;
+        });
+        if (cur) out.push(cur);
+        return out.map((v, i) => ({ name: i === 0 ? name : contName, value: v, inline: false }));
     };
+    const sizeOf = (arr) => (`🏁 สรุปหลังจบไลฟ์ ${meta.shopLabel || ''}`).length + 120 + arr.reduce((a, f) => a + f.name.length + f.value.length, 0);
+    // v1.0.17: รายละเอียด WARN ห้ามหาย — ถ้าทั้งรอบใส่ข้อความเดียวไม่ไหว แบ่งเป็น 2 ข้อความ (สถิติ+Error / WARN)
+    // แทนที่จะตัดกลุ่ม WARN ทิ้งเหลือแค่ตัวเลขอย่างเดิม (เจ้าของร้านขอดูสาเหตุของทุกคำเตือน)
+    const errBlock = (maxErr) => {
+        if (errCount === 0) return [{ name: `🚨 Error ที่เจอในรอบนี้ (0)`, value: 'ไม่พบ Error ในรอบนี้ 🎉', inline: false }];
+        const shown = errGroups.slice(0, maxErr).map(renderLiveIssueGroup);
+        if (errGroups.length > maxErr) shown.push(`… และอีก ${errGroups.length - maxErr} ประเภท (ดูทั้งหมดใน system.log ของร้าน)`);
+        const head = `${errCount} รายการ (${errGroups.length} ประเภท)`;
+        return pack(`🚨 Error ที่เจอในรอบนี้ (${errCount})`, '🚨 Error (ต่อ)', [head].concat(shown));
+    };
+    const warnBlock = (maxWarn) => {
+        if (warnCount === 0) return [];
+        const shown = warnGroups.slice(0, maxWarn).map(renderLiveIssueGroup);
+        if (warnGroups.length > maxWarn) shown.push(`… และอีก ${warnGroups.length - maxWarn} ประเภท (ดูทั้งหมดใน system.log ของร้าน)`);
+        const head = `${warnCount} รายการ (${warnGroups.length} ประเภท)`;
+        return pack(`⚠️ คำเตือน (WARN) (${warnCount})`, '⚠️ คำเตือน (ต่อ)', [head].concat(shown));
+    };
+    const shrinkToFit = (block, maxList, baseFields, baseSize) => {
+        for (const n of maxList) {
+            const b = block(n);
+            if (baseSize + sizeOf(b) <= 5800 && baseFields + b.length <= 25) return b;
+        }
+        return block(maxList[maxList.length - 1]);
+    };
+    const mkEmbed = (fs, suffix, color) => ({
+        title: `🏁 สรุปหลังจบไลฟ์ ${meta.shopLabel || ''}${suffix}`.trim(),
+        color, fields: fs,
+        footer: { text: `AutoQueueforLive v${meta.version || '?'} • รหัสรอบ ${session.id || '-'}` }
+    });
+    const colorOf = (errs) => errs > 0 ? 15158332 : (warnCount > 0 ? 16753920 : 3066993);
+
+    const errFields = shrinkToFit(errBlock, [12, 10, 8, 6, 4], fields.length, sizeOf(fields));
+    const warnFields = shrinkToFit(warnBlock, [12, 8, 6, 4, 3, 2], 0, 0);   // ต่ำสุด 2 ประเภท + บรรทัดชี้ system.log — ไม่มีทางเหลือแค่ตัวเลข
+    const all = fields.concat(errFields, warnFields);
+    if (sizeOf(all) <= 5800 && all.length <= 25) {
+        return [mkEmbed(all, '', colorOf(errCount))];
+    }
+    return [
+        mkEmbed(fields.concat(errFields), '', colorOf(errCount)),
+        mkEmbed(warnFields, ' (ต่อ — คำเตือนของรอบนี้)', 16753920)
+    ];
+}
+
+// คืน embed แรกเมื่อผู้เรียกต้องการแค่อันเดียว (ใช้ภายใน/ทดสอบ)
+function buildEndOfLiveReportEmbed(session, stats, issues, meta = {}, aiNotes = {}) {
+    return buildEndOfLiveReportEmbeds(session, stats, issues, meta, aiNotes)[0];
+}
+
+// 🤖 v1.0.17: ขอ "ข้อสันนิษฐาน" จาก Gemini สำหรับกลุ่ม log ที่ยังไม่มีกฎวิเคราะห์ (เรียกครั้งเดียวต่อการจบไลฟ์ สูงสุด 8 กลุ่ม)
+// หลักการ: กฎของระบบยังเป็นคำวิเคราะห์หลัก (พิสูจน์ได้) — AI เป็นแค่ความเห็นเสริมกำกับชัดว่า "ยังไม่ยืนยัน"
+// พังหรือเกินโควตาเมื่อไหร่: คืน {} เงียบๆ รายงานสรุปยังออกตามปกติทุกกรณี และไม่ขอ AI เลยถ้าไม่มีกลุ่มที่ไม่รู้จัก
+async function getAiOpinionsForUnknownIssues(rawGroups) {
+    const out = {};
+    if (!process.env.GEMINI_API_KEY || !Array.isArray(rawGroups) || rawGroups.length === 0) return out;
+    try {
+        const list = rawGroups.slice(0, 8).map((g, i) => `${i + 1}. [${g.type}] ${String(g.messages[0] || '').replace(/\s+/g, ' ').slice(0, 200)}`);
+        const prompt = `คุณคือผู้ช่วยวิเคราะห์ log ของโปรแกรมจัดคิวร้านขายของไลฟ์ ข้อความต่อไปนี้คือ log ที่ระบบยังไม่มีคำวิเคราะห์เฉพาะ
+กรุณาให้ "ข้อสันนิษฐาน" ว่าน่าจะเกิดจากอะไร และควรตรวจอะไรต่อ ตอบเป็น JSON array เท่านั้น รูปแบบ [{"i":1,"opinion":"..."}]
+กติกา: ภาษาไทย ไม่เกิน 2 ประโยคต่อข้อ ระบุเฉพาะสิ่งที่อนุมานได้จากข้อความ ห้ามแต่งตัวเลขหรือชื่อที่ไม่มีใน log ถ้าไม่แน่ใจให้บอกว่าไม่แน่ใจ
+
+${list.join('\n')}`;
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
+        const res = await axios.post(url, {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: 'application/json' }
+        }, { timeout: 8000 });
+
+        const rawJson = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!rawJson) return out;
+        const parsed = JSON.parse(rawJson);
+        const arr = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.opinions) ? parsed.opinions : []);
+        rawGroups.slice(0, 8).forEach((g, i) => {
+            const hit = arr.find(x => x && Number(x.i) === i + 1 && x.opinion && String(x.opinion).trim() !== '');
+            if (hit) out[g.key] = String(hit.opinion).trim().slice(0, 300);
+        });
+        if (Object.keys(out).length > 0) addLog('INFO', `สรุปหลังจบไลฟ์: ได้ความเห็นเสริมจาก AI สำหรับปัญหาที่ยังไม่มีคำวิเคราะห์ ${Object.keys(out).length} กลุ่ม (แสดงกำกับว่ายังไม่ยืนยัน)`);
+    } catch (e) {
+        // ไม่ WARN รบกวน: การขาดความเห็น AI ไม่ใช่ปัญหาของร้าน — บันทึกเบาๆ ไว้เท่านั้น
+        addLog('INFO', `สรุปหลังจบไลฟ์: ขอความเห็นเสริมจาก AI ไม่สำเร็จ (${String(e.message).slice(0, 80)}) แสดงผลด้วยคำวิเคราะห์ของกฎตามปกติ`);
+    }
+    return out;
 }
 
 // 🏁 v1.0.16: ดึงสถิติของรอบที่เพิ่งจบ + รวบรวม Error/WARN ของรอบ ส่งเข้า Discord 1 ข้อความ (ทุกครั้งที่จบไลฟ์)
@@ -2378,13 +2717,20 @@ async function sendEndOfLiveReport(endedSession) {
         const byStatus = {};
         supabase.db.prepare("SELECT status, COUNT(*) AS n FROM slips WHERE session_id = ? AND status != 'rejected' GROUP BY status").all(sid)
             .forEach(r => { byStatus[r.status] = r.n; });
-        const stats = { slips: row.n || 0, amount: row.amt || 0, draws: row.dr || 0, customers: row.cust || 0, byStatus };
+        const rejRow = supabase.db.prepare("SELECT COUNT(*) AS n FROM slips WHERE session_id = ? AND status = 'rejected'").get(sid) || {};
+        const prodRows = supabase.db.prepare("SELECT qr_payload, status, draws FROM slips WHERE session_id = ? AND status NOT IN ('rejected', 'skipped') AND draws > 0").all(sid);
+        const stats = { slips: row.n || 0, amount: row.amt || 0, draws: row.dr || 0, customers: row.cust || 0, byStatus, rejected: rejRow.n || 0, products: summarizeLiveProducts(prodRows) };
 
-        const embed = buildEndOfLiveReportEmbed(endedSession, stats, issues, { version: getAppVersionSafe(), shopLabel: getShopLabel() });
-        // ส่งเข้าช่องแจ้งเตือนหลัก ถ้าไม่ได้ตั้งไว้ก็ไหลไปช่องกิจกรรม/ช่อง Dev Report ที่ตั้งไว้แทน เพื่อให้สรุปมาถึงทุกครั้ง
-        const url = DISCORD_WEBHOOK_URL || getActivityWebhook() || getDevReportWebhook();
+        // 🤖 v1.0.17: กลุ่มปัญหาที่ยังไม่มีกฎวิเคราะห์ → ขอความเห็นเสริมจาก Gemini (ครั้งเดียว จำกัดเวลา พังก็ข้ามได้เสมอ)
+        const rawGroups = analyzeLiveIssues(issues).filter(g => !g.rule);
+        const aiNotes = await getAiOpinionsForUnknownIssues(rawGroups);
+
+        const embeds = buildEndOfLiveReportEmbeds(endedSession, stats, issues, { version: getAppVersionSafe(), shopLabel: getShopLabel() }, aiNotes);
+        // v1.0.17: มีช่องแยกสำหรับสรุปหลังจบไลฟ์ (DISCORD_LIVE_SUMMARY_WEBHOOK_URL) ให้ส่งเฉพาะช่องนั้น
+        // ถ้ายังไม่ได้ตั้ง ไหลไปช่องแจ้งเตือนหลัก → ช่องกิจกรรม → ช่อง Dev Report ตามลำดับ เพื่อให้สรุปมาถึงทุกครั้ง
+        const url = getLiveSummaryWebhook() || DISCORD_WEBHOOK_URL || getActivityWebhook() || getDevReportWebhook();
         if (!url) return;
-        discordAlertQueue.push({ url, payload: { embeds: [embed] } });
+        embeds.forEach(embed => discordAlertQueue.push({ url, payload: { embeds: [embed] } }));
         await processDiscordQueue();
     } catch (e) {
         console.error('ส่งสรุปหลังจบไลฟ์เข้า Discord ไม่สำเร็จ:', e.message);
@@ -2962,7 +3308,7 @@ app.get('/api/kerry/export_excel', async (req, res) => {
             row.getCell(9).value = '';                                            // Col 9: กว้าง/Width(cm)
             row.getCell(10).value = '';                                           // Col 10: ยาว/Length(cm)
             row.getCell(11).value = '';                                           // Col 11: สูง/Height(cm)
-            row.getCell(12).value = [addr.remark, order.outOfRound ? '🕒 โอนนอกรอบ (เงินมาทีหลัง) — ตรวจสอบก่อนส่ง' : ''].filter(Boolean).join(' ');  // Col 12: Remark (v1.0.16: ป้ายยอดนอกรอบ)
+            row.getCell(12).value = addr.remark || '';                            // Col 12: Remark (ไฟล์นี้อัปโหลดให้ Kerry — ห้ามใส่โน้ตภายใน เจ้าของสั่งเอาโน้ตโอนนอกรอบออกแล้ว)
             row.getCell(13).value = `ORDER${String(index + 1).padStart(4, '0')}`;  // Col 13: Ref #1
             row.getCell(14).value = order.lineName || '';                         // Col 14: Ref #2
             row.getCell(15).value = senderName;                                   // Col 15: Sender Ref
@@ -3206,6 +3552,73 @@ app.post('/api/queue/reject_slip', async (req, res) => {
     }
 });
 
+// ✏️ v1.0.16: แม่ค้าแก้ไขรายการสินค้าเอง เมื่อระบบคำนวณจำนวน/เลือกสินค้าให้ผิด
+// แก้เฉพาะ "สินค้าอะไรกี่ชิ้น" (draws + ข้อความ breakdown ใน qr_payload) เท่านั้น
+// ห้ามแตะ: ยอดเงินที่โอนมาจริง (amount), สถานะ, เงินในกระเป๋าลูกค้า — เงินเป็นข้อเท็จจริงจากสลิป ส่วนการ์ดที่ยังค้างในคิวเท่านั้นที่แก้ได้
+app.post('/api/queue/edit_items', async (req, res) => {
+    try {
+        const slipId = Number(req.body && req.body.slipId);
+        const items = Array.isArray(req.body && req.body.items) ? req.body.items : null;
+        if (!Number.isInteger(slipId) || slipId <= 0 || !items) {
+            return res.status(400).json({ success: false, message: 'ข้อมูลไม่ถูกต้อง (ต้องระบุ slipId และรายการสินค้า)' });
+        }
+
+        // ตรวจรายการ: ชื่อ 1-60 ตัวอักษรหลังตัดช่องว่าง, จำนวนเป็นจำนวนเต็ม 0-99, ห้ามชื่อซ้ำ (qty=0 ตัดทิ้ง)
+        const clean = [];
+        for (const it of items) {
+            const name = String((it && it.name) || '').trim().slice(0, 60);
+            const qty = Number(it && it.qty);
+            if (!name || name.includes('|') || !Number.isInteger(qty) || qty < 0 || qty > 99) {   // "|" คือตัวคั่นข้อมูลในสลิป ห้ามอยู่ในชื่อสินค้า
+                return res.status(400).json({ success: false, message: `รายการสินค้าหรือจำนวนไม่ถูกต้อง: "${name || '?'}" x${qty}` });
+            }
+            if (qty > 0 && !clean.some(c => c.name === name)) clean.push({ name, qty });
+        }
+        const breakdown = clean.map(c => `${c.name} x${c.qty}`).join(', ');
+        const draws = clean.reduce((s, c) => s + c.qty, 0);
+
+        const slip = supabase.db.prepare('SELECT * FROM slips WHERE id = ?').get(slipId);
+        if (!slip) return res.status(404).json({ success: false, message: 'ไม่พบสลิปนี้' });
+        if (!['waiting', 'called', 'skipped', 'abnormal_pending'].includes(slip.status)) {
+            return res.status(409).json({ success: false, message: 'แก้ไขได้เฉพาะการ์ดที่ยังค้างอยู่ในคิวเท่านั้น (ไม่รวมที่จบแล้ว/ปัดตกแล้ว)' });
+        }
+
+        // คงส่วนอื่นของ qr_payload ไว้: ปกติคือ "รหัสอ้างอิง|breakdown" ส่วนของ manual_image คือ "manual_image|url|breakdown"
+        const parts = String(slip.qr_payload || '').split('|');
+        const isManual = slip.qr_payload && slip.qr_payload.startsWith('manual_image');
+        const oldBreakdown = isManual ? (parts[2] || '') : (parts[1] || '');
+        if (isManual) parts[2] = breakdown;
+        else if (parts.length > 1) parts[1] = breakdown;
+        else parts.push(breakdown);
+
+        supabase.db.prepare('UPDATE slips SET draws = ?, qr_payload = ? WHERE id = ?').run(draws, parts.join('|'), slipId);
+        addLog('INFO', `🖥️ แม่ค้าแก้ไขรายการสินค้า — ${slip.line_name || 'ลูกค้า'}: เดิม "${oldBreakdown || '-'}" → ใหม่ "${breakdown || '-'}" รวม ${draws} ชิ้น (สลิป #${slipId}, ยอดโอน ${slip.amount} บาท ไม่เปลี่ยน)`);
+        await broadcastTodayStats();
+        res.json({ success: true, draws, breakdown });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ✏️ v1.0.16: ข้อมูลให้หน้าต่างแก้ไขสินค้าบอกแม่ค้าว่า "ลูกค้าคนนี้ซื้อรวมกี่ชิ้นในรอบไลฟ์นี้" และค่าส่งเป็นอย่างไร
+// otherDraws = ชิ้นของลูกค้าคนนี้ในรอบ (นับตามกติกาเดียวกับตอนคิดค่าส่ง รวมรอบที่รวมบิล) ที่ไม่ได้อยู่ในการ์ดที่กำลังแก้
+app.get('/api/queue/slip_heartbeat', (req, res) => res.json({ success: true, at: lastSlipIngestAt }));
+
+app.get('/api/queue/edit_items_context', (req, res) => {
+    try {
+        const slipIds = String(req.query.slipIds || '').split(',').map(Number).filter(n => Number.isInteger(n) && n > 0);
+        if (slipIds.length === 0) return res.status(400).json({ success: false, message: 'ต้องระบุ slipIds' });
+        const rows = slipIds.map(id => supabase.db.prepare('SELECT id, line_id, draws, status FROM slips WHERE id = ?').get(id));
+        if (rows.some(r => !r)) return res.status(404).json({ success: false, message: 'ไม่พบสลิป' });
+        const lineId = rows[0].line_id;
+        if (rows.some(r => r.line_id !== lineId)) return res.status(400).json({ success: false, message: 'สลิปไม่ใช่ของลูกค้าคนเดียวกัน' });
+        const roundTotal = lineId ? countPastDraws(lineId, { excludeRejected: true }) : 0;
+        const mine = rows.filter(r => r.status !== 'rejected').reduce((s, r) => s + (Number(r.draws) || 0), 0);
+        res.json({ success: true, otherDraws: Math.max(0, roundTotal - mine), shippingFee, freeShippingThreshold });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 async function getLineProfile(userId) {
     try { 
         const res = await axios.get(`https://api.line.me/v2/bot/profile/${userId}`, { headers: { 'Authorization': `Bearer ${process.env.LINE_ACCESS_TOKEN}` } }); 
@@ -3302,10 +3715,11 @@ function carryOutOfRoundNotices(sessionId) {
 }
 // v1.0.16: สลิปที่ระบบ "ไม่บันทึก" โดยตั้งใจ (โอนผิดบัญชี / ซ้ำกับของลูกค้าอื่นหรือที่ปัดตกไปแล้ว) เดิมเงียบ เหลือแค่บรรทัดใน Logs
 // ตอนนี้แสดงการ์ดบนหน้าจอให้แม่ค้ารับทราบ (การ์ดเดียวกับกรณีโหลดรูปไม่สำเร็จ ไม่แตะยอด/สลิป/ฐานข้อมูล)
-async function notifyUnrecordedSlip(customerName, messageId, reason) {
+async function notifyUnrecordedSlip(customerName, messageId, reason, kind = 'other') {
     try {
         recordLineImageFailure(customerName, messageId, reason);
-        io.emit('image_failed');
+        // v1.0.16: ส่ง slip_warning (Toast + บี๊ปคู่ 600Hz ที่หน้าจอ) แทน image_failed เพื่อไม่ให้เสียงดังซ้อนกัน
+        io.emit('slip_warning', { kind, name: customerName || 'ลูกค้า (ไม่ทราบชื่อ)', reason });
         await broadcastTodayStats();
     } catch (notifyErr) { /* การแจ้งเตือนหน้าจอล้มเหลวต้องไม่ทำให้ Webhook พัง */ }
 }
@@ -3319,12 +3733,78 @@ let providerQuotaState = {
     message: ''
 };
 
+// ===== v1.0.17: แปลรหัส Error ของ SlipOK ให้ตรงความหมายตามเอกสาร (https://slipok.com/api-documentation/error-status-code/) =====
+// เดิมทุกรหัสถูก log เป็น ERROR ว่า "สลิปอาจไม่ถูกต้อง หรือวงเงินเครดิตหมด" และรหัส 1009/1006/1008 ถูกนับเป็น "เครดิตหมด" ผิดๆ
+// level: WARN = เหตุการณ์ปกติของลูกค้า/ธนาคาร (ไม่ส่ง Dev Report) | ERROR = ตั้งค่าผิด/แพ็กเกจหมด/ไม่รู้จัก (ควรดู)
+function classifySlipOkError(httpStatus, body) {
+    const code = body ? Number(body.code) : NaN;
+    const d = (body && body.data) || {};
+    const T = (kind, level, message, extra) => Object.assign({ kind, level, message, code: Number.isFinite(code) ? code : null }, extra || {});
+    if (code === 1010) {
+        const bank = d.bankName ? 'ธนาคาร' + d.bankName : 'ธนาคารต้นทาง';
+        const delay = Number(d.delay) > 0 ? Number(d.delay) : null;
+        return T('bank_delay', 'WARN', 'สลิป' + bank + 'ยังตรวจไม่ได้ ต้องรอ' + (delay ? 'ประมาณ ' + delay + ' นาที' : 'สักครู่') + 'หลังโอน (SlipOK Code 1010) ไม่ใช่สลิปผิด ระบบเก็บรูปไว้ในคิวรอใส่ยอด ให้ลูกค้าส่งรูปเดิมซ้ำหลังเวลานั้น ระบบจะตรวจให้เอง', { bankName: d.bankName || '', delay });
+    }
+    if (code === 1009) return T('bank_outage', 'WARN', 'ระบบธนาคารขัดข้องชั่วคราว SlipOK ขอให้ตรวจใหม่ในอีก 15 นาที (Code 1009 เอกสาร SlipOK ระบุว่าไม่เสียโควต้า) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1003) return T('quota', 'ERROR', 'แพ็กเกจ SlipOK หมดอายุ (Code 1003) ต้องต่ออายุแพ็กเกจ');
+    if (code === 1004) return T('quota', 'ERROR', 'ใช้เกินโควต้า SlipOK ถึงวงเงินที่กำหนด (Code 1004) ต้องต่อแพ็กเกจ');
+    if (Number(httpStatus) === 402) return T('quota', 'ERROR', 'SlipOK แจ้งว่าเครดิตไม่พอ (HTTP 402)');
+    if (code === 1005 || code === 1006) return T('bad_image', 'WARN', 'รูปที่ลูกค้าส่งมาเปิดอ่านไม่ได้หรือไม่ใช่รูปภาพ (Code ' + code + ') รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1007) return T('no_qr', 'WARN', 'ไม่พบ QR Code ในรูปที่ลูกค้าส่งมา อาจไม่ใช่สลิปหรือถูกครอบตัด (Code 1007) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1008) return T('not_payment_qr', 'WARN', 'QR ในรูปไม่ใช่ QR ตรวจสอบการชำระเงิน (Code 1008) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1011) return T('qr_expired', 'WARN', 'QR หมดอายุ หรือไม่พบรายการโอนจริง (Code 1011) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1013 || code === 1014) return T('mismatch', 'WARN', 'SlipOK แจ้งว่ายอดหรือบัญชีผู้รับไม่ตรง (Code ' + code + ') รูปถูกเก็บไว้ในคิวรอใส่ยอด');
+    if (code === 1000 || code === 1001 || code === 1002) return T('config', 'ERROR', 'ตั้งค่า SlipOK ไม่ถูกต้อง (Code ' + code + ' ตรวจ API Key และ Branch ID ในหน้าตั้งค่า)');
+    if (!body) return T('other', 'ERROR', 'เชื่อมต่อ SlipOK ไม่ได้ (เน็ตสะดุดหรือบริการล่ม) สลิปถูกเก็บไว้ในคิวรอใส่ยอด');
+    return T('other', 'ERROR', 'SlipOK ตอบกลับข้อผิดพลาดที่ไม่รู้จัก' + (Number.isFinite(code) ? ' (Code ' + code + ')' : '') + (httpStatus ? ' HTTP ' + httpStatus : ''));
+}
+// ป้ายบนการ์ดรอใส่ยอด: สลิปธนาคารที่ต้องรอ (เก็บในหน่วยความจำ หายตอนปิดโปรแกรม = การ์ดกลับไปใช้ข้อความทั่วไป)
+const bankDelayHints = new Map();
+function rememberBankDelayHint(slipId, info) {
+    if (!slipId || !info) return;
+    bankDelayHints.set(slipId, { bankName: info.bankName || '', delay: info.delay || null, at: Date.now() });
+    if (bankDelayHints.size > 300) bankDelayHints.delete(bankDelayHints.keys().next().value);
+}
+// ===== v1.0.17: กันนับยอดซ้ำระหว่าง "สลิปที่แม่ค้ากรอกยอดเอง" กับ "สลิปใบเดียวกันที่ตรวจผ่านทีหลัง" =====
+// เวลาโอนบนสลิปที่ตรวจผ่าน ต้องไม่เกินเวลาที่รูปเข้ามาในระบบ (รูปมาหลังโอนเสมอ) -- ถ้าโอนใหม่ทีหลังรูปแรก เวลาโอนจะใหม่กว่า ถือเป็นเงินก้อนใหม่ ไม่ใช่ใบเดิม
+function stampToSec(dateStr, timeStr) {
+    const d = String(dateStr || '').match(/^(\d{4})(\d{2})(\d{2})$/);
+    const t = String(timeStr || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!d || !t) return null;
+    return Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]), Number(t[3] || 0)) / 1000;
+}
+const MANUAL_MATCH_TOLERANCE_SEC = 120;   // เผื่อนาฬิกาเครื่องร้านกับนาฬิกาธนาคารต่างกันเล็กน้อย
+function pickManualMatch(rows, amount, transferSec, toleranceSec = MANUAL_MATCH_TOLERANCE_SEC) {
+    if (transferSec === null || transferSec === undefined || !Number.isFinite(Number(amount))) return null;
+    for (const r of rows || []) {
+        if (Math.abs(Number(r.amount) - Number(amount)) > 0.005) continue;
+        const arrive = stampToSec(r.trans_date, r.trans_time);
+        if (arrive === null) continue;
+        if (arrive + toleranceSec >= transferSec) return r;
+    }
+    return null;
+}
+
+// ===== v1.0.17: เช็กว่าสลิปโอนเข้าบัญชีร้านหรือไม่ =====
+// SlipOK ตอบชื่อผู้รับได้ 3 ช่อง (displayName / name / accountName) และบางสลิป (เช่น TrueMoney) ตอบเป็นอังกฤษล้วน
+// จึงเทียบ "ทุกช่อง" กับ "ทุกชื่อของร้าน" (ไทย + อังกฤษ) ผ่านถ้ามีอย่างน้อย 1 คู่ที่ชื่อร้านเป็นส่วนหนึ่งของชื่อผู้รับ (ไม่สนตัวพิมพ์เล็กใหญ่)
+// ไม่ได้ตั้งชื่อร้านเลย = ไม่เช็ก
+function receiverMatchesShop(receiver, shopNames) {
+    const wanted = (shopNames || []).map(n => String(n || '').trim().toLowerCase()).filter(Boolean);
+    if (wanted.length === 0) return { checked: false, ok: true, shown: '' };
+    const r = receiver || {};
+    const texts = [];
+    [r.displayName, r.name, r.accountName].forEach(t => { const s = String(t || '').trim(); if (s && !texts.includes(s)) texts.push(s); });
+    const ok = texts.some(t => wanted.some(w => t.toLowerCase().includes(w)));
+    return { checked: true, ok, shown: texts.join(' / ') };
+}
+
 function handleProviderQuotaExhaustion(providerName, error) {
     const errText = (error.response ? JSON.stringify(error.response.data) : error.message).toLowerCase();
     const status = error.response?.status;
     const code = error.response?.data?.code;
     
-    if (status === 402 || code === 1009 || code === 1006 || code === 1008 || errText.includes('quota') || errText.includes('credit') || errText.includes('insufficient') || errText.includes('exceeded')) {
+    if (status === 402 || (providerName === 'slipok' && (code === 1003 || code === 1004)) || errText.includes('quota') || errText.includes('credit') || errText.includes('insufficient') || errText.includes('exceeded')) {
         providerQuotaState = {
             provider: providerName,
             balance: 0,
@@ -3732,7 +4212,8 @@ async function verifyWithSlipOK(imageBuffer) {
             return { success: true, data: error.response.data.data };
         }
         const errData = error.response ? JSON.stringify(error.response.data) : error.message;
-        addLog('ERROR', 'SlipOK ยืนยันสลิปไม่สำเร็จ (สลิปอาจไม่ถูกต้อง หรือวงเงินเครดิต SlipOK หมด)', errData);
+        const slipOkInfo = classifySlipOkError(error.response ? error.response.status : null, error.response ? error.response.data : null);
+        addLog(slipOkInfo.level, slipOkInfo.message, errData);
         return error.response ? error.response.data : null; 
     }
 }
@@ -4072,6 +4553,8 @@ app.post('/webhook', async (req, res) => {
                             key: addrConfigKey,
                             value: JSON.stringify(parsedAddress)
                         }]);
+                        // v1.0.16: บอกหน้าจอแม่ค้าทันที (Toast เขียว + ไอคอน 📍 บนการ์ดคิวเปลี่ยนเป็นมีที่อยู่) ไม่ต้องรอสลิปใบถัดไป
+                        try { io.emit('address_updated', { name: parsedAddress.recipient_name || lineName }); broadcastTodayStats(); } catch (e) { /* หน้าจอล้มเหลวต้องไม่ทำให้ Webhook พัง */ }
 
                         let confirmMsg = `📦 ผักกาดบันทึกที่อยู่จัดส่งให้เรียบร้อยแล้วค่า!\n` +
                                          `👤 ผู้รับ: ${parsedAddress.recipient_name}\n` +
@@ -4090,6 +4573,8 @@ app.post('/webhook', async (req, res) => {
         }
         else if (event.type === 'message' && event.message.type === 'image') {
             const messageId = event.message.id;
+            lastSlipIngestAt = Date.now();
+            try { io.emit('slip_ingest', { at: lastSlipIngestAt }); } catch (e) { /* ตัวนับเป็นข้อมูลเสริม */ }
             const imageBuffer = await downloadImageFromLine(messageId);
             if (!imageBuffer) {
                 // 🛡️ อย่าทิ้งเงียบ: บันทึก Log ให้แม่ค้า/แอดมินรู้ว่ามีลูกค้าส่งรูปมาแต่ดาวน์โหลดจาก LINE ไม่สำเร็จ
@@ -4132,14 +4617,14 @@ app.post('/webhook', async (req, res) => {
             if (slipResult && slipResult.success) {
                 const slipData = slipResult.data;
 
-                if (merchantAccountName && merchantAccountName.trim() !== "") {
-                    let receiverName = "";
-                    if (slipData.receiver) receiverName = slipData.receiver.displayName || slipData.receiver.name || slipData.receiver.accountName || "";
-                    const searchName = merchantAccountName.trim().toLowerCase();
-                    const actualName = receiverName.toLowerCase();
-                    if (!actualName.includes(searchName)) {
-                        await notifyUnrecordedSlip(lineName, messageId, `สลิปโอนเข้าบัญชี "${receiverName || 'ไม่ทราบชื่อ'}" ไม่ตรงกับชื่อบัญชีร้าน "${merchantAccountName}" (ยอด ${fmtBaht(slipData.amount)} บาท) ระบบไม่ได้บันทึกสลิปนี้`);
-                        addLog('WARN', `ตรวจพบสลิปโอนผิดบัญชี: ลูกค้า "${lineName}" โอนเข้าบัญชี "${receiverName}" (ไม่ใช่ "${merchantAccountName}")`);
+                {
+                    const shopNames = [merchantAccountName, merchantAccountNameEn];
+                    const shopCheck = receiverMatchesShop(slipData.receiver, shopNames);
+                    if (shopCheck.checked && !shopCheck.ok) {
+                        const receiverName = shopCheck.shown;
+                        const shopLabel = shopNames.map(n => String(n || '').trim()).filter(Boolean).map(n => '"' + n + '"').join(' หรือ ');
+                        await notifyUnrecordedSlip(lineName, messageId, `สลิปโอนเข้าบัญชี "${receiverName || 'ไม่ทราบชื่อ'}" ไม่ตรงกับชื่อบัญชีร้าน ${shopLabel} (ยอด ${fmtBaht(slipData.amount)} บาท) ระบบไม่ได้บันทึกสลิปนี้`, 'wrong_account');
+                        addLog('WARN', `ตรวจพบสลิปโอนผิดบัญชี: ลูกค้า "${lineName}" โอนเข้าบัญชี "${receiverName}" (ไม่ใช่ ${shopLabel})`);
                         // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้โอนไปที่บัญชี "${receiverName || 'ไม่ทราบชื่อ'}" นะคะ ซึ่งไม่ใช่บัญชีของผักกาดน้า รบกวนคุณลูกค้าเช็คบัญชีผู้รับอีกทีนะคะ 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                         continue;
                     }
@@ -4154,13 +4639,32 @@ app.post('/webhook', async (req, res) => {
                     // v1.0.16: ลูกค้าคนเดิมส่งสลิปซ้ำเป็นเรื่องปกติ (ยังเป็นแค่บรรทัดใน Logs) แต่ถ้าเป็นสลิปของลูกค้าคนอื่น หรือใบที่แม่ค้าปัดตกไปแล้ว ให้ขึ้นการ์ดให้รู้
                     if ((existingSlip.line_id && existingSlip.line_id !== userId) || existingSlip.status === 'rejected') {
                         const dupWho = (existingSlip.line_id && existingSlip.line_id !== userId) ? `ของลูกค้า "${existingSlip.line_name || 'อีกคน'}"` : 'และถูกปัดตกไปแล้ว';
-                        await notifyUnrecordedSlip(lineName, messageId, `สลิปรหัส ${transRef} (ยอด ${fmtBaht(amount)} บาท) เคยถูกบันทึกแล้ว ${dupWho} ระบบจึงไม่นับซ้ำ`);
+                        await notifyUnrecordedSlip(lineName, messageId, `สลิปรหัส ${transRef} (ยอด ${fmtBaht(amount)} บาท) เคยถูกบันทึกแล้ว ${dupWho} ระบบจึงไม่นับซ้ำ`, 'duplicate');
                     }
                     addLog('WARN', `ตรวจพบสลิปซ้ำ: ลูกค้า "${lineName}" ส่งสลิปรหัส ${transRef} ที่เคยบันทึกไปแล้ว`);
                     console.log(`⚠️ ตรวจพบสลิปซ้ำ: ${transRef}`);
                     // await replyLineMessage(replyToken, `อุ๊ย! 🥺 สลิปใบนี้เคยถูกใช้งานไปแล้วนะคะ รบกวนคุณลูกค้าตรวจสอบสลิปอีกครั้ง หรือติดต่อแอดมินน้า 🙏`, userId); // ปิดการตอบกลับตามที่ผู้ใช้กำหนด
                     continue;
                 }
+
+                // v1.0.17: กันนับยอดซ้ำ -- ถ้าแม่ค้ากรอกยอดสลิปใบนี้เองไปแล้ว (เช่น สลิปธนาคารที่ต้องรอ แล้วลูกค้าส่งรูปเดิมซ้ำตอนตรวจผ่าน)
+                // ให้ผูกรหัสสลิปเข้ากับใบเดิม ไม่สร้างใบใหม่ และถ้ายังมีรูปรอใส่ยอดค้างของลูกค้าคนเดียวกัน ให้เตือนไม่ให้กรอกซ้ำ
+                try {
+                    const transferSec = stampToSec(slipData.transDate, slipData.transTime);
+                    const manualRows = supabase.db.prepare("SELECT id, amount, trans_date, trans_time, status, trans_ref FROM slips WHERE line_id = ? AND qr_payload LIKE 'manual_image%' AND status != 'rejected' AND trans_date >= ? ORDER BY id ASC").all(userId, bangkokDateString(-2));
+                    const keyedMatch = pickManualMatch(manualRows.filter(r => Number(r.amount) > 0 && !r.trans_ref), amount, transferSec);
+                    if (keyedMatch) {
+                        supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(transRef, keyedMatch.id);
+                        await notifyUnrecordedSlip(lineName, messageId, `สลิปรหัส ${transRef} (ยอด ${fmtBaht(amount)} บาท) ตรงกับสลิปที่แม่ค้ากรอกยอดเองไว้ (สลิป #${keyedMatch.id}) ระบบถือเป็นใบเดียวกันและไม่นับยอดซ้ำ ถ้าลูกค้าโอนแยกกัน 2 ครั้งจริง ให้เช็กกับลูกค้า`, 'duplicate');
+                        addLog('WARN', `สลิปรหัส ${transRef} ของ "${lineName}" ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${keyedMatch.id}, ${fmtBaht(amount)} บาท) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ`);
+                        continue;
+                    }
+                    const stillOpen = manualRows.filter(r => Number(r.amount) === 0 && r.status === 'waiting' && (() => { const a = stampToSec(r.trans_date, r.trans_time); return a !== null && transferSec !== null && a + MANUAL_MATCH_TOLERANCE_SEC >= transferSec; })());
+                    if (stillOpen.length > 0) {
+                        addLog('WARN', `ลูกค้า "${lineName}" ส่งสลิปที่ตรวจผ่านแล้ว (${fmtBaht(amount)} บาท) และยังมีรูปรอใส่ยอดค้างอยู่ ${stillOpen.length} ใบ ถ้าเป็นสลิปใบเดียวกัน ให้ปัดตกการ์ดรอใส่ยอดใบเก่า อย่ากรอกยอดซ้ำ`);
+                        io.emit('slip_warning', { kind: 'check_pending', name: lineName, reason: `ส่งสลิปที่ตรวจผ่านแล้ว ${fmtBaht(amount)} บาท แต่ยังมีรูปรอใส่ยอดค้างอยู่ ${stillOpen.length} ใบ ถ้าเป็นใบเดียวกัน ให้ปัดตกการ์ดเก่า อย่ากรอกยอดซ้ำ` });
+                    }
+                } catch (guardErr) { addLog('WARN', 'ตรวจสลิปซ้ำกับยอดที่กรอกเองไม่สำเร็จ (ข้ามขั้นนี้ ระบบบันทึกสลิปตามปกติ): ' + guardErr.message); }
 
                 let customer = supabase.db.prepare('SELECT * FROM customers WHERE line_id = ?').get(userId);
                 let currentBalance = (customer ? customer.balance : 0) + amount; 
@@ -4243,9 +4747,10 @@ app.post('/webhook', async (req, res) => {
                             amount: 0, draws: 0, line_id: userId, sender_name: lineName, line_name: lineName,
                             session_id: activeLiveSession ? activeLiveSession.id : null,
                             trans_date: getTodayString(), trans_time: getLocalTimeString(),
-                            qr_payload: `manual_image|/uploads/${fbName}`, status: 'waiting'
+                            qr_payload: `manual_image|/uploads/${fbName}`, status: 'waiting',
+                            arrived_out_of_round: activeLiveSession ? 0 : 1   // v1.0.16: รูปที่เข้าตอนไม่มีไลฟ์ ติดป้ายโอนนอกรอบเหมือนสลิปปกติ
                         }]).select().single();
-                        io.emit('play_sound');
+                        io.emit('pending_amount_slip', { name: lineName });
                         broadcastTodayStats();
                     } catch (fbErr) {
                         addLog('ERROR', `เก็บสลิปสำรองไม่สำเร็จ: ${fbErr.message} (กรุณาตรวจสลิปของ "${lineName}" ในแชท LINE)`);
@@ -4313,11 +4818,15 @@ app.post('/webhook', async (req, res) => {
                     trans_date: getTodayString(), 
                     trans_time: getLocalTimeString(), 
                     qr_payload: payloadRef, 
-                    status: 'waiting' 
+                    status: 'waiting',
+                    arrived_out_of_round: activeLiveSession ? 0 : 1   // v1.0.16: รูปที่เข้าตอนไม่มีไลฟ์ ติดป้ายโอนนอกรอบเหมือนสลิปปกติ
                 }]).select().single();
 
                 if (inserted) {
-                    io.emit('play_sound');
+                    // v1.0.17: ถ้าเหตุผลคือสลิปธนาคารที่ต้องรอ (Code 1010) จำไว้ให้การ์ดบอกเวลาที่ลองใหม่ได้
+                    const bankInfo = (slipResult && Number(slipResult.code) === 1010) ? classifySlipOkError(400, slipResult) : null;
+                    if (bankInfo && bankInfo.kind === 'bank_delay') rememberBankDelayHint(inserted.id, bankInfo);
+                    io.emit('pending_amount_slip', { name: lineName, bankName: bankInfo ? bankInfo.bankName : undefined, delay: bankInfo ? bankInfo.delay : undefined });   // v1.0.16: เสียงคอร์ด + การ์ดกะพริบ (แทน ping ปกติ)
                     broadcastTodayStats();
                     
                     let replyMsg = `ผักกาดขอบคุณสำหรับคำสั่งซื้อมากๆ เลยน้าา 🙏💖\nอย่าลืมพิมพ์ชื่อ ที่อยู่ เบอร์โทรส่งมาให้ผักกาดในแชทนี้ด้วยนะคะ จะได้รีบแพ็คของส่งให้ค่า 📦✨`;
@@ -4353,6 +4862,27 @@ sentinel.setTunnelUrlGetter(() => currentPublicUrl);
 let cloudflareProcess = null;
 let localtunnelInstance = null;
 let webhookSyncStatus = { synced: false, url: null, error: null, lastTested: null, testResult: null };
+
+// 🔁 v1.0.16: ผูก LINE Webhook ไม่สำเร็จ (เช่น ลิงก์ท่อใหม่ยังไม่พร้อม) -> ลองใหม่เองเป็นระยะจนกว่าจะผ่าน
+// เดิมลอง 3 ครั้งแล้วหยุด ต้องรอให้แม่ค้ากดปุ่มทดสอบเอง ระหว่างนั้น LINE ยังชี้ไปลิงก์เก่าที่ใช้ไม่ได้ สลิปลูกค้าไม่เข้า
+const WEBHOOK_RESYNC_INTERVAL_MS = 60 * 1000;          // ลองใหม่ทุก 1 นาที
+const WEBHOOK_RESYNC_SLOW_AFTER_ROUNDS = 30;           // ผ่านไป 30 รอบ (~30 นาที) ค่อยห่างเป็นทุก 5 นาที กัน Log รก
+const WEBHOOK_RESYNC_SLOW_INTERVAL_MS = 5 * 60 * 1000;
+let webhookRetryRound = 0;
+let webhookRetryTimer = null;
+function scheduleWebhookResync(publicUrl) {
+    if (webhookRetryTimer) clearTimeout(webhookRetryTimer);
+    const wait = webhookRetryRound >= WEBHOOK_RESYNC_SLOW_AFTER_ROUNDS ? WEBHOOK_RESYNC_SLOW_INTERVAL_MS : WEBHOOK_RESYNC_INTERVAL_MS;
+    webhookRetryTimer = setTimeout(() => {
+        webhookRetryTimer = null;
+        if (typeof shuttingDown !== 'undefined' && shuttingDown) return;
+        if (currentPublicUrl !== publicUrl) { webhookRetryRound = 0; return; }   // ท่อได้ลิงก์ใหม่แล้ว: รอบใหม่ของลิงก์ใหม่จัดการเอง
+        if (webhookSyncStatus.synced && webhookSyncStatus.url === `${publicUrl}/webhook`) { webhookRetryRound = 0; return; }   // มีคนกดทดสอบผ่านไปแล้ว
+        webhookRetryRound++;
+        updateLineWebhookEndpoint(publicUrl, 1, true).catch(() => {});
+    }, wait);
+    if (webhookRetryTimer && webhookRetryTimer.unref) webhookRetryTimer.unref();
+}
 
 app.get('/api/tunnel/status', (req, res) => {
     res.json({
@@ -4391,7 +4921,11 @@ app.post('/api/tunnel/test_line', async (req, res) => {
 });
 
 // 🌐 ฟังก์ชันอัปเดต LINE Webhook URL อัตโนมัติไปยัง LINE Messaging API (Zero-Click Sync)
-async function updateLineWebhookEndpoint(publicUrl, retries = 3) {
+async function updateLineWebhookEndpoint(publicUrl, retries = 3, isResync = false) {
+    if (!isResync) {   // ลิงก์ใหม่ / กดบันทึกคีย์ใหม่ = เริ่มนับรอบลองซ้ำใหม่
+        webhookRetryRound = 0;
+        if (webhookRetryTimer) { clearTimeout(webhookRetryTimer); webhookRetryTimer = null; }
+    }
     const token = process.env.LINE_ACCESS_TOKEN ? process.env.LINE_ACCESS_TOKEN.replace(/["'\r\n ]/g, '').trim() : '';
     const webhookUrl = `${publicUrl}/webhook`;
 
@@ -4446,6 +4980,11 @@ async function updateLineWebhookEndpoint(publicUrl, retries = 3) {
                 synced: true, 
                 testResult: testRes.data 
             });
+            if (webhookRetryRound > 0) {
+                addLog('SUCCESS', `ผูก LINE Webhook สำเร็จหลังระบบลองซ้ำเอง (รอบที่ ${webhookRetryRound}) ลิงก์: ${webhookUrl}`);
+            }
+            webhookRetryRound = 0;
+            if (webhookRetryTimer) { clearTimeout(webhookRetryTimer); webhookRetryTimer = null; }
             break;
         } catch(err) {
             const errMsg = err.response ? JSON.stringify(err.response.data) : err.message;
@@ -4454,7 +4993,11 @@ async function updateLineWebhookEndpoint(publicUrl, retries = 3) {
             
             if (attempt === retries) {
                 console.error(`❌ ไม่สามารถอัปเดต LINE Webhook อัตโนมัติได้: ${errMsg}`);
-                addLog('ERROR', `อัปเดต LINE Webhook อัตโนมัติไม่สำเร็จ: ${errMsg}`);
+                const httpStatus = err.response ? err.response.status : '-';
+                const detail = `HTTP ${httpStatus} | ท่อ: ${activeTunnelType || '-'} | ลิงก์ที่ส่งให้ LINE: ${webhookUrl}`;
+                if (webhookRetryRound === 0) addLog('ERROR', `อัปเดต LINE Webhook อัตโนมัติไม่สำเร็จ: ${errMsg} (${detail}) ระบบจะลองผูกใหม่เองทุก 1 นาทีจนกว่าจะผ่าน`);
+                else addLog('WARN', `ผูก LINE Webhook ซ้ำยังไม่สำเร็จ (รอบที่ ${webhookRetryRound}): ${errMsg} (${detail})`);
+                scheduleWebhookResync(publicUrl);
             } else {
                 await new Promise(r => setTimeout(r, 3000));
             }
@@ -4676,6 +5219,13 @@ process.on('exit', () => gracefulShutdown(0));
 
 // 🛑 API สำหรับให้ผู้ใช้งานกด "ปิดโปรแกรม" จากหน้า Dashboard ได้โดยตรง
 app.post('/api/system/shutdown', (req, res) => {
+    // v1.0.16: กำลังไลฟ์อยู่ห้ามปิดโปรแกรมโดยไม่ตั้งใจ (ปิดแล้วสลิปลูกค้าไม่เข้า คิวหยุดทันที) -- ต้องส่ง force:true ที่หน้าจอยืนยันซ้ำเท่านั้น
+    if (activeLiveSession) {
+        if (!(req.body && req.body.force === true)) {
+            return res.status(409).json({ success: false, code: 'LIVE_ACTIVE', message: 'กำลังไลฟ์อยู่ ปิดโปรแกรมตอนนี้สลิปลูกค้าจะไม่เข้าระบบ กรุณากด "จบไลฟ์" ก่อน' });
+        }
+        addLog('WARN', '🖥️ แม่ค้ายืนยันปิดโปรแกรมทั้งที่กำลังไลฟ์อยู่ (ยืนยันซ้ำแล้ว)');
+    }
     res.json({ success: true, message: 'กำลังปิดระบบและเซิร์ฟเวอร์...' });
     setTimeout(() => {
         gracefulShutdown(0);

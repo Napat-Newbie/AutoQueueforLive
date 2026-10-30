@@ -42,7 +42,7 @@ test('queue card of an out-of-round payment carries the badge, and it survives b
     assert.equal(sb.slips()[0].session_id, live.session.id, 'precondition: Alice really was claimed');
 }));
 
-test('Kerry summary window + downloaded Excel call out the out-of-round customer (Remark column)', () => withSandbox(async sb => {
+test('Kerry summary window lists the out-of-round customer; the downloaded Excel stays clean (no internal note in Remark)', () => withSandbox(async sb => {
     await slipFor(sb, 'Ualice', 'Alice', 'm1', 'k1', 140, 'OORK1');
     await sb.waitForSlips(1);
     const live = await sb.startLive();
@@ -53,11 +53,11 @@ test('Kerry summary window + downloaded Excel call out the out-of-round customer
     const aliceOrder = summary.orders.find(o => o.lineName === 'Alice');
     assert.equal(aliceOrder.outOfRound, true);
 
-    // the Excel the Kerry window downloads for that round — the Remark column must carry the note
+    // the Excel the Kerry window downloads for that round — the Remark column must NOT carry an internal note (this file is uploaded to Kerry)
     const file = await sb.get(`/api/kerry/export_excel?sessionId=${live.session.id}`);
     assert.equal(file.status, 200);
     const text = await excelText(file.buffer, sb.requireDep('exceljs'));
-    assert.match(text, /โอนนอกรอบ/, 'the downloaded Excel notes the out-of-round payment');
+    assert.doesNotMatch(text, /โอนนอกรอบ/, 'the downloaded Excel must not contain the out-of-round note');
 }));
 
 test('a plain in-live payment is NOT flagged in the Kerry file (no false positives)', () => withSandbox(async sb => {

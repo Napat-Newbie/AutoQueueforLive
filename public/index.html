@@ -64,6 +64,34 @@
             flex-wrap: wrap;
             gap: 15px;
         }
+        /* v1.0.17: แผงควบคุมด้านบนไม่ตรึงแล้ว (เจ้าของสั่ง) -- ตรึงเฉพาะ "ยอดโอนรวม": เมื่อเลื่อนจนการ์ดยอดโอนรวมพ้นจอ จะมีป้ายเล็กลอยที่มุมซ้ายบนแสดงยอดเดิม */
+        #floatingTotal { position: fixed; top: 8px; left: 8px; z-index: 1200; display: none; align-items: baseline; gap: 10px; padding: 8px 18px; border-radius: 14px; color: #fff; background: linear-gradient(135deg, #476bad, #57b189); box-shadow: 0 4px 14px rgba(0,0,0,0.3); pointer-events: none; font-weight: 600; }
+        #floatingTotal.show { display: flex; }
+        #floatingTotal .ft-label { font-size: 0.85em; opacity: 0.9; }
+        #floatingTotal .ft-amount { font-size: 1.6em; line-height: 1.1; }
+        .queue-card.pending-amount-card .queue-number { font-size: 1.4em; }
+        /* v1.0.16: Toast (ป้ายแจ้งเตือนชั่วคราว) + ลิ้นชักประวัติแจ้งเตือน + การ์ดรอใส่ยอดกะพริบเมื่อเข้าใหม่ */
+        .toast-stack { position: fixed; z-index: 3000; display: flex; flex-direction: column; gap: 8px; width: min(380px, 92vw); pointer-events: none; }
+        .toast-stack.tr { top: calc(var(--alert-h, 0px) + 12px); right: 12px; }
+        .toast-stack.bl { bottom: 12px; left: 12px; }
+        .toast { pointer-events: auto; cursor: pointer; padding: 10px 14px; border-radius: 10px; color: #fff; font-size: 0.92em; line-height: 1.4; box-shadow: 0 6px 18px rgba(0,0,0,0.25); animation: toastIn 0.25s ease-out; word-break: break-word; }
+        .toast.warn { background: #c2410c; border-left: 6px solid #7f1d1d; }
+        .toast.bad { background: #b91c1c; border-left: 6px solid #7f1d1d; }
+        .toast.ok { background: #15803d; }
+        .toast.info { background: #1e40af; }
+        @keyframes toastIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+        .queue-card.pending-flash { animation: pendingFlash 0.6s ease-in-out 4; }
+        @keyframes pendingFlash { 0%, 100% { background: transparent; } 50% { background: rgba(230, 81, 0, 0.30); } }
+        @media (prefers-reduced-motion: reduce) { .toast, .queue-card.pending-flash { animation: none !important; } }
+        #notifDrawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(400px, 100vw); background: #fff; box-shadow: -4px 0 20px rgba(0,0,0,0.25); z-index: 3500; transform: translateX(105%); transition: transform 0.2s; display: flex; flex-direction: column; }
+        #notifDrawer.open { transform: none; }
+        #notifDrawer .notif-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid #e2e8f0; }
+        #notifList { overflow-y: auto; flex: 1; padding: 8px 12px; }
+        .notif-row { padding: 8px 10px; margin-bottom: 8px; border-radius: 8px; border-left: 5px solid #94a3b8; background: #f8fafc; font-size: 0.9em; word-break: break-word; }
+        .notif-row.bad { border-left-color: #b91c1c; background: #fef2f2; }
+        .notif-row.warn { border-left-color: #ea580c; background: #fff7ed; }
+        .notif-row.ok { border-left-color: #16a34a; background: #f0fdf4; }
+        .notif-row .notif-time { font-size: 0.8em; color: #64748b; margin-bottom: 2px; }
         .live-status-pill {
             display: inline-flex;
             align-items: center;
@@ -468,13 +496,26 @@
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
             <button onclick="openDevAuthModal()" style="background: #e11d48; color: #fff; border: none; padding: 5px 14px; border-radius: 6px; cursor: pointer; font-family: 'Kanit'; font-size: 0.85em; font-weight: 500;">ไปหน้าตั้งค่า</button>
-            <button onclick="document.getElementById('globalAlertBanner').style.display='none'" style="background: none; border: none; font-size: 1.3em; color: #9f1239; cursor: pointer; line-height: 1;">&times;</button>
+            <button onclick="hideGlobalAlertBanner(true)" style="background: none; border: none; font-size: 1.3em; color: #9f1239; cursor: pointer; line-height: 1;">&times;</button>
         </div>
     </div>
 
     <div class="container" style="margin-top: 20px;">
         
         <!-- 🔴 แถบควบคุมรอบไลฟ์สด (Live Session Control Panel) -->
+        <div id="floatingTotal" aria-hidden="true"><span class="ft-label">ยอดโอนรวม</span><span class="ft-amount">฿ <span id="floatingTotalAmount">0.00</span></span></div>
+        <div id="toastStackTR" class="toast-stack tr"></div>
+        <div id="toastStackBL" class="toast-stack bl"></div>
+        <div id="notifDrawer" aria-label="ประวัติแจ้งเตือน">
+            <div class="notif-head">
+                <strong>🔔 ประวัติแจ้งเตือน (20 รายการล่าสุด)</strong>
+                <div style="display:flex; gap:6px;">
+                    <button onclick="clearNotifHistory()" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; padding:6px 10px; border-radius:8px; cursor:pointer;">ล้าง</button>
+                    <button onclick="toggleNotifDrawer(false)" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; padding:6px 10px; border-radius:8px; cursor:pointer;">✕ ปิด</button>
+                </div>
+            </div>
+            <div id="notifList"></div>
+        </div>
         <div class="live-control-panel">
             <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
                 <div id="liveStatusBadge" class="live-status-pill offline">
@@ -490,6 +531,11 @@
                 </div>
 
                 <!-- ⚡ Pill แสดงเครดิต API ตรวจสลิป (ป้องกัน Risk 2) -->
+                <!-- v1.0.16: สลิปล่าสุดเข้ามาเมื่อกี่นาทีก่อน (ช่วยสังเกตว่าท่อ/LINE เงียบผิดปกติไหม) -->
+                <div id="lastSlipPill" title="เวลาที่รูปสลิปล่าสุดเข้ามาที่โปรแกรม (นับตั้งแต่เปิดโปรแกรม)" style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 0.84em; background: #f8fafc; color: #475569; border: 1px solid #e2e8f0;">
+                    <span id="lastSlipText">📨 สลิปล่าสุด: -</span>
+                </div>
+
                 <div id="quotaStatusPill" onclick="checkQuotaManual()" title="คลิกเพื่อตรวจเช็กเครดิตคงเหลือของผู้ให้บริการตรวจสลิป" style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 0.84em; cursor: pointer; transition: all 0.2s; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; font-weight: 500;">
                     <span id="quotaIcon">⚡</span>
                     <span id="quotaStatusText">เช็คเครดิต API...</span>
@@ -512,6 +558,9 @@
                 <button class="btn-kerry" onclick="openKerryExportModal()">
                     📦 Export Kerry Excel
                 </button>
+                <button id="notifBellBtn" onclick="toggleNotifDrawer()" title="ดูประวัติแจ้งเตือนย้อนหลัง 20 รายการล่าสุด" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-family: 'Kanit'; display: flex; align-items: center; gap: 6px;">
+                    🔔 แจ้งเตือน <span id="notifBadge" style="display:none; margin-left:4px; background:#dc2626; color:#fff; border-radius:10px; padding:1px 7px; font-size:0.8em; font-weight:700;">0</span>
+                </button>
                 <button onclick="openDevAuthModal()" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-family: 'Kanit'; display: flex; align-items: center; gap: 6px;">
                     🔑 ตั้งค่าระบบ (Setup)
                 </button>
@@ -532,7 +581,8 @@
             <div style="display: flex; gap: 15px; flex-wrap: wrap; border-top: 1px solid #eee; padding-top: 15px; align-items: flex-end;">
                 <div class="config-item"><div style="display: flex; flex-direction: column; gap: 5px;"><label><strong>🚚 ค่าส่ง:</strong></label><input type="number" id="shippingInput" style="width: 80px;"></div></div>
                 <div class="config-item"><div style="display: flex; flex-direction: column; gap: 5px;"><label><strong>🆓 ส่งฟรีเมื่อ(ชิ้น):</strong></label><input type="number" id="thresholdInput" style="width: 80px;"></div></div>
-                <div class="config-item" style="flex: 1; min-width: 200px;"><div style="display: flex; flex-direction: column; gap: 5px; width: 100%;"><label><strong>🏦 ชื่อบัญชีร้าน:</strong></label><input type="text" id="merchantInput" placeholder="เว้นว่างถ้าไม่ต้องการตรวจเช็ก"></div></div>
+                <div class="config-item" style="flex: 1; min-width: 200px;"><div style="display: flex; flex-direction: column; gap: 5px; width: 100%;"><label><strong>🏦 ชื่อบัญชีร้าน (ไทย):</strong></label><input type="text" id="merchantInput" placeholder="เว้นว่างถ้าไม่ต้องการตรวจเช็ก"></div></div>
+                <div class="config-item" style="flex: 1; min-width: 200px;"><div style="display: flex; flex-direction: column; gap: 5px; width: 100%;"><label><strong>🏦 ชื่อบัญชีร้าน (อังกฤษ):</strong></label><input type="text" id="merchantEnInput" placeholder="ไม่บังคับ เช่น Mantiya" title="ใส่ถ้าสลิปบางแบบ (เช่น TrueMoney) แสดงชื่อผู้รับเป็นภาษาอังกฤษ สลิปผ่านถ้าชื่อผู้รับตรงกับชื่อไทยหรืออังกฤษอย่างใดอย่างหนึ่ง ใส่แค่ส่วนต้นของชื่อก็พอ เพราะธนาคารมักตัดชื่อท้าย"></div></div>
                 <div class="config-item" style="flex: 1; min-width: 250px;">
                     <div style="display: flex; flex-direction: column; gap: 5px; width: 100%;">
                         <label><strong>🔗 ลิงก์ OpenChat:</strong></label>
@@ -637,6 +687,37 @@
                 <div style="display: flex; gap: 8px;">
                     <button onclick="document.getElementById('checkSlipModal').style.display='none'" style="background:#eee; color:#333; padding: 10px 18px; border: none; border-radius: 8px; cursor: pointer; font-family:'Kanit';">ปิด</button>
                     <button class="btn-success" onclick="submitCheckSlip()" style="padding: 10px 22px; border-radius: 8px; font-weight: bold; cursor: pointer;">✅ ยืนยันยอดเงิน</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- v1.0.16: แก้ไขรายการสินค้าของลูกค้าเอง เมื่อระบบคำนวณจำนวน/เลือกสินค้าให้ผิด -->
+    <!-- v1.0.16: เช็กลิสต์ความพร้อมก่อนเริ่มไลฟ์ (รวมการตรวจที่เคยเด้งทีละหน้าต่างไว้ที่เดียว) -->
+    <div class="modal-overlay" id="readinessModal">
+        <div class="modal-box" style="max-width: 560px; width: 95%; text-align: left;">
+            <h3 style="margin: 0 0 4px 0; color: #0f172a;">✅ เช็กความพร้อมก่อนเริ่มไลฟ์</h3>
+            <div style="font-size: 0.85em; color: #64748b; margin-bottom: 12px;">ระบบตรวจ 5 จุดให้อัตโนมัติ อ่านผลแล้วกดเริ่มไลฟ์ได้เลย</div>
+            <div id="readinessBody" style="max-height: 55vh; overflow-y: auto;"></div>
+            <div style="display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid #eee; padding-top: 12px; margin-top: 10px;">
+                <button onclick="closeReadinessModal()" style="background:#eee; color:#333; padding: 10px 18px; border: none; border-radius: 8px; cursor: pointer; font-family:'Kanit';">ยกเลิก</button>
+                <button id="readinessStartBtn" class="btn-success" onclick="confirmStartFromReadiness()" style="padding: 10px 22px; border-radius: 8px; font-weight: bold; cursor: pointer;" disabled>▶️ เริ่มไลฟ์</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="editItemsModal">
+        <div class="modal-box" style="max-width: 520px; width: 95%;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #f0f0f0; padding-bottom: 10px; margin-bottom: 15px;">
+                <h3 style="margin: 0; color: #7b1fa2;">✏️ แก้ไขรายการสินค้า</h3>
+                <span id="editItemsCustomerName" style="font-size: 0.9em; background: #f3e5f5; color: #7b1fa2; padding: 4px 10px; border-radius: 6px; font-weight: 500;"></span>
+            </div>
+            <div id="editItemsBody" style="max-height: 55vh; overflow-y: auto; text-align: left;"></div>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #eee; padding-top: 12px; margin-top: 8px;">
+                <div style="font-size: 0.85em; color: #777;">ยอดโอนและสถานะคิวไม่เปลี่ยน — แก้เฉพาะสินค้าและจำนวน</div>
+                <div style="display: flex; gap: 8px;">
+                    <button onclick="document.getElementById('editItemsModal').style.display='none'" style="background:#eee; color:#333; padding: 10px 18px; border: none; border-radius: 8px; cursor: pointer; font-family:'Kanit';">ปิด</button>
+                    <button class="btn-success" onclick="saveEditItems()" style="padding: 10px 22px; border-radius: 8px; font-weight: bold; cursor: pointer;">💾 บันทึกแก้ไข</button>
                 </div>
             </div>
         </div>
@@ -860,7 +941,9 @@
                         <label for="wizDiscordActivity" style="font-size: 0.85em; display: block; margin-bottom: 2px;">ช่อง 1: บันทึกการใช้งานทุกกิจกรรม (สรุปทุก 1 นาที)</label>
                         <input type="text" id="wizDiscordActivity" placeholder="https://discord.com/api/webhooks/..." style="width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Kanit'; margin-bottom: 8px;">
                         <label for="wizDiscordDevReport" style="font-size: 0.85em; display: block; margin-bottom: 2px;">ช่อง 2: รายงาน Error ความรุนแรง และแนวทางแก้ไขในเวอร์ชันถัดไป</label>
-                        <input type="text" id="wizDiscordDevReport" placeholder="https://discord.com/api/webhooks/..." style="width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Kanit';">
+                        <input type="text" id="wizDiscordDevReport" placeholder="https://discord.com/api/webhooks/..." style="width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Kanit'; margin-bottom: 8px;">
+                        <label for="wizDiscordLiveSummary" style="font-size: 0.85em; display: block; margin-bottom: 2px;">ช่อง 3: สรุปหลังจบไลฟ์ — สถิติรอบ + Error/WARN พร้อมสาเหตุ ส่งทุกครั้งที่กดจบไลฟ์ (เว้นว่าง = ส่งช่องแจ้งเตือนหลักตามเดิม)</label>
+                        <input type="text" id="wizDiscordLiveSummary" placeholder="https://discord.com/api/webhooks/..." style="width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Kanit';">
                     </div>
 
                     <!-- 3. VISUAL PROVIDER SELECTOR WITH LOGOS & PRESETS -->
@@ -1261,7 +1344,7 @@
 
     <!-- 🚀 Modal: แจ้งเตือนอัปเดตเวอร์ชันใหม่ (New Update Available Modal) -->
     <div class="modal-overlay" id="appUpdateModal" style="display: none; z-index: 10000;">
-        <div class="modal-box" style="max-width: 580px; width: 95%; text-align: left; padding: 25px; border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.3);">
+        <div class="modal-box" style="max-width: 580px; width: 95%; text-align: left; padding: 25px; border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.3); max-height: 92vh; overflow-y: auto; box-sizing: border-box;">
             <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #3b82f6; padding-bottom: 12px; margin-bottom: 16px;">
                 <div style="display: flex; align-items: center; gap: 12px;">
                     <div style="width: 48px; height: 48px; border-radius: 12px; background: linear-gradient(135deg, #3b82f6, #6366f1); display: flex; align-items: center; justify-content: center; font-size: 24px; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);">
@@ -1283,7 +1366,7 @@
             <!-- Title & Changelog -->
             <div style="margin-bottom: 16px;">
                 <h4 id="updateModalTitle" style="margin: 0 0 10px 0; color: #0f172a; font-size: 1.05em; font-weight: 600;">รายละเอียดการปรับปรุง (Changelog):</h4>
-                <div id="updateModalChangelogBox" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; max-height: 220px; overflow-y: auto;">
+                <div id="updateModalChangelogBox" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; max-height: min(30vh, 320px); overflow-y: auto;">
                     <ul id="updateModalChangelogList" style="margin: 0; padding-left: 20px; color: #334155; font-size: 0.9em; line-height: 1.7;">
                     </ul>
                 </div>
@@ -1325,7 +1408,7 @@
 
     <!-- 🎉 Modal: แจ้งเตือนเมื่ออัปเดตสำเร็จ (Post-Update Success Modal) -->
     <div class="modal-overlay" id="appUpdateSuccessModal" style="display: none; z-index: 10001;">
-        <div class="modal-box" style="max-width: 520px; width: 95%; text-align: left; padding: 25px; border-radius: 16px;">
+        <div class="modal-box" style="max-width: 520px; width: 95%; text-align: left; padding: 25px; border-radius: 16px; max-height: 92vh; overflow-y: auto; box-sizing: border-box;">
             <div style="text-align: center; margin-bottom: 15px;">
                 <div style="font-size: 3em; margin-bottom: 8px;">🎉</div>
                 <h2 style="margin: 0; color: #166534; font-size: 1.4em;">อัปเดตระบบสำเร็จเรียบร้อย!</h2>
@@ -1334,7 +1417,7 @@
 
             <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; margin-bottom: 20px;">
                 <strong style="color: #1e293b; font-size: 0.92em; display: block; margin-bottom: 8px;">รายการที่ได้รับการปรับปรุงในเวอร์ชันนี้ (Changelog):</strong>
-                <ul id="successModalChangelogList" style="margin: 0; padding-left: 20px; color: #475569; font-size: 0.88em; line-height: 1.6;">
+                <ul id="successModalChangelogList" style="max-height: 28vh; overflow-y: auto; padding-right: 8px; margin: 0; padding-left: 20px; color: #475569; font-size: 0.88em; line-height: 1.6;">
                 </ul>
             </div>
 
@@ -1363,11 +1446,27 @@
             socket.on('connect', () => { bar.style.display = 'none'; });
         })();
 
+        // v1.0.16: ถ้ากำลังไลฟ์อยู่ ต้องยืนยันซ้ำด้วยข้อความเตือนที่ชัดเจน (และเซิร์ฟเวอร์ปฏิเสธถ้าไม่ได้ยืนยันซ้ำ)
         function confirmShutdownApp() {
-            if (confirm("ต้องการปิดโปรแกรม AutoQueueforLive และหยุดการทำงานของเซิร์ฟเวอร์ใช่หรือไม่?")) {
-                fetch('/api/system/shutdown', { method: 'POST' })
+            fetch('/api/live_session/current')
+                .then(res => res.json())
+                .catch(() => null)
+                .then(d => {
+                    const live = !!(d && d.success && d.session && d.session.startTime);
+                    if (live) {
+                        openModal('⛔', 'ตอนนี้กำลังไลฟ์อยู่!\n\nถ้าปิดโปรแกรม สลิปของลูกค้าจะไม่เข้าระบบ และคิวจะหยุดทำงานทันที\nควรกด "จบไลฟ์" ก่อน แล้วค่อยปิดโปรแกรม\n\nยืนยันปิดโปรแกรมทั้งที่กำลังไลฟ์ใช่ไหม', () => performShutdown(true, true));
+                    } else {
+                        performShutdown(false, false);
+                    }
+                });
+        }
+
+        function performShutdown(force, skipConfirm) {
+            if (skipConfirm || confirm("ต้องการปิดโปรแกรม AutoQueueforLive และหยุดการทำงานของเซิร์ฟเวอร์ใช่หรือไม่?")) {
+                fetch('/api/system/shutdown', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: !!force }) })
                     .then(res => res.json())
                     .then(data => {
+                        if (data && data.success === false) { alert(data.message || 'ปิดโปรแกรมไม่สำเร็จ'); return; }
                         document.body.innerHTML = `
                             <div style="display:flex; justify-content:center; align-items:center; height:100vh; flex-direction:column; font-family:'Kanit',sans-serif; background:#0f172a; color:#fff; text-align:center; padding:20px;">
                                 <div style="font-size:3.5em; margin-bottom:15px;">🛑</div>
@@ -1409,6 +1508,8 @@
 
         function updateStatsUI(stats) {
             document.getElementById('totalAmount').innerText = stats.totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2});
+            const floatingAmount = document.getElementById('floatingTotalAmount');
+            if (floatingAmount) floatingAmount.innerText = document.getElementById('totalAmount').innerText;
             document.getElementById('uniqueCustomers').innerText = stats.uniqueCustomers;
             document.getElementById('totalSlips').innerText = stats.totalSlips;
             document.getElementById('totalDraws').innerText = stats.totalDraws;
@@ -1416,7 +1517,7 @@
         }
 
         function renumberQueues() {
-            const waitingCards = document.querySelectorAll('#queue-list .queue-card:not(.topup-card)');
+            const waitingCards = document.querySelectorAll('#queue-list .queue-card:not(.topup-card):not(.pending-amount-card)');
             waitingCards.forEach((card, index) => {
                 const numberEl = card.querySelector('.queue-number');
                 if (numberEl) numberEl.innerText = `#${index + 1}`;
@@ -1438,11 +1539,240 @@
             });
         }
 
+        // ===== v1.0.16: เสียงเตือนสังเคราะห์ในเครื่อง (Web Audio) ไม่พึ่งไฟล์เสียงจากอินเทอร์เน็ต =====
+        let __audioCtx = null;
+        function getAudioCtx() {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return null;
+            if (!__audioCtx) __audioCtx = new Ctx();
+            if (__audioCtx.state === 'suspended') { try { __audioCtx.resume(); } catch (e) {} }
+            return __audioCtx;
+        }
+        ['click', 'keydown', 'touchstart'].forEach(evt => document.addEventListener(evt, () => { try { getAudioCtx(); } catch (e) {} }, { passive: true }));
+        function playToneSequence(frequencies, durations, type, volume) {
+            try {
+                const ctx = getAudioCtx();
+                if (!ctx) return;
+                let t = ctx.currentTime + 0.01;
+                frequencies.forEach((freq, idx) => {
+                    const dur = durations[idx] || 0.15;
+                    // ตัวเลข = โน้ตเดี่ยว | อาร์เรย์ = คอร์ด (เล่นพร้อมกัน) | 0 = ช่วงเงียบคั่นจังหวะ
+                    const notes = (Array.isArray(freq) ? freq : [freq]).filter(f => f > 0);
+                    const vol = (volume || 0.2) / Math.max(1, notes.length * 0.7);
+                    notes.forEach(f => {
+                        const osc = ctx.createOscillator(); const gain = ctx.createGain();
+                        osc.type = type || 'sine'; osc.frequency.value = f;
+                        gain.gain.setValueAtTime(0.0001, t);
+                        gain.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+                        gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+                        osc.connect(gain); gain.connect(ctx.destination);
+                        osc.start(t); osc.stop(t + dur + 0.02);
+                    });
+                    t += dur;
+                });
+            } catch (e) { console.warn('Audio blocked or unsupported:', e); }
+        }
+        const SOUND_PRESETS = {
+            newSlip: { freqs: [523.25, 659.25], durs: [0.1, 0.1], type: 'sine' },                       // ปิ๊ง C5 -> E5
+            warnBeep: { freqs: [600, 0, 600], durs: [0.1, 0.06, 0.1], type: 'sine' },                          // สลิปซ้ำ/โอนผิดบัญชี: บี๊ปคู่สั้น 600Hz
+            pendingChord: { freqs: [[523.25, 659.25, 783.99]], durs: [0.7], type: 'sine', volume: 0.2 },        // สลิปไม่มี QR: คอร์ด C-E-G
+            quotaAlert: { freqs: [550, 0, 550], durs: [0.18, 0.1, 0.18], type: 'sine' },                // โควตาหมด 2 ครั้ง
+            siren: { freqs: [440, 880, 440, 880, 440, 880], durs: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25], type: 'square', volume: 0.12 }   // ท่อหลุด
+        };
+        function playPreset(name) { const p = SOUND_PRESETS[name]; if (p) playToneSequence(p.freqs, p.durs, p.type, p.volume); }
+
+        // ===== v1.0.16: ประวัติแจ้งเตือน 20 รายการล่าสุด + Toast + การ์ดรอใส่ยอดกะพริบ =====
+        const NOTIF_HISTORY_MAX = 20;
+        const NOTIF_STORAGE_KEY = 'aq_notif_history_v1';
+        let __notifHistory = [];
+        let __notifUnread = 0;
+        try { const saved = JSON.parse(sessionStorage.getItem(NOTIF_STORAGE_KEY) || '[]'); if (Array.isArray(saved)) __notifHistory = saved.slice(0, NOTIF_HISTORY_MAX); } catch (e) {}
+        function pushNotif(kind, text) {
+            const msg = String(text || '').trim();
+            if (!msg) return;
+            const last = __notifHistory[0];
+            if (last && last.text === msg && Date.now() - last.t < 60000) return;   // ข้อความเดิมซ้ำภายใน 1 นาที ไม่บันทึกซ้ำ
+            __notifHistory.unshift({ t: Date.now(), kind: kind || 'info', text: msg });
+            if (__notifHistory.length > NOTIF_HISTORY_MAX) __notifHistory.length = NOTIF_HISTORY_MAX;
+            try { sessionStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify(__notifHistory)); } catch (e) {}
+            const drawer = document.getElementById('notifDrawer');
+            if (drawer && drawer.classList.contains('open')) renderNotifDrawer(); else __notifUnread++;
+            renderNotifBadge();
+        }
+        function renderNotifBadge() {
+            const b = document.getElementById('notifBadge');
+            if (!b) return;
+            b.style.display = __notifUnread > 0 ? 'inline-block' : 'none';
+            b.innerText = String(__notifUnread);
+        }
+        function renderNotifDrawer() {
+            const list = document.getElementById('notifList');
+            if (!list) return;
+            list.innerHTML = '';
+            if (!__notifHistory.length) { list.innerHTML = '<div style="color:#94a3b8; padding:16px; text-align:center;">ยังไม่มีการแจ้งเตือน</div>'; return; }
+            const icons = { bad: '🔴', warn: '🟠', ok: '🟢', info: 'ℹ️' };
+            __notifHistory.forEach(n => {
+                const row = document.createElement('div'); row.className = 'notif-row ' + n.kind;
+                const head = document.createElement('div'); head.className = 'notif-time';
+                head.textContent = (icons[n.kind] || '') + ' ' + new Date(n.t).toLocaleTimeString('th-TH', { hour12: false, timeZone: 'Asia/Bangkok' });
+                const body = document.createElement('div'); body.textContent = n.text;
+                row.appendChild(head); row.appendChild(body); list.appendChild(row);
+            });
+        }
+        function toggleNotifDrawer(force) {
+            const d = document.getElementById('notifDrawer');
+            if (!d) return;
+            const open = typeof force === 'boolean' ? force : !d.classList.contains('open');
+            d.classList.toggle('open', open);
+            if (open) { __notifUnread = 0; renderNotifBadge(); renderNotifDrawer(); }
+        }
+        function clearNotifHistory() {
+            __notifHistory = []; __notifUnread = 0;
+            try { sessionStorage.removeItem(NOTIF_STORAGE_KEY); } catch (e) {}
+            renderNotifBadge(); renderNotifDrawer();
+        }
+        // opts: { kind: 'warn'|'bad'|'ok'|'info', pos: 'tr' (บนขวา) | 'bl' (ล่างซ้าย), ms, title, record: false = ไม่ลงประวัติ }
+        function showToast(message, opts) {
+            opts = opts || {};
+            const kind = opts.kind || 'info';
+            if (opts.record !== false) pushNotif(kind, (opts.title ? opts.title + ' — ' : '') + message);
+            const root = document.getElementById(opts.pos === 'bl' ? 'toastStackBL' : 'toastStackTR');
+            if (!root) return null;
+            const el = document.createElement('div');
+            el.className = 'toast ' + kind;
+            if (opts.title) { const t = document.createElement('div'); t.style.fontWeight = '700'; t.textContent = opts.title; el.appendChild(t); }
+            const body = document.createElement('div'); body.textContent = message; el.appendChild(body);
+            const remove = () => { if (el.parentNode) el.parentNode.removeChild(el); };
+            el.addEventListener('click', remove);
+            root.appendChild(el);
+            while (root.children.length > 4) root.removeChild(root.firstChild);
+            setTimeout(remove, opts.ms || 8000);
+            return el;
+        }
+        // v1.0.17: ป้ายยอดโอนรวมลอย -- โผล่เมื่อการ์ด "ยอดโอนรวม" เลื่อนพ้นจอ หายเมื่อเห็นการ์ดตัวจริง (คลิกทะลุได้ ไม่บังปุ่ม)
+        function setupFloatingTotal() {
+            const card = document.querySelector('.metric-main-card');
+            const badge = document.getElementById('floatingTotal');
+            if (!card || !badge || typeof IntersectionObserver === 'undefined') return;
+            new IntersectionObserver((entries) => {
+                entries.forEach(e => badge.classList.toggle('show', !e.isIntersecting));
+            }).observe(card);
+        }
+        try { setupFloatingTotal(); } catch (e) { console.warn('floating total unavailable:', e); }
+
+        // การ์ดรอใส่ยอดที่เพิ่งเข้ามาใหม่ (ไม่ใช่ตอนโหลดหน้าครั้งแรก) กะพริบสั้นๆ ให้สายตาจับได้
+        const __pendingSeen = new Set();
+        let __pendingSeenReady = false;
+        function markPendingFlash(el, id) {
+            if (__pendingSeen.has(id)) return;
+            __pendingSeen.add(id);
+            if (__pendingSeenReady) el.classList.add('pending-flash');
+        }
+
+        // ===== v1.0.16: ท่อสัญญาณ (Tunnel) หลุด / ซิงค์ LINE Webhook ล้มเหลว = แถบเตือนสีแดง + เสียงไซเรน (เฉพาะตอนกำลังไลฟ์) =====
+        function tunnelHealthVerdict(data) {
+            if (!data || !data.active) return { bad: true, kind: 'down', message: '⚠️ ท่อสัญญาณ (Tunnel) หลุด — สลิปจากลูกค้าจะไม่เข้าระบบจนกว่าจะเชื่อมต่อใหม่ (ระบบกำลังต่อให้อัตโนมัติ) ลูกค้าที่ส่งสลิปช่วงนี้อาจต้องส่งใหม่' };
+            if (data.synced === false) return { bad: true, kind: 'sync', message: '⚠️ ซิงค์ LINE Webhook ไม่สำเร็จ — LINE อาจยังไม่ส่งสลิปมาที่โปรแกรม ตรวจสอบ Token ในหน้าตั้งค่า (กดป้าย LINE Webhook ด้านบน)' };
+            return { bad: false, kind: null, message: '' };
+        }
+        const TUNNEL_ALERT_GRACE_MS = 20000;      // รอ 20 วินาทีก่อนเตือน กันเตือนผิดตอนเปิดโปรแกรมหรือเน็ตกระตุกสั้นๆ
+        const TUNNEL_SIREN_REPEAT_MS = 30000;     // ไซเรนซ้ำทุก 30 วินาทีจนกว่าจะแก้ได้หรือแม่ค้ากดปิดแถบ
+        let __tunnelBadTimer = null, __tunnelSirenTimer = null, __tunnelAlertShown = false, __tunnelDismissed = false;
+        function tunnelSirenOnce() { if (typeof currentLiveSession !== 'undefined' && currentLiveSession) playPreset('siren'); }
+        function handleTunnelHealth(data) {
+            const v = tunnelHealthVerdict(data);
+            if (!v.bad) {
+                if (__tunnelBadTimer) { clearTimeout(__tunnelBadTimer); __tunnelBadTimer = null; }
+                if (__tunnelSirenTimer) { clearInterval(__tunnelSirenTimer); __tunnelSirenTimer = null; }
+                if (__tunnelAlertShown) { __tunnelAlertShown = false; hideGlobalAlertBanner(false, 'tunnel'); }
+                __tunnelDismissed = false;
+                return;
+            }
+            if (__tunnelDismissed) return;
+            if (__tunnelAlertShown) { showGlobalAlertBanner(v.message, 'tunnel'); return; }
+            if (__tunnelBadTimer) return;
+            __tunnelBadTimer = setTimeout(() => {
+                __tunnelBadTimer = null;
+                __tunnelAlertShown = true;
+                showGlobalAlertBanner(v.message, 'tunnel');
+                try { pushNotif('bad', v.message.replace(/^⚠️\s*/, '')); } catch (e) {}
+                tunnelSirenOnce();
+                __tunnelSirenTimer = setInterval(tunnelSirenOnce, TUNNEL_SIREN_REPEAT_MS);
+            }, TUNNEL_ALERT_GRACE_MS);
+        }
+
+        // ===== v1.0.16: เน็ตหลุดแล้วต่อติด -> ดึงคิว/สถานะล่าสุดมาใหม่เอง (เดิมสลิปช่วงหลุดไม่ขึ้นจนกว่าจะกด F5) =====
+        let __socketEverConnected = false;
+        socket.on('connect', () => {
+            if (__socketEverConnected) {
+                try { fetchLiveSessionStatus(); } catch (e) {}
+                try { loadLiveStatsIfLive(); } catch (e) {}
+                try { fetchTunnelStatus(); } catch (e) {}
+                try { fetchSlipHeartbeat(); } catch (e) {}
+            }
+            __socketEverConnected = true;
+        });
+
+        // ===== v1.0.16: ตัวนับ "สลิปล่าสุดเข้ามาเมื่อกี่นาทีก่อน" =====
+        let __lastSlipAt = null;
+        function formatAgo(ms) {
+            const min = Math.floor(ms / 60000);
+            if (min < 1) return 'เมื่อสักครู่';
+            if (min < 60) return min + ' นาทีที่แล้ว';
+            return Math.floor(min / 60) + ' ชม. ' + (min % 60) + ' นาทีที่แล้ว';
+        }
+        function renderSlipHeartbeat() {
+            const el = document.getElementById('lastSlipText');
+            const pill = document.getElementById('lastSlipPill');
+            if (!el || !pill) return;
+            if (!__lastSlipAt) { el.innerText = '📨 สลิปล่าสุด: ยังไม่มีตั้งแต่เปิดโปรแกรม'; pill.style.background = '#f8fafc'; pill.style.color = '#475569'; pill.style.borderColor = '#e2e8f0'; return; }
+            const ms = Date.now() - __lastSlipAt;
+            el.innerText = '📨 สลิปล่าสุด: ' + formatAgo(ms);
+            const quietLive = (typeof currentLiveSession !== 'undefined' && currentLiveSession) && ms > 15 * 60000;   // กำลังไลฟ์แต่เงียบเกิน 15 นาที
+            pill.style.background = quietLive ? '#fffbeb' : '#f8fafc';
+            pill.style.color = quietLive ? '#92400e' : '#475569';
+            pill.style.borderColor = quietLive ? '#fde68a' : '#e2e8f0';
+        }
+        function fetchSlipHeartbeat() {
+            fetch('/api/queue/slip_heartbeat').then(r => (r.ok ? r.json() : null)).then(d => { if (d && d.success) { __lastSlipAt = d.at || null; renderSlipHeartbeat(); } }).catch(() => {});
+        }
+        socket.on('slip_ingest', (d) => { __lastSlipAt = (d && d.at) || Date.now(); renderSlipHeartbeat(); });
+        setInterval(renderSlipHeartbeat, 15000);
+        fetchSlipHeartbeat();
+
+        // ===== v1.0.16: เวลาโอน + เวลารอ บนการ์ดคิว (เวลาไทย UTC+7) =====
+        function queueWaitInfo(dateStr, timeStr) {
+            const dm = /^(\d{4})(\d{2})(\d{2})$/.exec(String(dateStr || ''));
+            const tm = /(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(String(timeStr || ''));
+            if (!dm || !tm) return null;
+            const ts = Date.UTC(+dm[1], +dm[2] - 1, +dm[3], +tm[1] - 7, +tm[2], +(tm[3] || 0));
+            return { ts, hhmm: String(tm[1]).padStart(2, '0') + ':' + tm[2] };
+        }
+        function formatWaitText(minutes) {
+            if (!(minutes >= 0)) return '';
+            if (minutes < 1) return 'เพิ่งโอน';
+            if (minutes < 60) return 'รอ ' + minutes + ' นาที';
+            return 'รอ ' + Math.floor(minutes / 60) + ' ชม. ' + (minutes % 60) + ' นาที';
+        }
+        function updateWaitBadges() {
+            document.querySelectorAll('.wait-badge[data-ts]').forEach(el => {
+                const m = Math.floor((Date.now() - Number(el.dataset.ts)) / 60000);
+                el.innerText = ' • ' + formatWaitText(m);
+                el.style.color = m >= 20 ? '#dc2626' : (m >= 10 ? '#d97706' : '#64748b');
+                el.style.fontWeight = m >= 10 ? '600' : '400';
+            });
+        }
+        setInterval(updateWaitBadges, 30000);
+
         function addQueueToScreen(data) {
             const rawName = data.name || 'ลูกค้า';
-            const safeName = rawName.replace(/'/g, "").replace(/"/g, "").replace(/\\/g, ""); 
+            const safeName = rawName.replace(/'/g, "").replace(/"/g, "").replace(/\\/g, "");
             const slipIdsJson = data.slipIds ? JSON.stringify(data.slipIds) : `[${data.id}]`;
-            
+
+            // v1.0.16: เก็บรายการสินค้ารายสลิปไว้ให้ปุ่ม "✏️ แก้ไขสินค้า" ใช้ตอนเปิดหน้าต่างแก้ไข
+            window.__editItemsData = window.__editItemsData || {};
+            window.__editItemsData[data.id] = Array.isArray(data.slips) ? data.slips : [];
+
             let buttonsHtml = ''; let borderColor = ''; let badgeColor = ''; let breakdownDisplay = '';
 
             if (data.status === 'abnormal_pending') {
@@ -1453,19 +1783,30 @@
             } else if (data.status === 'waiting' && data.isPendingAmount) {
                 borderColor = '#ff9800'; badgeColor = '#ff9800';
                 buttonsHtml = `<button class="btn-primary" style="background:#ff9800; border:none;" onclick="openCheckSlipModal('${escapeHtml(String(data.id).replace(/['"\\]/g, ''))}', '${escapeHtml(String(data.imageUrl || '').replace(/['"\\]/g, ''))}', '${escapeHtml(safeName)}')">🔍 เช็คสลิปและใส่ยอด</button>`;
-                breakdownDisplay = `<div style="font-size: 0.9em; color:#ff9800; margin-top:5px; font-weight:500;">⚠️ สลิปไม่มีคิวอาร์ รอเช็คยอดเงิน</div>`;
+                if (data.bankDelay) {
+                    // v1.0.17: สลิปธนาคารที่ต้องรอ (SlipOK Code 1010) -- บอกเวลาที่ลองส่งรูปเดิมซ้ำได้
+                    const bd = data.bankDelay;
+                    const readyAt = (bd.at && bd.delay) ? new Date(bd.at + bd.delay * 60000).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bangkok' }) : '';
+                    breakdownDisplay = `<div style="font-size: 0.9em; color:#ff9800; margin-top:5px; font-weight:500;">⏳ สลิปธนาคาร${escapeHtml(bd.bankName || '')} ธนาคารยังไม่ยืนยัน${bd.delay ? ' (ต้องรอประมาณ ' + escapeHtml(String(bd.delay)) + ' นาทีหลังโอน)' : ''}</div>
+                                       <div style="font-size: 0.82em; color:#777; margin-top:3px;">ให้ลูกค้าส่งรูปเดิมอีกครั้ง${readyAt ? ' หลัง ' + escapeHtml(readyAt) + ' น.' : ''} ระบบจะตรวจให้เอง แล้วกด "ปัดตก" การ์ดนี้ หรือจะกดเช็คสลิปแล้วใส่ยอดเองก็ได้ (ระบบกันนับซ้ำให้)</div>`;
+                } else {
+                    breakdownDisplay = `<div style="font-size: 0.9em; color:#ff9800; margin-top:5px; font-weight:500;">⚠️ สลิปไม่มีคิวอาร์ รอเช็คยอดเงิน</div>`;
+                }
             } else if (data.status === 'called') {
                 borderColor = '#1a73e8'; badgeColor = '#1a73e8';
                 buttonsHtml = `<button class="btn-success" onclick='actionQueue(${slipIdsJson}, "completed", "${escapeHtml(safeName)}")'>✅ เสร็จสิ้น</button>
-                               <button class="btn-warning" onclick='actionQueue(${slipIdsJson}, "skipped", "${escapeHtml(safeName)}")'>⏭️ ข้าม</button>`;
+                               <button class="btn-warning" onclick='actionQueue(${slipIdsJson}, "skipped", "${escapeHtml(safeName)}")'>⏭️ ข้าม</button>
+                               <button class="btn-primary" style="background:#7b1fa2; border:none;" onclick="openEditItemsModal(${data.id}, '${escapeHtml(safeName)}')">✏️ แก้ไขสินค้า</button>`;
             } else if (data.status === 'skipped') {
                 borderColor = '#f44336'; badgeColor = '#f44336';
                 buttonsHtml = `<button class="btn-primary" onclick='actionQueue(${slipIdsJson}, "called", "${escapeHtml(safeName)}")'>📢 เรียกคิวอีกครั้ง</button>
-                               <button class="btn-danger-outline" onclick='cancelSingleQueue(${slipIdsJson}, "${escapeHtml(safeName)}")' title="ยกเลิกคิวนี้และหักยอดออก">❌ ยกเลิกคิว</button>`;
-            } else { 
+                               <button class="btn-danger-outline" onclick='cancelSingleQueue(${slipIdsJson}, "${escapeHtml(safeName)}")' title="ยกเลิกคิวนี้และหักยอดออก">❌ ยกเลิกคิว</button>
+                               <button class="btn-primary" style="background:#7b1fa2; border:none;" onclick="openEditItemsModal(${data.id}, '${escapeHtml(safeName)}')">✏️ แก้ไขสินค้า</button>`;
+            } else {
                 borderColor = '#4caf50'; badgeColor = '#4caf50';
                 buttonsHtml = `<button class="btn-primary" onclick='actionQueue(${slipIdsJson}, "called", "${escapeHtml(safeName)}")'>📢 เรียกคิว</button>
                                <button class="btn-warning" onclick='actionQueue(${slipIdsJson}, "skipped", "${escapeHtml(safeName)}")'>⏭️ ข้าม</button>
+                               <button class="btn-primary" style="background:#7b1fa2; border:none;" onclick="openEditItemsModal(${data.id}, '${escapeHtml(safeName)}')">✏️ แก้ไขสินค้า</button>
                                <button class="btn-danger-outline" onclick='cancelSingleQueue(${slipIdsJson}, "${escapeHtml(safeName)}")' title="ยกเลิกคิวนี้และหักยอดออก">❌ ยกเลิก</button>`;
             }
             
@@ -1487,13 +1828,25 @@
                 ? `<div style="display:inline-block; margin-top:6px; padding:3px 10px; border-radius:12px; background:#7b1fa2; color:#fff; font-size:0.82em; font-weight:700;">🕒 โอนนอกรอบ — เงินมาหลังจบไลฟ์ ตรวจก่อนส่งของ</div>`
                 : '';
 
+            // v1.0.16: เวลาโอน + เวลารอ + สถานะที่อยู่จัดส่ง บนการ์ดคิว
+            let metaInfoHtml = '';
+            {
+                const w = queueWaitInfo(data.date, data.time);
+                const parts = [];
+                if (w) parts.push('🕒 โอนเมื่อ ' + w.hhmm + (data.status === 'waiting' ? '<span class="wait-badge" data-ts="' + w.ts + '"></span>' : ''));
+                if (data.hasAddress === true) parts.push('<span style="color:#16a34a;">📍 มีที่อยู่จัดส่งแล้ว</span>');
+                else if (data.hasAddress === false) parts.push('<span style="color:#d97706;">📍 ยังไม่มีที่อยู่จัดส่ง</span>');
+                if (parts.length) metaInfoHtml = '<div style="font-size:0.82em; color:#64748b; margin-top:3px;">' + parts.join(' &nbsp;|&nbsp; ') + '</div>';
+            }
+
             const innerContent = `
-                <div class="queue-number"></div>
+                <div class="queue-number">${data.isPendingAmount ? '⏳' : ''}</div>
                 <div class="queue-info">
                     <div class="name">👤 <span>${escapeHtml(displayName)}</span></div>
                     ${outOfRoundBadge}
                     <div style="font-size: 0.85em; color:#777; margin-top:5px;">ยอดโอน: ${data.amount > 0 ? data.amount : '?'} บาท</div>
-                    ${breakdownDisplay}
+                    ${metaInfoHtml}
+                ${breakdownDisplay}
                 </div>
                 <div class="queue-actions">
                     <div class="draws-badge" style="background-color: ${badgeColor}; color:${data.status === 'abnormal_pending' ? '#555' : '#fff'}">🎟️ ${data.draws > 0 ? data.draws : '?'} ชิ้น</div>
@@ -1502,7 +1855,7 @@
             `;
             
             const el = document.createElement('div');
-            el.className = 'queue-card'; el.id = `queue-${data.id}`;
+            el.className = 'queue-card' + (data.isPendingAmount ? ' pending-amount-card' : ''); el.id = `queue-${data.id}`;
             el.dataset.sort = String(data.sortId || data.id);
             el.style.borderLeft = `6px solid ${borderColor}`;
             el.innerHTML = innerContent;
@@ -1511,6 +1864,134 @@
             else if (data.status === 'skipped') document.getElementById('skipped-queue-list').append(el);
             else if (data.status === 'abnormal_pending') document.getElementById('abnormal-queue-list').append(el);
             else document.getElementById('queue-list').append(el);
+            try { updateWaitBadges(); } catch (e) {}
+            if (data.isPendingAmount) markPendingFlash(el, data.id);
+        }
+
+        // ✏️ v1.0.16: แก้ไขรายการสินค้าเองเมื่อระบบคำนวณ/เลือกสินค้าให้ผิด (แก้เฉพาะสินค้า+จำนวน ยอดเงินและสถานะคงเดิม)
+        // บอกแม่ค้าว่าลูกค้าคนนี้ซื้อรวมกี่ชิ้นในรอบไลฟ์ และค่าส่งเป็นอย่างไร (ครบ threshold ชิ้น = ส่งฟรี กติกาเดียวกับตอนคิดเงิน)
+        function editItemsShippingNote(otherDraws, beforeMine, nowMine, fee, threshold) {
+            const isFree = (n) => !(fee > 0) || n >= threshold;
+            const before = otherDraws + beforeMine;
+            const now = otherDraws + nowMine;
+            let message; let free = false;
+            if (now <= 0) {
+                message = 'ลูกค้าคนนี้ไม่มีสินค้าในรอบนี้';
+            } else if (isFree(now)) {
+                free = true;
+                message = (fee > 0 && threshold > 1)
+                    ? 'ลูกค้าคนนี้ซื้อรวม ' + now + ' ชิ้นในรอบนี้ ครบ ' + threshold + ' ชิ้น → ส่งฟรี'
+                    : 'ลูกค้าคนนี้ซื้อรวม ' + now + ' ชิ้นในรอบนี้ → ส่งฟรี';
+            } else {
+                message = 'ลูกค้าคนนี้ซื้อรวม ' + now + ' ชิ้นในรอบนี้ ยังไม่ครบ ' + threshold + ' ชิ้น → ต้องจ่ายค่าส่ง ' + fee + '฿ (ซื้อเพิ่มอีก ' + (threshold - now) + ' ชิ้นส่งฟรี)';
+            }
+            const warnings = [];
+            if (nowMine < beforeMine) {
+                warnings.push('ลดจำนวนชิ้น: เงินที่ลูกค้าโอนไว้ไม่ถูกคืนเข้ากระเป๋าอัตโนมัติ ถ้าต้องคืนเงิน แม่ค้าโอนคืนเอง');
+            }
+            if (nowMine !== beforeMine && fee > 0) {
+                if (before > 0 && isFree(before) && now > 0 && !isFree(now)) {
+                    warnings.push('จากเดิมส่งฟรี กลายเป็นต้องจ่ายค่าส่ง ' + fee + '฿ สลิปถัดไปของลูกค้าจะถูกคิดค่าส่งใหม่');
+                } else if (before > 0 && !isFree(before) && isFree(now)) {
+                    warnings.push('ครบส่งฟรีแล้ว ค่าส่ง ' + fee + '฿ ที่ลูกค้าจ่ายไปก่อนหน้านี้ระบบไม่คืนเข้ากระเป๋าให้ ถ้าจะคืน แม่ค้าโอนคืนเอง');
+                } else if (now <= 0 && before > 0) {
+                    warnings.push('ไม่เหลือสินค้า: ถ้าลูกค้าโอนเพิ่ม ระบบจะเก็บค่าส่งใหม่');
+                }
+            }
+            return { total: now, free, message, warnings };
+        }
+        let __editItemsState = null;
+        function openEditItemsModal(cardId, name) {
+            const slips = (window.__editItemsData || {})[cardId] || [];
+            if (!slips.length) { alert('ไม่พบรายการสินค้าของการ์ดนี้'); return; }
+            document.getElementById('editItemsCustomerName').innerText = name || 'ลูกค้า';
+            const slipIdsParam = slips.map(s => s.id).join(',');
+            Promise.all([
+                fetch('/api/config').then(r => r.json()),
+                fetch('/api/queue/edit_items_context?slipIds=' + encodeURIComponent(slipIdsParam)).then(r => r.json()).catch(() => null)
+            ]).then(([cfg, ctx]) => {
+                const prices = String(cfg.prices || '').split(',').map(s => s.trim()).filter(Boolean).map(item => {
+                    if (item.includes(':')) { const p = item.split(':'); return { name: p[0].trim(), price: parseInt(p[1].trim()) }; }
+                    const p = parseInt(item); return { name: p + '฿', price: p };
+                }).filter(p => p && p.name && !isNaN(p.price));
+                // จำนวนปัจจุบันของแต่ละสลิป แยกจากข้อความ breakdown ("ชื่อ xจำนวน, ...")
+                __editItemsState = {
+                    prices,
+                    // ข้อมูลค่าส่ง: ถ้าดึงไม่สำเร็จ ไม่แสดงบรรทัดค่าส่ง (แก้ไขสินค้าต่อได้ตามปกติ)
+                    ship: (ctx && ctx.success) ? { otherDraws: Number(ctx.otherDraws) || 0, fee: Number(ctx.shippingFee) || 0, threshold: Number(ctx.freeShippingThreshold) || 0 } : null,
+                    beforeMine: 0,
+                    slips: slips.map(s => {
+                        const qty = {};
+                        String(s.breakdown || '').split(/[,+]/).forEach(part => {
+                            const m = part.trim().match(/^(.*?)\s+x(\d+)$/);
+                            if (m) qty[m[1].trim()] = parseInt(m[2], 10);
+                        });
+                        return { id: s.id, qty };
+                    })
+                };
+                __editItemsState.beforeMine = __editItemsState.slips.reduce((sum, s) => sum + Object.values(s.qty).reduce((a, b) => a + b, 0), 0);
+                renderEditItemsModal();
+                document.getElementById('editItemsModal').style.display = 'flex';
+            }).catch(err => alert('ดึงรายการสินค้าไม่สำเร็จ: ' + err.message));
+        }
+        function editItemQty(rowKey, delta) {
+            const st = __editItemsState; if (!st) return;
+            const [slipIdx, prodIdx] = String(rowKey).split('_').map(Number);
+            const slip = st.slips[slipIdx]; if (!slip) return;
+            const row = st.rows[slipIdx][prodIdx]; if (!row) return;
+            const next = Math.max(0, Math.min(99, (slip.qty[row.name] || 0) + delta));
+            slip.qty[row.name] = next;
+            renderEditItemsModal();
+        }
+        function renderEditItemsModal() {
+            const st = __editItemsState; if (!st) return;
+            // แถวสินค้าของแต่ละสลิป = รายการใน priceList + สินค้าเดิมที่ไม่มีใน priceList แล้ว (กันข้อมูลหายตอนราคาถูกแก้)
+            st.rows = st.slips.map(slip => {
+                const rows = [...st.prices];
+                Object.keys(slip.qty).forEach(n => { if ((slip.qty[n] || 0) > 0 && !rows.some(r => r.name === n)) rows.push({ name: n, price: null }); });
+                return rows;
+            });
+            let totalDraws = 0; let totalValue = 0;
+            let html = st.slips.map((slip, i) => {
+                const rowsHtml = st.rows[i].map((row, j) => {
+                    const q = slip.qty[row.name] || 0;
+                    if (q > 0) { totalDraws += q; if (row.price) totalValue += row.price * q; }
+                    return `<div style="display:flex; align-items:center; justify-content:space-between; padding:7px 4px; border-bottom:1px solid #f2f2f2;">
+                        <div style="font-size:0.95em;">${escapeHtml(row.name)} ${row.price ? `<span style="color:#999; font-size:0.85em;">(${row.price}฿)</span>` : '<span style="color:#bbb; font-size:0.8em;">(ไม่มีในรายการราคาปัจจุบัน)</span>'}</div>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <button onclick="editItemQty('${i}_${j}', -1)" style="width:30px; height:30px; border-radius:50%; border:1px solid #ddd; background:#fff; cursor:pointer; font-size:1em;">−</button>
+                            <span style="min-width:26px; text-align:center; font-weight:700; font-size:1.05em;">${q}</span>
+                            <button onclick="editItemQty('${i}_${j}', 1)" style="width:30px; height:30px; border-radius:50%; border:1px solid #7b1fa2; background:#7b1fa2; color:#fff; cursor:pointer; font-size:1em;">+</button>
+                        </div>
+                    </div>`;
+                }).join('');
+                const head = st.slips.length > 1 ? `<div style="font-weight:600; color:#7b1fa2; margin:10px 0 2px;">สลิป #${slip.id}</div>` : '';
+                return head + (rowsHtml || '<div style="color:#999; padding:8px 4px;">ยังไม่มีรายการ — กด + เพื่อเพิ่มสินค้า</div>');
+            }).join('');
+            html += `<div style="display:flex; justify-content:space-between; margin-top:12px; padding:8px 12px; background:#f3e5f5; border-radius:8px; font-weight:600; color:#4a148c;">
+                <span>รวมทั้งหมด ${totalDraws} ชิ้น</span><span>มูลค่าราคาตามปัจจุบัน ~${totalValue}฿</span></div>`;
+            if (st.ship) {
+                const note = editItemsShippingNote(st.ship.otherDraws, st.beforeMine, totalDraws, st.ship.fee, st.ship.threshold);
+                const color = note.free ? '#1b5e20' : '#e65100'; const bg = note.free ? '#e8f5e9' : '#fff3e0';
+                html += `<div style="margin-top:8px; padding:8px 12px; background:${bg}; color:${color}; border-radius:8px; font-size:0.9em; font-weight:500;">🚚 ${escapeHtml(note.message)}</div>`;
+                note.warnings.forEach(w => {
+                    html += `<div style="margin-top:6px; padding:8px 12px; background:#fff3e0; color:#bf360c; border-left:4px solid #ff9800; border-radius:6px; font-size:0.88em;">⚠️ ${escapeHtml(w)}</div>`;
+                });
+            }
+            document.getElementById('editItemsBody').innerHTML = html;
+        }
+        async function saveEditItems() {
+            const st = __editItemsState; if (!st) return;
+            try {
+                for (const slip of st.slips) {
+                    const items = Object.keys(slip.qty).filter(n => (slip.qty[n] || 0) > 0).map(n => ({ name: n, qty: slip.qty[n] }));
+                    const r = await fetch('/api/queue/edit_items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slipId: slip.id, items }) });
+                    const j = await r.json();
+                    if (!j.success) { alert('แก้ไขไม่สำเร็จ (สลิป #' + slip.id + '): ' + (j.message || j.error || '')); return; }
+                }
+                document.getElementById('editItemsModal').style.display = 'none';
+                // การ์ดคิวรีเฟรชเองผ่าน socket — ไม่ต้องโหลดหน้าใหม่
+            } catch (e) { alert('แก้ไขไม่สำเร็จ: ' + e.message); }
         }
 
         // 💬 แสดงรายชื่อลูกค้าที่รอโอนเพิ่ม (ไม่เข้าคิว) ให้แม่ค้าทักได้ทัน
@@ -1576,6 +2057,13 @@
             });
         }
 
+        // v1.0.16: สลิปที่ระบบไม่บันทึกโดยตั้งใจ (โอนผิดบัญชี/ซ้ำ) ขึ้นเป็นแถวสีแดงบนสุดของตารางด้วย (ข้อมูลมาจากการ์ดแดงเดิม ไม่ได้อยู่ในฐานข้อมูล)
+        function mergeUnrecordedIntoRecent(recent, fails) {
+            const rows = (Array.isArray(fails) ? fails : []).filter(f => f && f.reason).slice().reverse()
+                .map(f => ({ tone: 'bad', name: f.name, amount: 0, noAmount: true, label: f.reason, time: f.time }));
+            return rows.concat(Array.isArray(recent) ? recent : []).slice(0, 30);
+        }
+
         // 🧾 รายการยอดโอนล่าสุด: แสดงทุกสลิปที่ลูกค้าส่งมา พร้อมผล (ได้กี่ชิ้น / ยอดไม่พอต้องโอนเพิ่มเท่าไหร่)
         function renderRecent(list) {
             const box = document.getElementById('recent-box');
@@ -1595,7 +2083,7 @@
                 const amt = r.amount > 0 ? Number(r.amount).toLocaleString('en-US') + ' บาท' : '? บาท';
                 el.innerHTML = `
                     <div class="queue-info">
-                        <div class="name">👤 <span>${escapeHtml(r.name || 'ลูกค้า')}</span> <span style="font-weight:600;">• โอน ${escapeHtml(amt)}</span></div>
+                        <div class="name">👤 <span>${escapeHtml(r.name || 'ลูกค้า')}</span> ${r.noAmount ? '' : '<span style="font-weight:600;">• โอน ' + escapeHtml(amt) + '</span>'}</div>
                         <div style="font-size: 0.9em; color:${c}; margin-top:4px; font-weight:500;">${icons[r.tone] || ''} ${escapeHtml(r.label || '')}</div>
                         <div style="font-size: 0.8em; color:#777; margin-top:2px;">เวลา ${escapeHtml(r.time || '')}</div>
                     </div>`;
@@ -1606,7 +2094,7 @@
         // ✅ ฟังก์ชันใหม่: ทำหน้าที่วาดหน้าจอทันทีที่มีข้อมูลเข้ามา
         function renderDashboard(data) {
             updateStatsUI(data.stats);
-            renderRecent(data.recentSlips || []);
+            renderRecent(mergeUnrecordedIntoRecent(data.recentSlips || [], data.imageFails || []));
             renderImageFails(data.imageFails || []);
             document.getElementById('queue-list').innerHTML = '';
             document.getElementById('active-queue-list').innerHTML = '';
@@ -1624,6 +2112,7 @@
             });
             if(data.queues.skipped) data.queues.skipped.forEach(q => addQueueToScreen(q));
             if(data.queues.abnormal_pending) data.queues.abnormal_pending.forEach(q => addQueueToScreen(q));
+            __pendingSeenReady = true;   // จากนี้ไปการ์ดรอใส่ยอดใหม่จะกะพริบ
             renumberQueues();
         }
 
@@ -1673,7 +2162,8 @@
         }, 30000);
 
         // 💬 เสียงเตือนเบาๆ เมื่อมีลูกค้าโอนไม่ครบ (สร้างเสียงเอง ไม่พึ่งอินเทอร์เน็ต)
-        socket.on('topup_needed', () => {
+        socket.on('topup_needed', (d) => {
+            try { if (d && d.name) pushNotif('warn', 'ลูกค้า ' + d.name + ' โอนไม่ครบ ต้องโอนเพิ่มอีก ' + Number(d.need).toLocaleString('en-US') + ' บาท' + (d.held ? ' (ค่าส่ง)' : '')); } catch (e) {}
             try {
                 const Ctx = window.AudioContext || window.webkitAudioContext;
                 if (!Ctx) return;
@@ -1692,6 +2182,7 @@
 
         // 🔴 เสียงเตือนเมื่อโหลดรูปสลิปจาก LINE ไม่สำเร็จ (โทนต่ำ 2 ครั้ง แยกจากเสียงโอนไม่ครบ)
         socket.on('image_failed', () => {
+            try { pushNotif('bad', 'โหลดรูปสลิปจาก LINE ไม่สำเร็จ — เปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง'); } catch (e) {}
             try {
                 const Ctx = window.AudioContext || window.webkitAudioContext;
                 if (!Ctx) return;
@@ -1711,9 +2202,28 @@
             } catch (e) { /* เสียงถูกบล็อกก็ไม่เป็นไร การ์ดแดงยังแสดงตามปกติ */ }
         });
 
+        // v1.0.16: สลิปซ้ำ / โอนเข้าผิดบัญชี (ระบบไม่บันทึก) = Toast ส้มแดงมุมบนขวา + บี๊ปคู่สั้น 600Hz (การ์ดแดงกับแถวแดงในตารางมาจาก full_sync)
+        socket.on('slip_warning', (d) => {
+            try {
+                const title = d && d.kind === 'duplicate' ? '⚠️ สลิปซ้ำ' : (d && d.kind === 'wrong_account' ? '⚠️ โอนเข้าผิดบัญชี' : (d && d.kind === 'check_pending' ? '⚠️ ตรวจการ์ดรอใส่ยอด' : '⚠️ สลิปที่ระบบไม่บันทึก'));
+                showToast((d && d.name ? d.name + ' — ' : '') + ((d && d.reason) || ''), { kind: 'warn', pos: 'tr', title, ms: 12000 });
+                playPreset('warnBeep');
+            } catch (e) {}
+        });
+        // v1.0.16: ลูกค้าส่งที่อยู่เข้ามา = Toast เขียวมุมล่างซ้าย ไม่มีเสียง (ไอคอน 📍 บนการ์ดเปลี่ยนเองจาก full_sync)
+        socket.on('address_updated', (d) => {
+            try { showToast('คุณ' + ((d && d.name) || 'ลูกค้า') + ' อัปเดตที่อยู่จัดส่งแล้ว', { kind: 'ok', pos: 'bl', ms: 6000 }); } catch (e) {}
+        });
+        // v1.0.16: สลิปที่ไม่มี QR / อ่านยอดไม่ได้ (รอแม่ค้าใส่ยอด) = เสียงคอร์ดเฉพาะ + การ์ดส้มกะพริบ ไม่มีเลขคิว
+        socket.on('pending_amount_slip', (d) => {
+            try {
+                pushNotif('warn', ((d && d.name) ? d.name + ' ' : '') + ((d && d.bankName !== undefined && d.bankName !== null) ? 'ส่งสลิปธนาคาร' + d.bankName + 'ที่ยังตรวจไม่ได้' + (d.delay ? ' (ต้องรอ ~' + d.delay + ' นาทีหลังโอน)' : '') + ' — ให้ลูกค้าส่งรูปเดิมซ้ำทีหลัง' : 'ส่งสลิปที่ระบบอ่านยอดไม่ได้ — รอแม่ค้ากดเช็คสลิปและใส่ยอด'));
+                playPreset('pendingChord');
+            } catch (e) {}
+        });
+
         socket.on('play_sound', () => {
-            const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-            audio.play().catch(e => console.log("Audio blocked"));
+            playPreset('newSlip');
         });
 
         fetch('/api/config').then(res => res.json()).then(configData => {
@@ -1732,6 +2242,7 @@
             document.getElementById('shippingInput').value = (configData.shippingFee !== undefined && configData.shippingFee !== null) ? configData.shippingFee : 39;
             document.getElementById('thresholdInput').value = configData.freeShippingThreshold || 0;
             document.getElementById('merchantInput').value = configData.merchantAccountName || "";
+            document.getElementById('merchantEnInput').value = configData.merchantAccountNameEn || "";
             document.getElementById('openchatInput').value = configData.openchatLink || "";
         });
         
@@ -1749,11 +2260,12 @@
             const newShipping = document.getElementById('shippingInput').value;
             const newThreshold = document.getElementById('thresholdInput').value;
             const newMerchantName = document.getElementById('merchantInput').value;
+            const newMerchantNameEn = document.getElementById('merchantEnInput').value;
             const newOpenchatLink = document.getElementById('openchatInput').value;
             
             fetch('/api/config', { 
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, 
-                body: JSON.stringify({ newPrices, newShipping, newThreshold, newMerchantName, newOpenchatLink }) 
+                body: JSON.stringify({ newPrices, newShipping, newThreshold, newMerchantName, newMerchantNameEn, newOpenchatLink }) 
             }).then(res => res.json()).then(data => {
                 if (data.success) {
                     const status = document.getElementById('saveStatus');
@@ -2083,6 +2595,7 @@
         let currentTunnelData = null;
 
         function updateWebhookUI(data) {
+            try { handleTunnelHealth(data); } catch (e) { console.warn('tunnel health check failed', e); }
             currentTunnelData = data;
             const pill = document.getElementById('webhookStatusPill');
             const dot = document.getElementById('webhookDot');
@@ -2332,97 +2845,120 @@
             }, 600);
         }
 
-        function showGlobalAlertBanner(message) {
+        function showGlobalAlertBanner(message, kind) {
             const banner = document.getElementById('globalAlertBanner');
             const msgEl = document.getElementById('globalAlertMessage');
             if (!banner || !msgEl) return;
             msgEl.innerText = message;
+            banner.dataset.kind = kind || 'other';
             banner.style.display = 'flex';
+            document.documentElement.style.setProperty('--alert-h', banner.offsetHeight + 'px');
+        }
+
+        // v1.0.16: ปิดแถบเตือน (userDismissed = แม่ค้ากด x เอง -> หยุดเสียงไซเรนของท่อหลุดและไม่เด้งซ้ำจนกว่าจะหายแล้วหลุดใหม่)
+        function hideGlobalAlertBanner(userDismissed, onlyKind) {
+            const banner = document.getElementById('globalAlertBanner');
+            if (!banner) return;
+            if (onlyKind && banner.dataset.kind !== onlyKind) return;
+            if (userDismissed && banner.dataset.kind === 'tunnel') {
+                if (__tunnelSirenTimer) { clearInterval(__tunnelSirenTimer); __tunnelSirenTimer = null; }
+                __tunnelDismissed = true;
+            }
+            banner.style.display = 'none';
+            delete banner.dataset.kind;
+            document.documentElement.style.setProperty('--alert-h', '0px');
         }
 
         socket.on('provider_quota_alert', (data) => {
             updateQuotaUI(data);
             showGlobalAlertBanner(data.message);
+            try { pushNotif('bad', String(data.message || '').replace(/^⚠️\s*(\[แจ้งเตือนด่วน\]:\s*)?/, '')); } catch (e) {}
             try {
-                const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-                audio.play().catch(() => {});
+                playPreset('quotaAlert');
             } catch(e) {}
         });
 
         // 🔴 ENHANCED PRE-LIVE SAFETY CHECK (ป้องกัน Risk 2 ก่อนเริ่มไลฟ์)
+        // v1.0.16: ตรวจความพร้อมก่อนเริ่มไลฟ์ 5 จุดในหน้าต่างเดียว (เดิมเด้งทีละหน้าต่าง: โควตา -> รอรวมบิล -> เงินค้าง)
+        function buildReadinessRows(inp) {
+            const rows = [];
+            const fmt = (n) => Number(n).toLocaleString('en-US');
+            // 1) LINE / Tunnel
+            if (!inp.tunnel) rows.push({ key: 'tunnel', level: 'warn', title: 'การเชื่อมต่อ LINE (Tunnel / Webhook)', detail: 'ตรวจสถานะไม่ได้ — ลองกดป้าย LINE Webhook ด้านบนเพื่อดูสถานะ' });
+            else {
+                const v = tunnelHealthVerdict(inp.tunnel);
+                rows.push(v.bad
+                    ? { key: 'tunnel', level: 'bad', title: 'การเชื่อมต่อ LINE (Tunnel / Webhook)', detail: v.message.replace(/^⚠️\s*/, '') }
+                    : { key: 'tunnel', level: 'ok', title: 'การเชื่อมต่อ LINE (Tunnel / Webhook)', detail: 'เชื่อมต่อแล้ว สลิปจากลูกค้าเข้าได้' });
+            }
+            // 2) โควตาตรวจสลิป
+            const q = inp.quota;
+            if (!q || q.success === false) rows.push({ key: 'quota', level: 'warn', title: 'โควตาตรวจสลิปอัตโนมัติ', detail: 'ตรวจโควตาไม่ได้ในขณะนี้' });
+            else if (q.provider === 'slipok') {
+                if (q.overQuota > 0) rows.push({ key: 'quota', level: 'bad', title: 'โควตาตรวจสลิปอัตโนมัติ', detail: 'SlipOK ใช้เกินโควตาไปแล้ว ' + q.overQuota + ' ใบ (อาจมีค่าใช้จ่ายเพิ่ม)' });
+                else if (q.remaining <= 0) rows.push({ key: 'quota', level: 'bad', title: 'โควตาตรวจสลิปอัตโนมัติ', detail: 'โควตา SlipOK หมดแล้ว (0/' + q.limit + ') สลิปจะเข้าคิว "ตรวจสลิปเอง" ให้แม่ค้ากรอกยอดเอง' });
+                else if (q.remaining <= 10) rows.push({ key: 'quota', level: 'warn', title: 'โควตาตรวจสลิปอัตโนมัติ', detail: 'SlipOK เหลือเพียง ' + q.remaining + ' ใบ (ใช้ไป ' + q.used + '/' + q.limit + ')' });
+                else rows.push({ key: 'quota', level: 'ok', title: 'โควตาตรวจสลิปอัตโนมัติ', detail: 'SlipOK เหลือ ' + q.remaining + ' ใบ' });
+            } else {
+                const name = String(q.provider || '').toUpperCase();
+                if (q.status === 'exhausted' || (typeof q.balance === 'number' && q.balance <= 0)) rows.push({ key: 'quota', level: 'bad', title: 'โควตาตรวจสลิปอัตโนมัติ', detail: 'เครดิต ' + name + ' หมดแล้ว สลิปจะเข้าคิว "ตรวจสลิปเอง" ให้แม่ค้ากรอกยอดเอง' });
+                else if (q.status === 'low' || (typeof q.balance === 'number' && q.balance <= 10)) rows.push({ key: 'quota', level: 'warn', title: 'โควตาตรวจสลิปอัตโนมัติ', detail: 'เครดิต ' + name + ' เหลือน้อย (' + q.balance + ')' });
+                else rows.push({ key: 'quota', level: 'ok', title: 'โควตาตรวจสลิปอัตโนมัติ', detail: 'เครดิต ' + name + ' เพียงพอ' });
+            }
+            // 3) รอรวมบิลจากรอบก่อน
+            if (inp.merge && inp.merge.success && inp.merge.pending) rows.push({ key: 'merge', level: 'info', title: 'รวมบิลกับรอบก่อน', detail: 'รอบก่อนตั้ง "รอรวมกับรอบหน้า" ไว้ (ลูกค้า ' + inp.merge.customers + ' คน) รอบนี้จะรวมบิลให้อัตโนมัติ: ไม่เก็บค่าส่งซ้ำ นับชิ้นรวมกันเพื่อส่งฟรี และ Export Kerry เป็นไฟล์เดียว' });
+            else if (inp.merge && inp.merge.success) rows.push({ key: 'merge', level: 'ok', title: 'รวมบิลกับรอบก่อน', detail: 'ไม่มีรอบที่รอรวมบิล' });
+            else rows.push({ key: 'merge', level: 'warn', title: 'รวมบิลกับรอบก่อน', detail: 'ตรวจสถานะรอรวมบิลไม่ได้' });
+            // 4) เงินค้างของลูกค้า (จะถูกรีเซ็ตเป็น 0 ตอนเริ่มไลฟ์)
+            const b = inp.balances;
+            if (b && b.success && b.count > 0) {
+                const lines = (b.list || []).map(c => c.name + ': ' + fmt(c.balance) + ' บาท');
+                if (b.count > lines.length) lines.push('และอีก ' + (b.count - lines.length) + ' คน');
+                rows.push({ key: 'balances', level: 'warn', title: 'เงินค้างของลูกค้า', detail: 'มีลูกค้าที่โอนมาแล้วยังไม่ได้สิทธิ์ ' + b.count + ' คน รวม ' + fmt(b.total) + ' บาท\n' + lines.join('\n') + '\nเริ่มไลฟ์แล้วยอดเหล่านี้จะถูกรีเซ็ตเป็น 0 — โอนคืนหรือแจ้งลูกค้าก่อน' });
+            } else if (b && b.success) rows.push({ key: 'balances', level: 'ok', title: 'เงินค้างของลูกค้า', detail: 'ไม่มีลูกค้าที่มีเงินค้าง' });
+            else rows.push({ key: 'balances', level: 'warn', title: 'เงินค้างของลูกค้า', detail: 'ตรวจเงินค้างไม่ได้' });
+            // 5) หน้าจอเชื่อมกับโปรแกรม
+            rows.push(inp.socketConnected
+                ? { key: 'socket', level: 'ok', title: 'หน้าจอเชื่อมกับโปรแกรม', detail: 'เชื่อมต่อแล้ว คิวจะอัปเดตทันที' }
+                : { key: 'socket', level: 'bad', title: 'หน้าจอเชื่อมกับโปรแกรม', detail: 'หน้าจอหลุดจากโปรแกรม คิวอาจไม่อัปเดต — รอสักครู่หรือกด F5' });
+            return rows;
+        }
+
+        function closeReadinessModal() { document.getElementById('readinessModal').style.display = 'none'; }
+
         async function startLiveSession() {
-            try {
-                const res = await fetch('/api/provider/quota?force=true');
-                const quotaData = await res.json();
-                
-                if (quotaData.provider === 'slipok') {
-                    if (quotaData.overQuota > 0) {
-                        openModal('⚠️', `[แจ้งเตือนแพ็กเกจ SlipOK]\nสลิปในรอบนี้ใช้งานเกินแพ็กเกจแล้ว ${quotaData.overQuota} สลิป (อาจมีค่าบริการส่วนเกิน)\n\nคุณต้องการเริ่มไลฟ์สดเลยหรือไม่?`, () => {
-                            proceedStartLive();
-                        });
-                        return;
-                    } else if (quotaData.remaining <= 0) {
-                        openModal('⚠️', `[แจ้งเตือนก่อนเริ่มไลฟ์]\nโควตาแพ็กเกจ SlipOK หมดแล้ว (0/${quotaData.limit} สลิป)\n\nระบบจะเปิด "โหมดสำรองตรวจภาพเอง (Manual)" ให้อัตโนมัติ (ออเดอร์ของลูกค้าจะไม่หลุดหาย)\n\nยืนยันต้องการเริ่มไลฟ์สดเลยหรือไม่?`, () => {
-                            proceedStartLive();
-                        });
-                        return;
-                    } else if (quotaData.remaining <= 10) {
-                        openModal('⚡', `[แจ้งเตือนโควตาใกล้หมด]\nโควตา SlipOK ในรอบนี้เหลืออีกเพียง ${quotaData.remaining} ครั้ง (ใช้ไปแล้ว ${quotaData.used}/${quotaData.limit})\n\nคุณต้องการเริ่มไลฟ์สดเลยหรือไม่?`, () => {
-                            proceedStartLive();
-                        });
-                        return;
-                    }
-                } else {
-                    if (quotaData.status === 'exhausted' || (typeof quotaData.balance === 'number' && quotaData.balance <= 0)) {
-                        openModal('⚠️', `[แจ้งเตือนก่อนเริ่มไลฟ์]\nเครดิตตรวจสลิป (${(quotaData.provider || '').toUpperCase()}) หมดแล้ว!\n\nไม่ต้องกังวล: ระบบจะเปิด "โหมดสำรองตรวจภาพเอง (Manual)" ให้อัตโนมัติ (ออเดอร์ของลูกค้าจะไม่หลุดหาย)\n\nยืนยันต้องการเริ่มไลฟ์สดเลยหรือไม่?`, () => {
-                            proceedStartLive();
-                        });
-                        return;
-                    } else if (quotaData.status === 'low' || (typeof quotaData.balance === 'number' && quotaData.balance <= 10)) {
-                        openModal('⚡', `[แจ้งเตือนเครดิตใกล้หมด]\nเครดิตตรวจสลิป (${(quotaData.provider || '').toUpperCase()}) เหลือเพียง ${quotaData.balance} ครั้ง!\n\nคุณต้องการเริ่มไลฟ์สดเลยหรือไม่?\n(เมื่อเครดิตหมด ระบบจะสลับไปตรวจมือฟรีให้อัตโนมัติ)`, () => {
-                            proceedStartLive();
-                        });
-                        return;
-                    }
-                }
-            } catch(e) {}
-
-            openModal('🔴', 'ยืนยันการ "เริ่มไลฟ์สด" ?\n(ระบบจะเริ่มจับเวลาไลฟ์ และแยกออเดอร์ของรอบนี้ให้อัตโนมัติ)', () => {
-                proceedStartLive();
+            const modal = document.getElementById('readinessModal');
+            const body = document.getElementById('readinessBody');
+            const btn = document.getElementById('readinessStartBtn');
+            body.innerHTML = '<div style="padding:18px; color:#64748b;">⏳ กำลังตรวจสอบ...</div>';
+            btn.disabled = true; btn.innerText = '▶️ เริ่มไลฟ์';
+            modal.style.display = 'flex';
+            const get = (url) => fetch(url).then(r => (r.ok ? r.json() : null)).catch(() => null);
+            const [tunnel, quota, merge, balances] = await Promise.all([
+                get('/api/tunnel/status'), get('/api/provider/quota?force=true'), get('/api/live_session/pending_merge'), get('/api/queue/pending_balances')
+            ]);
+            const rows = buildReadinessRows({
+                tunnel: tunnel && tunnel.success ? { active: tunnel.active, synced: tunnel.syncStatus ? tunnel.syncStatus.synced : undefined } : null,
+                quota, merge, balances, socketConnected: !!socket.connected
             });
+            const style = { ok: ['#f0fdf4', '#16a34a', '✅'], warn: ['#fffbeb', '#d97706', '⚠️'], bad: ['#fef2f2', '#dc2626', '❌'], info: ['#eff6ff', '#2563eb', 'ℹ️'] };
+            body.innerHTML = rows.map(r => {
+                const st = style[r.level] || style.warn;
+                return '<div style="background:' + st[0] + '; border-left:4px solid ' + st[1] + '; padding:9px 12px; border-radius:6px; margin-bottom:8px;">'
+                    + '<div style="font-weight:600; color:' + st[1] + ';">' + st[2] + ' ' + escapeHtml(r.title) + '</div>'
+                    + '<div style="font-size:0.88em; color:#334155; margin-top:3px; white-space:pre-line;">' + escapeHtml(r.detail) + '</div></div>';
+            }).join('');
+            const hasBad = rows.some(r => r.level === 'bad');
+            btn.innerText = hasBad ? '▶️ เริ่มไลฟ์ต่อ (มีจุดที่ต้องระวัง)' : '▶️ เริ่มไลฟ์';
+            btn.disabled = false;
         }
 
-        // v1.0.13: เริ่มไลฟ์ใหม่จะรีเซ็ตเงินค้างของลูกค้าทุกคน จึงเตือนแม่ค้าก่อนถ้ายังมีเงินค้าง
-        // v1.0.15: ถ้ารอบก่อนหน้าตั้งไว้ "รอรวมกับรอบหน้า" ให้แจ้งก่อนว่ารอบนี้จะรวมบิลกับรอบนั้น
-        function proceedStartLive() {
-            fetch('/api/live_session/pending_merge')
-                .then(res => res.ok ? res.json() : null)
-                .catch(() => null)
-                .then(d => {
-                    if (d && d.success && d.pending) {
-                        const msg = `[รวมบิลกับรอบก่อนหน้า] รอบไลฟ์ก่อนหน้าตั้งไว้ "รอรวมกับรอบหน้า" (ลูกค้าที่ซื้อรอบนั้น ${d.customers} คน)\n\nถ้าเริ่มไลฟ์รอบนี้:\n• ลูกค้าที่ซื้อรอบก่อนแล้วซื้อเพิ่ม จะไม่ถูกเก็บค่าส่งซ้ำ และนับชิ้นรวมกันเพื่อส่งฟรี\n• ไฟล์ Kerry จะรวมของ 2 รอบเป็นพัสดุเดียว\n• จบรอบนี้แล้วต้องส่งของ (รอรวมต่อไม่ได้)\n\nถ้าส่งของรอบก่อนไปแล้ว ให้กดยกเลิก แล้วไป Export Kerry เลือกรอบนั้นและกด "ยกเลิกการรอรวมบิล"\n\nยืนยันเริ่มไลฟ์และรวมบิลกับรอบก่อน?`;
-                        setTimeout(() => openModal('🔗', msg, () => checkBalancesThenStartLive()), 0);
-                    } else {
-                        checkBalancesThenStartLive();
-                    }
-                });
-        }
-
-        function checkBalancesThenStartLive() {
-            fetch('/api/queue/pending_balances')
-                .then(res => res.ok ? res.json() : null)
-                .catch(() => null)
-                .then(d => {
-                    if (d && d.success && d.count > 0) {
-                        const lines = (d.list || []).map(c => `• ${c.name}: ${Number(c.balance).toLocaleString('en-US')} บาท`);
-                        if (d.count > lines.length) lines.push(`• และอีก ${d.count - lines.length} คน`);
-                        const msg = `[เตือนก่อนเริ่มไลฟ์] ยังมีเงินค้างของลูกค้า ${d.count} คน รวม ${Number(d.total).toLocaleString('en-US')} บาท\n${lines.join('\n')}\n\nถ้ากดเริ่มไลฟ์ ยอดเหล่านี้จะถูกรีเซ็ตเป็น 0 ลูกค้าต้องโอนใหม่ทั้งหมด (ควรโอนคืนหรือแจ้งลูกค้าก่อน)\n\nยืนยันเริ่มไลฟ์และรีเซ็ตยอดเหล่านี้?`;
-                        // เปิดหน้าต่างใหม่หลังหน้าต่างเดิมปิดแล้ว (ไม่งั้นถูกปิดตามไปด้วย)
-                        setTimeout(() => openModal('⚠️', msg, () => doStartLive()), 0);
-                    } else {
-                        doStartLive();
-                    }
-                });
+        function confirmStartFromReadiness() {
+            const btn = document.getElementById('readinessStartBtn');
+            if (btn.disabled) return;
+            btn.disabled = true;
+            closeReadinessModal();
+            doStartLive();
         }
 
         function doStartLive() {
@@ -2595,7 +3131,7 @@
                         if (data.outOfRoundCustomers && data.outOfRoundCustomers.length > 0) {
                             statusBox.innerHTML += `
                                 <div style="margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: #f3e5f5; color: #7b1fa2; font-weight: 600;">
-                                    🕒 โอนนอกรอบ (เงินมาหลังจบไลฟ์): ${data.outOfRoundCustomers.map(n => escapeHtml(n)).join(', ')} — ถ้าเป็นยอดจุ่มที่จ่ายของไปแล้ว อย่าส่งของซ้ำ (ในไฟล์ Excel จะมีโน้ตไว้ในช่อง Remark)
+                                    🕒 โอนนอกรอบ (เงินมาหลังจบไลฟ์): ${data.outOfRoundCustomers.map(n => escapeHtml(n)).join(', ')} — ถ้าเป็นยอดจุ่มที่จ่ายของไปแล้ว อย่าส่งของซ้ำ
                                 </div>
                             `;
                         }
@@ -3047,6 +3583,8 @@
                             document.getElementById('wizDiscordActivity').placeholder = data.discordActivitySet ? `ตั้งค่าแล้ว (${data.discordActivitySet}) - วางลิงก์ใหม่เพื่อเปลี่ยน` : 'ยังไม่ได้ตั้งค่า - วางลิงก์ Webhook';
                             document.getElementById('wizDiscordDevReport').value = '';
                             document.getElementById('wizDiscordDevReport').placeholder = data.discordDevReportSet ? `ตั้งค่าแล้ว (${data.discordDevReportSet}) - วางลิงก์ใหม่เพื่อเปลี่ยน` : 'ยังไม่ได้ตั้งค่า - วางลิงก์ Webhook';
+                            document.getElementById('wizDiscordLiveSummary').value = '';
+                            document.getElementById('wizDiscordLiveSummary').placeholder = data.discordLiveSummarySet ? `ตั้งค่าแล้ว (${data.discordLiveSummarySet}) - วางลิงก์ใหม่เพื่อเปลี่ยน` : 'ยังไม่ได้ตั้งค่า - สรุปจะส่งช่องแจ้งเตือนหลัก';
                         }
                         document.getElementById('wizSlipOkKey').value = data.slipokApiKey || '';
                         document.getElementById('wizSlipOkBranch').value = data.slipokBranchId || '';
@@ -3070,6 +3608,7 @@
                 geminiApiKey: document.getElementById('wizGeminiKey').value.trim(),
                 discordActivityWebhook: document.getElementById('wizDiscordActivity') ? document.getElementById('wizDiscordActivity').value.trim() : '',
                 discordDevReportWebhook: document.getElementById('wizDiscordDevReport') ? document.getElementById('wizDiscordDevReport').value.trim() : '',
+                discordLiveSummaryWebhook: document.getElementById('wizDiscordLiveSummary') ? document.getElementById('wizDiscordLiveSummary').value.trim() : '',
                 slipokApiKey: document.getElementById('wizSlipOkKey').value.trim(),
                 slipokBranchId: document.getElementById('wizSlipOkBranch').value.trim(),
                 easyslipToken: document.getElementById('wizEasySlipToken').value.trim(),

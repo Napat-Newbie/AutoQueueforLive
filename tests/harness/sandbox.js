@@ -168,8 +168,10 @@ class Sandbox {
     /** Wait until the webhook finished processing slip rows >= n. */
     waitForSlips(n) { return this.waitFor(() => this.slips().length >= n, 8000, `expected ${n} slip row(s)`); }
 
-    async configure({ prices = 'A:100,B:200', shipping = 40, threshold = 3, merchant = 'TestShop' } = {}) {
-        const r = await this.post('/api/config', { newPrices: prices, newShipping: shipping, newThreshold: threshold, newMerchantName: merchant });
+    async configure({ prices = 'A:100,B:200', shipping = 40, threshold = 3, merchant = 'TestShop', merchantEn } = {}) {
+        const body = { newPrices: prices, newShipping: shipping, newThreshold: threshold, newMerchantName: merchant };
+        if (merchantEn !== undefined) body.newMerchantNameEn = merchantEn;
+        const r = await this.post('/api/config', body);
         if (r.status !== 200) throw new Error('config failed: ' + r.status);
     }
     async stats() { return (await this.get('/api/stats/today')).json; }

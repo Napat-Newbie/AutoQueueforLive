@@ -17,6 +17,8 @@ class MockUniverse {
         this.slips = new Map();        // key -> { status, body }  (SlipOK answer for the slip whose image contains `SLIP:<key>`)
         this.replies = [];             // text pushed/replied to customers
         this.discords = [];            // webhook payloads the app sent to Discord: { path, body }
+        this.geminis = [];             // every Gemini API call: { path, body }
+        this.geminiReply = null;       // scripted response text (a JSON string); null -> 500 so accidental calls fail loudly
     }
 
     async start() {
@@ -46,7 +48,7 @@ class MockUniverse {
     profile(userId, displayName) { this.profiles.set(userId, displayName); }
 
     /** SlipOK reads slip `key` as a valid transfer. */
-    slipOk(key, { amount, transRef, receiverName = 'TestShop', transDate = '20261029', transTime = '11:00:00' }) {
+    slipOk(key, { amount, transRef, receiverName = 'TestShop', receiverNameEn, transDate = '20261029', transTime = '11:00:00' }) {
         this.slips.set(key, {
             status: 200,
             body: {
@@ -54,7 +56,7 @@ class MockUniverse {
                 data: {
                     success: true, message: 'ok', transRef, transDate, transTime, amount,
                     sender: { displayName: 'Sender', name: 'Sender' },
-                    receiver: { displayName: receiverName, name: receiverName },
+                    receiver: { displayName: receiverName, name: receiverNameEn !== undefined ? receiverNameEn : receiverName },
                 },
             },
         });
@@ -108,6 +110,12 @@ class MockUniverse {
                 const scripted = k && this.slips.get(k[1]);
                 if (!scripted) return reply(400, { success: false, code: 1002, message: 'unscripted slip' });
                 return reply(scripted.status, scripted.body);
+            }
+            // Gemini API (recorded; scripted reply via this.geminiReply, otherwise 500) — ใช้ทดสอบ AI เสริมความเห็นในสรุปหลังจบไลฟ์
+            if (u.host === 'generativelanguage.googleapis.com') {
+                this.geminis.push({ path: u.pathname, body: JSON.parse(body.toString('utf8') || '{}') });
+                if (this.geminiReply === null) return reply(500, { error: { message: 'no scripted gemini reply' } });
+                return reply(200, { candidates: [{ content: { parts: [{ text: this.geminiReply }] } }] });
             }
             // Discord webhook (recorded, always OK) — ใช้ทดสอบการแจ้งเตือน/สรุปที่ระบบส่งเข้า Discord
             if (u.host === 'discord.com' || u.host === 'discordapp.com') {
