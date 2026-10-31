@@ -21,7 +21,7 @@
                 <div>
                     <div class="flex items-center space-x-2.5">
                         <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">Version History & Changelog</h1>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.17 (CURRENT)</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.18 (CURRENT)</span>
                     </div>
                     <p class="text-xs text-zinc-400 mt-0.5">บันทึกประวัติการปรับปรุง แก้ไขบั๊ก และฟีเจอร์ใหม่ของ AutoQueue for Live ทั้งหมด</p>
                 </div>
@@ -34,12 +34,36 @@
         <!-- Timeline Container -->
         <div class="space-y-6">
 
+            <!-- v1.0.18 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.18</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">31 ตุลาคม 2026</span>
+                </div>
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">✨ ปรับปรุง:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>แผง "🔔 การแจ้งเตือน" ด้านขวาของหน้าหลักแสดงตลอด ไม่ต้องกดเปิด: แบ่งเป็นวันนี้ / เมื่อวาน / วันที่ ติ๊กดูเฉพาะเรื่องสำคัญได้ กด "ย่อ ›" ให้เหลือแถบเล็ก (มีตัวเลขบอกเรื่องใหม่) และบนมือถือเปิดจากปุ่มกระดิ่ง</li>
+                            <li>การแจ้งเตือนทุกเรื่องบันทึกไว้ในโปรแกรมถาวร ไม่หายเมื่อจบไลฟ์ ปิดโปรแกรม หรือกด F5 และบันทึกแม้ตอนนั้นไม่ได้เปิดหน้าจอ (เปิดจากเครื่องไหนก็เห็นรายการเดียวกัน)</li>
+                            <li>ป๊อปอัปเด้งเฉพาะเรื่องด่วนสีแดง (สลิปซ้ำ โอนผิดบัญชี โหลดรูปสลิปไม่ได้) เรื่องอื่นขึ้นในแผงอย่างเดียว และป๊อปอัปไม่บังปุ่ม "ปิดโปรแกรม" แล้ว</li>
+                            <li>ลูกค้าโอนยอดเท่ากัน 2 ครั้งติดกันหลังแม่ค้ากรอกยอดเอง: ขึ้นการ์ดส้มค้างไว้ให้ตัดสิน กด "➕ โอนครั้งที่ 2 จริง" เพื่อบวกยอดและคิดชิ้นให้ลูกค้า หรือ "✔ ใบเดียวกัน" ถ้าเป็นรูปเดิมส่งซ้ำ (เดิมเงินครั้งที่ 2 หายเงียบ)</li>
+                            <li>ระบบจับคู่สลิปที่แม่ค้ากรอกยอดเองด้วยรหัสประจำรายการจาก QR ของสลิป: ถ้ารหัสตรงกันจะผูกเป็นใบเดียวกันแม่นยำแม้นาฬิกาเครื่องร้านเพี้ยน กรณีอื่นยังขึ้นการ์ดยืนยันให้แม่ค้าตัดสินตามเดิม</li>
+                            <li>หลังกดจบไลฟ์ ระบบส่งบันทึกการทำงานของรอบนั้นให้ทีมพัฒนาอัตโนมัติ เพื่อช่วยตรวจปัญหาได้เร็วขึ้น (ปิดเบอร์โทรและเลขบัตรของลูกค้าแล้ว)</li>
+                            <li>ร้านที่อัปเดตข้ามจาก 1.0.16 มาเป็นรุ่นนี้โดยตรง ให้ปิดแล้วเปิดโปรแกรม 1 ครั้งหลังอัปเดตเสร็จ</li>
+                            <li>ชุดทดสอบอัตโนมัติ 263 ข้อ ผ่านทั้งหมด</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
             <!-- v1.0.17 -->
             <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
                     <div class="flex items-center space-x-3">
                         <span class="text-lg font-bold text-white">🚀 Version 1.0.17</span>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
                     </div>
                     <span class="text-xs text-zinc-400 font-mono">31 ตุลาคม 2026</span>
                 </div>
