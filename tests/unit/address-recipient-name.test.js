@@ -9,8 +9,9 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { load } = require('../harness/extract');
 
-const INDEX = process.env.AQ_TEST_APP_ROOT ? path.join(process.env.AQ_TEST_APP_ROOT, 'index.js') : path.join(__dirname, '..', '..', 'index.js');
-const ctx = load(INDEX, { functions: ['parseThaiAddressFallback', 'pickRecipientName', 'findThaiProvinceName'] });
+// v1.0.19: ตัวอ่านที่อยู่/ชื่อย้ายไป lib/address.js — เทสต์ตัดจากไฟล์จริงของโมดูลโดยตรง (assertion เดิมทุกตัว ไม่แก้)
+const ADDRESS_LIB = process.env.AQ_TEST_APP_ROOT ? path.join(process.env.AQ_TEST_APP_ROOT, 'lib', 'address.js') : path.join(__dirname, '..', '..', 'lib', 'address.js');
+const ctx = load(ADDRESS_LIB, { functions: ['parseThaiAddressFallback', 'pickRecipientName', 'findThaiProvinceName'] });
 const nameOf = (text) => ctx.parseThaiAddressFallback(text, 'LINEname').recipient_name;
 
 test('name on the first line (old behaviour kept)', () => {

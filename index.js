@@ -1881,156 +1881,29 @@ function countPastDraws(lineId, opts = {}) {
     return (row && Number(row.n)) || 0;
 }
 
-const MAX_DP_BUDGET = 500000; // เพดานคำนวณอัตโนมัติ 500,000 บาท (คำนวณในหน่วยความจำ <3MB, เวลา <10ms ป้องกัน Event Loop ค้าง)
-// opts.holdExactPrice: ถ้าลูกค้ายังไม่เคยได้ของในรอบนี้ และยอดรวมเท่ากับราคาสินค้าชิ้นใดชิ้นหนึ่งพอดี
-// แปลว่าลูกค้าน่าจะลืมโอนค่าส่ง -> ให้รอค่าส่งก่อน แทนที่จะให้สินค้าชิ้นอื่นที่ราคาถูกกว่า (เช่น โอน 189 ลืมค่าส่ง แต่ระบบให้ 149+ค่าส่ง)
+// 💰 v1.0.19: สูตรเงินแท้ย้ายไปอยู่ที่ lib/money.js แล้ว (pure — รับการตั้งค่าร้านเป็นอาร์กิวเมนต์แรก)
+// ตัวห่อด้านล่างผูก "ค่าตั้งค้าปัจจุบัน" ให้ทุกครั้งที่ถูกเรียก จุดใช้งานทั้งระบบจึงเหมือนเดิมทุกประการ
+// การแก้สูตร: แก้ที่ lib/money.js เท่านั้น (มีเทสต์ตรง tests/unit/money-module.test.js และชุดระบบคุมพฤติกรรมรวม)
+const Money = require('./lib/money');
+const MAX_DP_BUDGET = Money.MAX_DP_BUDGET; // เพดานคำนวณอัตโนมัติ 500,000 บาท (คำนวณในหน่วยความจำ <3MB, เวลา <10ms ป้องกัน Event Loop ค้าง)
 function calculateBestDraws(virtualBalance, pastDraws, opts = {}) {
-    const best = calculateBestDrawsCore(virtualBalance, pastDraws);
-    if (opts.holdExactPrice && best.draws > 0 && best.appliedShipping && !(pastDraws > 0) && Array.isArray(priceList)) {
-        const exact = priceList.some(p => Math.abs(p.price - virtualBalance) < 0.005);
-        if (exact) {
-            addLog('INFO', `ยอด ${virtualBalance}฿ เท่าราคาสินค้าพอดี ยังไม่ได้ค่าส่ง ${shippingFee}฿ -- พักยอดรอค่าส่ง`);
-            return { draws: 0, remainder: virtualBalance, cost: 0, isFreeShip: false, appliedShipping: false, breakdown: [], heldForShipping: true };
-        }
-    }
-    return best;
+    return Money.calculateBestDraws({ priceList, shippingFee, freeShippingThreshold, addLog }, virtualBalance, pastDraws, opts);
 }
 function calculateBestDrawsCore(virtualBalance, pastDraws) {
-    let best = { draws: 0, remainder: virtualBalance, cost: 0, isFreeShip: false, appliedShipping: false, breakdown: [] };
-    if (!priceList || priceList.length === 0) return best;
-
-    const items = [...priceList].sort((a, b) => b.price - a.price);
-    const minPrice = Math.min(...items.map(p => p.price));
-    if (!(minPrice > 0) || !(virtualBalance >= minPrice)) return best;
-
-    const B = Math.floor(virtualBalance);
-    if (B > MAX_DP_BUDGET) {
-        addLog('WARN', `ยอด ${virtualBalance}฿ เกินเพดานคำนวณอัตโนมัติ (${MAX_DP_BUDGET}฿) — กรุณาตรวจสอบและกรอกยอดด้วยตนเอง`);
-        return best;
-    }
-
-    // Dynamic Programming 2-State: State 0 = ค่าส่งปกติ, State 1 = ส่งฟรี (เมื่อสะสมครบ threshold)
-    const maxDraws0 = new Int32Array(B + 1).fill(-1);
-    const lastItem0 = new Int16Array(B + 1).fill(-1);
-    const maxDraws1 = new Int32Array(B + 1).fill(-1);
-    const lastItem1 = new Int16Array(B + 1).fill(-1);
-    const fromState1 = new Uint8Array(B + 1);
-
-    if (pastDraws < freeShippingThreshold) {
-        maxDraws0[0] = 0;
-    } else {
-        maxDraws1[0] = 0;
-    }
-
-    for (let c = 0; c <= B; c++) {
-        const d0 = maxDraws0[c];
-        if (d0 >= 0) {
-            for (let i = 0; i < items.length; i++) {
-                const nextC = c + items[i].price;
-                if (nextC > B) continue;
-                const nextD = d0 + 1;
-                const isFree = (pastDraws + nextD) >= freeShippingThreshold;
-                if (!isFree) {
-                    if (nextD > maxDraws0[nextC]) {
-                        maxDraws0[nextC] = nextD;
-                        lastItem0[nextC] = i;
-                    }
-                } else {
-                    if (nextD > maxDraws1[nextC]) {
-                        maxDraws1[nextC] = nextD;
-                        lastItem1[nextC] = i;
-                        fromState1[nextC] = 0;
-                    }
-                }
-            }
-        }
-        const d1 = maxDraws1[c];
-        if (d1 >= 0) {
-            for (let i = 0; i < items.length; i++) {
-                const nextC = c + items[i].price;
-                if (nextC > B) continue;
-                const nextD = d1 + 1;
-                if (nextD > maxDraws1[nextC]) {
-                    maxDraws1[nextC] = nextD;
-                    lastItem1[nextC] = i;
-                    fromState1[nextC] = 1;
-                }
-            }
-        }
-    }
-
-    let bestC = -1;
-    let bestState = -1;
-
-    for (let c = 1; c <= B; c++) {
-        const d0 = maxDraws0[c];
-        if (d0 > 0) {
-            const total = c + shippingFee;
-            if (total <= virtualBalance) {
-                const rem = virtualBalance - total;
-                if (rem < best.remainder || (rem === best.remainder && d0 > best.draws)) {
-                    best = { draws: d0, remainder: rem, cost: total, isFreeShip: false, appliedShipping: true, breakdown: [] };
-                    bestC = c;
-                    bestState = 0;
-                }
-            }
-        }
-        const d1 = maxDraws1[c];
-        if (d1 > 0) {
-            const total = c;
-            if (total <= virtualBalance) {
-                const rem = virtualBalance - total;
-                if (rem < best.remainder || (rem === best.remainder && d1 > best.draws)) {
-                    best = { draws: d1, remainder: rem, cost: total, isFreeShip: true, appliedShipping: false, breakdown: [] };
-                    bestC = c;
-                    bestState = 1;
-                }
-            }
-        }
-    }
-
-    if (bestC > 0) {
-        const counts = new Array(items.length).fill(0);
-        let currC = bestC;
-        let currState = bestState;
-        while (currC > 0) {
-            const itemIdx = currState === 1 ? lastItem1[currC] : lastItem0[currC];
-            if (itemIdx < 0) break;
-            counts[itemIdx]++;
-            const itemPrice = items[itemIdx].price;
-            if (currState === 1) {
-                currState = fromState1[currC];
-            }
-            currC -= itemPrice;
-        }
-        best.breakdown = counts.map((q, i) => (q > 0 ? `${items[i].name} x${q}` : null)).filter(Boolean);
-    }
-    return best;
+    return Money.calculateBestDrawsCore({ priceList, shippingFee, freeShippingThreshold, addLog }, virtualBalance, pastDraws);
 }
-
 function describeTopup(balance, pastDraws) {
-    // บอกว่าลูกค้าที่ยอดยังไม่พอ ต้องโอนเพิ่มอีกเท่าไหร่ (ใช้แจ้งแม่ค้าและลูกค้า ไม่ใช้ตัดสินสิทธิ์)
-    if (!priceList || priceList.length === 0) return null;
-    const prices = priceList.map(p => Number(p.price)).filter(p => p > 0);
-    if (prices.length === 0) return null;
-    const minPrice = Math.min(...prices);
-    const hasPaidShipping = (pastDraws > 0 && pastDraws < freeShippingThreshold);
-    const virtual = balance + (hasPaidShipping ? shippingFee : 0);
-    const feeCharged = (pastDraws + 1) < freeShippingThreshold;
-    const held = pastDraws === 0 && feeCharged && prices.some(p => Math.abs(p - virtual) < 0.005);
-    const need = held ? shippingFee : Math.max(0, minPrice + (feeCharged ? shippingFee : 0) - virtual);
-    return { need: Math.round(need * 100) / 100, held, virtual };
+    return Money.describeTopup({ priceList, shippingFee, freeShippingThreshold }, balance, pastDraws);
 }
 // 💰 ยอดที่ต้องเก็บเข้ากระเป๋าลูกค้าหลังคำนวณสิทธิ์
 // ถ้าได้ชิ้น: ใช้เศษที่คำนวณได้ (รวมการคืนค่าส่งเมื่อครบจำนวนส่งฟรีตามที่ออกแบบไว้)
 // ถ้าไม่ได้ชิ้น: เก็บเฉพาะเงินที่ลูกค้าโอนจริง (กระเป๋าเดิม + สลิปนี้) ห้ามรวมค่าส่งที่บวกเพิ่มชั่วคราวตอนคำนวณ
 // (แก้บั๊ก v1.0.7-v1.0.10: ลูกค้าที่จ่ายค่าส่งไปแล้ว โอนเพิ่มไม่พอซื้อ จะถูกบวกค่าส่งเข้ากระเป๋าเกินจริง)
 function walletAfter(result, currentBalance) {
-    return result.draws > 0 ? result.remainder : currentBalance;
+    return Money.walletAfter(result, currentBalance);
 }
 function fmtBaht(n) {
-    const v = Math.round(Number(n) * 100) / 100;
-    return Number.isInteger(v) ? String(v) : v.toFixed(2);
+    return Money.fmtBaht(n);
 }
 
 function mergeBreakdowns(breakdownList) {
@@ -4116,28 +3989,9 @@ let providerQuotaState = {
 // ===== v1.0.17: แปลรหัส Error ของ SlipOK ให้ตรงความหมายตามเอกสาร (https://slipok.com/api-documentation/error-status-code/) =====
 // เดิมทุกรหัสถูก log เป็น ERROR ว่า "สลิปอาจไม่ถูกต้อง หรือวงเงินเครดิตหมด" และรหัส 1009/1006/1008 ถูกนับเป็น "เครดิตหมด" ผิดๆ
 // level: WARN = เหตุการณ์ปกติของลูกค้า/ธนาคาร (ไม่ส่ง Dev Report) | ERROR = ตั้งค่าผิด/แพ็กเกจหมด/ไม่รู้จัก (ควรดู)
-function classifySlipOkError(httpStatus, body) {
-    const code = body ? Number(body.code) : NaN;
-    const d = (body && body.data) || {};
-    const T = (kind, level, message, extra) => Object.assign({ kind, level, message, code: Number.isFinite(code) ? code : null }, extra || {});
-    if (code === 1010) {
-        const bank = d.bankName ? 'ธนาคาร' + d.bankName : 'ธนาคารต้นทาง';
-        const delay = Number(d.delay) > 0 ? Number(d.delay) : null;
-        return T('bank_delay', 'WARN', 'สลิป' + bank + 'ยังตรวจไม่ได้ ต้องรอ' + (delay ? 'ประมาณ ' + delay + ' นาที' : 'สักครู่') + 'หลังโอน (SlipOK Code 1010) ไม่ใช่สลิปผิด ระบบเก็บรูปไว้ในคิวรอใส่ยอด ให้ลูกค้าส่งรูปเดิมซ้ำหลังเวลานั้น ระบบจะตรวจให้เอง', { bankName: d.bankName || '', delay });
-    }
-    if (code === 1009) return T('bank_outage', 'WARN', 'ระบบธนาคารขัดข้องชั่วคราว SlipOK ขอให้ตรวจใหม่ในอีก 15 นาที (Code 1009 เอกสาร SlipOK ระบุว่าไม่เสียโควต้า) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1003) return T('quota', 'ERROR', 'แพ็กเกจ SlipOK หมดอายุ (Code 1003) ต้องต่ออายุแพ็กเกจ');
-    if (code === 1004) return T('quota', 'ERROR', 'ใช้เกินโควต้า SlipOK ถึงวงเงินที่กำหนด (Code 1004) ต้องต่อแพ็กเกจ');
-    if (Number(httpStatus) === 402) return T('quota', 'ERROR', 'SlipOK แจ้งว่าเครดิตไม่พอ (HTTP 402)');
-    if (code === 1005 || code === 1006) return T('bad_image', 'WARN', 'รูปที่ลูกค้าส่งมาเปิดอ่านไม่ได้หรือไม่ใช่รูปภาพ (Code ' + code + ') รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1007) return T('no_qr', 'WARN', 'ไม่พบ QR Code ในรูปที่ลูกค้าส่งมา อาจไม่ใช่สลิปหรือถูกครอบตัด (Code 1007) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1008) return T('not_payment_qr', 'WARN', 'QR ในรูปไม่ใช่ QR ตรวจสอบการชำระเงิน (Code 1008) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1011) return T('qr_expired', 'WARN', 'QR หมดอายุ หรือไม่พบรายการโอนจริง (Code 1011) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1013 || code === 1014) return T('mismatch', 'WARN', 'SlipOK แจ้งว่ายอดหรือบัญชีผู้รับไม่ตรง (Code ' + code + ') รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1000 || code === 1001 || code === 1002) return T('config', 'ERROR', 'ตั้งค่า SlipOK ไม่ถูกต้อง (Code ' + code + ' ตรวจ API Key และ Branch ID ในหน้าตั้งค่า)');
-    if (!body) return T('other', 'ERROR', 'เชื่อมต่อ SlipOK ไม่ได้ (เน็ตสะดุดหรือบริการล่ม) สลิปถูกเก็บไว้ในคิวรอใส่ยอด');
-    return T('other', 'ERROR', 'SlipOK ตอบกลับข้อผิดพลาดที่ไม่รู้จัก' + (Number.isFinite(code) ? ' (Code ' + code + ')' : '') + (httpStatus ? ' HTTP ' + httpStatus : ''));
-}
+// v1.0.19: ตัวแปลผลรหัส SlipOK + ตัวถอดรหัส QR ย้ายไป lib/slipVerify.js แล้ว (ตรรกะล้วน — ตัวอักษรเดิมทุกตัว)
+// ห้ามตีความรหัส SlipOK ที่อื่นนอกจากตัวนี้ (กฎ AGENTS) / เทสต์ตรง: tests/unit/slipok-codes.test.js + tests/unit/qr-ref.test.js
+const { classifySlipOkError, extractQrRef } = require('./lib/slipVerify');
 // ป้ายบนการ์ดรอใส่ยอด: สลิปธนาคารที่ต้องรอ (เก็บในหน่วยความจำ หายตอนปิดโปรแกรม = การ์ดกลับไปใช้ข้อความทั่วไป)
 const bankDelayHints = new Map();
 function rememberBankDelayHint(slipId, info) {
@@ -4275,34 +4129,7 @@ function stampToSec(dateStr, timeStr) {
 // ===== v1.0.18: ตัวตนของรายการจาก QR ของสลิป =====
 // พิสูจน์ด้วยคีย์ SlipOK จริง (2026-10-31): sub-tag 02 ใน QR ของสลิป == transRef ที่ SlipOK ตอบตอนตรวจผ่าน
 // (สลิปกรุงไทยตรงกันทุกตัวอักษร A0aa74ba726a04481) — จึงใช้เป็นบัตรประจำตัวรายการจับคู่แทนการเดาจากเวลาได้
-// โครงสร้าง QR: tag 00 (template) → sub 00 เวอร์ชัน / sub 01 รหัสธนาคารผู้โอน / sub 02 ข้อมูลรายการ
-function extractQrRef(qrText) {
-    const text = String(qrText || '').trim();
-    if (!text || text.length < 10) return null;
-    let i = 0;
-    while (i + 4 <= text.length) {
-        const id = text.slice(i, i + 2);
-        const len = parseInt(text.slice(i + 2, i + 4), 10);
-        if (!/^\d{2}$/.test(id) || !Number.isFinite(len) || i + 4 + len > text.length) return null;
-        if (id === '00') {
-            const inner = text.slice(i + 4, i + 4 + len);
-            let j = 0;
-            while (j + 4 <= inner.length) {
-                const sid = inner.slice(j, j + 2);
-                const slen = parseInt(inner.slice(j + 2, j + 4), 10);
-                if (!/^\d{2}$/.test(sid) || !Number.isFinite(slen) || j + 4 + slen > inner.length) return null;
-                if (sid === '02') {
-                    const v = inner.slice(j + 4, j + 4 + slen);
-                    return v.length >= 8 ? v : null;   // สั้นผิดปกติ = ไม่ใช่ข้อมูลรายการ
-                }
-                j += 4 + slen;
-            }
-            return null;
-        }
-        i += 4 + len;
-    }
-    return null;
-}
+// v1.0.19: ตัวถอด (extractQrRef) ย้ายไป lib/slipVerify.js แล้ว — ดึงมาไว้ตัวแปรชื่อเดิมด้านบน (จุดเรียกใช้ไม่เปลี่ยน)
 // ถอด QR จากรูปสลิปเอง (jsqr + jimp ติดตั้งอยู่แล้ว) — ใช้เมื่อ SlipOK ไม่ได้ส่ง qrcodeData มาให้ (เช่น รูปไม่มี QR ที่ตรวจไม่ผ่าน)
 // ถอดไม่ได้ = คืน null → ระบบกลับไปใช้วิธีเดิม (หน้าต่างเวลา + การ์ดยืนยัน) ไม่มีอะไรพัง
 async function decodeImageQrRef(imageBuffer) {
@@ -4849,138 +4676,9 @@ async function verifySlipWithProvider(imageBuffer) {
 // หาชื่อผู้รับจากทุกบรรทัด ตามลำดับความน่าเชื่อ: (ก) บรรทัดที่ขึ้นต้นด้วย "ชื่อ"/"ผู้รับ" (ข) บรรทัดที่ขึ้นต้นด้วยคำนำหน้าชื่อคน
 // (ค) บรรทัดแรก (กติกาเดิม) (ง) ข้อความหน้าเบอร์โทรในบรรทัดเดียวกัน (จ) บรรทัดสุดท้าย
 // ข้อความที่มีตัวเลข / คำบอกที่อยู่ / คำทักทาย ไม่ใช่ชื่อ (กันเอาบรรทัดที่อยู่หรือ "ขอบคุณค่ะ" มาเป็นชื่อ) ไม่เจอ = คืนค่าว่าง ให้ผู้เรียกใช้ชื่อสำรอง
-function pickRecipientName(text, phoneText) {
-    const LABEL_RE = /^(ชื่อผู้รับ|ชื่อ-นามสกุล|ชื่อ|ผู้รับ)\s*[:.\-]?\s*/;
-    const TITLE_RE = /^(นางสาว|นาง|นาย|น\.ส\.|ด\.ช\.|ด\.ญ\.|คุณ)\s*[ก-๏a-zA-Z]/;
-    const NOT_NAME_RE = /(ต\.|อ\.|จ\.|ซ\.|ถ\.|ตำบล|อำเภอ|จังหวัด|ซอย|หมู่|ถนน|แขวง|เขต|รหัส|เลขที่|อาคาร|คอนโด|ไปรษณีย์|ที่อยู่|ส่งที่|กรุงเทพ|ขอบคุณ|ค่ะ|ครับ|ด่วน|ฝาก|สลิป|เปลี่ยน|เบอร์|โทร|สวัสดี|นะคะ|นะครับ|รบกวน|tel|phone)/i;
-    // v1.0.19: วงเล็บที่เป็นหมายเหตุ เช่น (ฝากแม่รับ) ตัดออก ส่วนวงเล็บที่เป็นชื่อ เช่น (คุณเอก) คงไว้
-    const tidy = (s) => String(s || '').replace(/\s*\(([^)]*)\)/g, (m, inner) => (NOT_NAME_RE.test(inner) ? '' : m)).replace(/^คุณ\s*/, '').replace(/\s+/g, ' ').trim();
-    const looksLikeName = (s) => s.length >= 2 && s.length <= 40 && /[ก-๏a-zA-Z]/.test(s) && !/[0-9๐-๙]/.test(s) && !NOT_NAME_RE.test(s);
-    // v1.0.19: ตัดอีโมจิ/สัญลักษณ์หน้าบรรทัด (📦 🙋 📞) ก่อนดู
-    const raw = String(text || '').split('\n').map(l => l.replace(/^[^ก-๏a-zA-Z0-9(+]+/, '').trim()).filter(Boolean);
-    const lines = raw.map(l => (phoneText ? l.replace(phoneText, '') : l).trim());
-    for (const l of lines) {
-        if (!LABEL_RE.test(l)) continue;
-        const s = tidy(l.replace(LABEL_RE, ''));
-        if (looksLikeName(s)) return s;
-    }
-    for (const l of lines) {
-        if (!TITLE_RE.test(l)) continue;
-        const s = tidy(l);
-        if (looksLikeName(s)) return s;
-    }
-    if (lines.length > 0) {
-        const s = tidy(lines[0].replace(/k\./gi, ''));
-        if (looksLikeName(s)) return s;
-    }
-    if (phoneText) {
-        const phoneLine = raw.find(l => l.includes(phoneText));
-        if (phoneLine) {
-            const s = tidy(phoneLine.slice(0, phoneLine.indexOf(phoneText)));
-            if (looksLikeName(s)) return s;
-        }
-    }
-    if (lines.length > 1) {
-        const s = tidy(lines[lines.length - 1]);
-        if (looksLikeName(s)) return s;
-    }
-    // (ฉ) v1.0.19: บรรทัดแรกที่ดูเป็นชื่อ (เช่น ชื่ออยู่บรรทัดที่ 2 หลังคำทักทาย หรือหลังบรรทัดเบอร์โทร)
-    for (const l of lines) {
-        const s = tidy(l);
-        if (looksLikeName(s)) return s;
-    }
-    return '';
-}
-// v1.0.19: หาชื่อจังหวัดที่พิมพ์โดยไม่มี จ./จังหวัด นำหน้า (ทั้งคำเท่านั้น กันคำอย่าง "เลย" ในประโยคทั่วไป)
-function findThaiProvinceName(text) {
-    const PROVINCES = ['กรุงเทพมหานคร', 'กระบี่', 'กาญจนบุรี', 'กาฬสินธุ์', 'กำแพงเพชร', 'ขอนแก่น', 'จันทบุรี', 'ฉะเชิงเทรา', 'ชลบุรี', 'ชัยนาท', 'ชัยภูมิ', 'ชุมพร', 'เชียงราย', 'เชียงใหม่', 'ตรัง', 'ตราด', 'ตาก', 'นครนายก', 'นครปฐม', 'นครพนม', 'นครราชสีมา', 'นครศรีธรรมราช', 'นครสวรรค์', 'นนทบุรี', 'นราธิวาส', 'น่าน', 'บึงกาฬ', 'บุรีรัมย์', 'ปทุมธานี', 'ประจวบคีรีขันธ์', 'ปราจีนบุรี', 'ปัตตานี', 'พระนครศรีอยุธยา', 'พะเยา', 'พังงา', 'พัทลุง', 'พิจิตร', 'พิษณุโลก', 'เพชรบุรี', 'เพชรบูรณ์', 'แพร่', 'ภูเก็ต', 'มหาสารคาม', 'มุกดาหาร', 'แม่ฮ่องสอน', 'ยะลา', 'ยโสธร', 'ร้อยเอ็ด', 'ระนอง', 'ระยอง', 'ราชบุรี', 'ลพบุรี', 'ลำปาง', 'ลำพูน', 'เลย', 'ศรีสะเกษ', 'สกลนคร', 'สงขลา', 'สตูล', 'สมุทรปราการ', 'สมุทรสงคราม', 'สมุทรสาคร', 'สระแก้ว', 'สระบุรี', 'สิงห์บุรี', 'สุโขทัย', 'สุพรรณบุรี', 'สุราษฎร์ธานี', 'สุรินทร์', 'หนองคาย', 'หนองบัวลำภู', 'อ่างทอง', 'อำนาจเจริญ', 'อุดรธานี', 'อุตรดิตถ์', 'อุทัยธานี', 'อุบลราชธานี'];
-    const tokens = String(text || '').split(/[\s,]+/).map(t => t.replace(/\d+$/, ''));
-    return tokens.find(t => PROVINCES.includes(t)) || '';
-}
-function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE') {
-    if (!text || typeof text !== 'string') return null;
-
-    // 1. สกัดเบอร์โทรศัพท์ -- v1.0.19: อ่านเบอร์ที่พิมพ์เว้นวรรค/ขีดทีละตัวได้ และถ้ามีหลายเบอร์ เลือกเบอร์มือถือก่อนเบอร์บ้าน (02...)
-    let phone = '';
-    let phoneMatch = null;
-    {
-        const re = /(?<!\d)(?:\+?66|0)(?:[\s\-.]*\d){8,9}(?!\d)/g;
-        const found = [];
-        let m;
-        while ((m = re.exec(text)) !== null) {
-            let d = m[0].replace(/\D/g, '');
-            if (d.startsWith('66')) d = '0' + d.slice(2);
-            if (/^0\d{8,9}$/.test(d)) found.push({ raw: m[0], digits: d });
-        }
-        const pick = found.find(f => /^0[689]\d{8}$/.test(f.digits)) || found[0];
-        if (pick) { phone = pick.digits; phoneMatch = [pick.raw]; }
-    }
-
-    // 2. สกัดรหัสไปรษณีย์ 5 หลัก
-    let postcode = '';
-    const postMatch = text.match(/\b([1-9][0-9]{4})\b/);
-    if (postMatch) {
-        postcode = postMatch[1];
-    }
-
-    // หากไม่มีทั้งเบอร์โทรและรหัสไปรษณีย์ แสดงว่าไม่ใช่ข้อความที่อยู่จัดส่ง
-    if (!phone && !postcode) return null;
-
-    // 3. สกัดจังหวัด
-    let province = '';
-    const provMatch = text.match(/(?:จ\.|จังหวัด)\s*([ก-๙a-zA-Z]+)/);
-    if (provMatch) province = provMatch[1].trim();
-    // v1.0.19: กรุงเทพ/กทม ไม่มี จ. นำหน้า เดิมจึงไม่เคยได้จังหวัด และจังหวัดที่พิมพ์โดยไม่มี จ. นำหน้า
-    if (/^(กรุงเทพ|กรุงเทพฯ|กทม)$/.test(province) || (!province && /กรุงเทพ|กทม/.test(text))) province = 'กรุงเทพมหานคร';
-    if (!province) province = findThaiProvinceName(text);
-
-    // 4. สกัดอำเภอ / เขต
-    let district = '';
-    const distMatch = text.match(/(?:อ\.|อำเภอ|เขต)\s*([ก-๙a-zA-Z]+)/);
-    if (distMatch) district = distMatch[1].trim();
-
-    // 5. สกัดตำบล / แขวง
-    let subdistrict = '';
-    const subMatch = text.match(/(?:ต\.|ตำบล|แขวง)\s*([ก-๙a-zA-Z]+)/);
-    if (subMatch) subdistrict = subMatch[1].trim();
-
-    // 6. สกัดชื่อผู้รับ — v1.0.17 (Phase C): หาจากทุกบรรทัด เพราะลูกค้ามักพิมพ์ชื่อไว้ท้ายข้อความ (ดู pickRecipientName)
-    let recipient_name = pickRecipientName(text, phoneMatch ? phoneMatch[0] : '');
-
-    // 7. สกัดบ้านเลขที่/ซอย/ถนน (ข้อความที่เหลือ)
-    let addressClean = text
-        .replace(phoneMatch ? phoneMatch[0] : '', '')
-        .replace(postMatch ? postMatch[0] : '', '')
-        .replace(provMatch ? provMatch[0] : '', '')
-        .replace(distMatch ? distMatch[0] : '', '')
-        .replace(subMatch ? subMatch[0] : '', '')
-        .replace(recipient_name, '')
-        .replace(/ชื่อ|เบอร์|โทร|ผู้รับ|ที่อยู่|ส่งที่/gi, '')
-        .replace(/\n+/g, ' ')
-        .trim();
-
-    // v1.0.17 (เจ้าของอนุมัติ 2026-10-31): ข้อความที่ไม่มีส่วนของที่อยู่เลย (เช่น "เปลี่ยนเบอร์ 08x") เดิมเก็บทั้งข้อความเป็นที่อยู่
-    // ทำให้ขั้นรวมที่อยู่เดิมใน webhook ไม่คืนที่อยู่เก่า และ Kerry ได้ "ที่อยู่" เป็นเบอร์โทร -> ให้ช่องที่อยู่ว่างแทน
-    const hasAddressPart = !!(postcode || province || district || subdistrict) || /[0-9๐-๙]/.test(addressClean);
-
-    const genericNames = ['ลูกค้า line', 'ลูกค้าline', 'ลูกค้า', 'คุณ', 'คุณลูกค้า', 'ลูกค้าทั่วไป'];
-    let finalRecipient = recipient_name ? recipient_name.trim() : '';
-    if (!finalRecipient || genericNames.includes(finalRecipient.toLowerCase())) {
-        finalRecipient = defaultName || 'ลูกค้า LINE';
-    }
-
-    return {
-        recipient_name: finalRecipient,
-        phone: phone || '',
-        address: hasAddressPart ? (addressClean || text) : '',
-        subdistrict: subdistrict || '',
-        district: district || '',
-        province: province || '',
-        postcode: postcode || '',
-        remark: ''   // v1.0.19: ช่องนี้ลงไฟล์ Kerry (พิมพ์บนใบปะหน้า) ห้ามใส่โน้ตภายใน เดิมใส่ "สกัดด้วยระบบสำรอง Regex" ทุกครั้งที่ใช้ระบบสำรอง
-    };
-}
-
+// v1.0.19: ตัวอ่านที่อยู่/ชื่อภาษาไทย (ล้วนทั้ง 7 ฟังก์ชัน) ย้ายไป lib/address.js แล้ว — ตัวอักษรเดิมทุกตัว
+// (ยังเหลือที่นี่เฉพาะ callGeminiAddress ที่ยิงเน็ตจริง และตัวจัดคิวลองใหม่ที่มีสถานะ) / เทสต์ตรง: tests/unit/address-recipient-name.test.js
+const { pickRecipientName, findThaiProvinceName, parseThaiAddressFallback, normalizeThaiPhone, isRetryableGeminiError, geminiRetryDelayMs, finishAiAddress } = require('./lib/address');
 // 🧠 ฟังก์ชันสกัดที่อยู่จัดส่งด้วย Gemini AI สำหรับ Kerry Express (พร้อม Auto-Fallback)
 // v1.0.19 (เจ้าของสั่ง 2026-10-31 "ทำให้ Gemini สกัดสำเร็จได้เยอะที่สุด เพราะเชื่อได้มากกว่า" หลังวัดผลด้วยคีย์จริง: Gemini ถูกครบ 25/30
 // ข้อความ ระบบสำรอง 15/30): (1) ใช้คำตอบ Gemini เสมอเมื่อมีเบอร์หรือรหัสไปรษณีย์ ช่องที่ Gemini เว้นว่างค่อยเติมจากระบบสำรอง
@@ -4988,29 +4686,7 @@ function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE')
 // แล้วลองใหม่เบื้องหลังตามเวลาที่ Google บอกให้รอ (scheduleAiAddressRetry) สำเร็จเมื่อไรอัปเดตแทน (3) คีย์ผิด/ถูกปฏิเสธ = ไม่ลองซ้ำ
 const AI_RETRY_SCALE = Number(process.env.AQ_AI_RETRY_SCALE) > 0 ? Number(process.env.AQ_AI_RETRY_SCALE) : 1;   // เทสต์ย่อเวลารอ
 let aiAddressPauseUntil = 0;   // โดน 429 แล้ว: ไม่ยิง Gemini จนถึงเวลานี้ (ทุกข้อความใช้ระบบสำรองไปก่อน + เข้าคิวลองใหม่)
-function normalizeThaiPhone(p) {
-    let d = String(p || '').replace(/\D/g, '');
-    if (d.startsWith('66')) d = '0' + d.slice(2);
-    return /^0\d{8,9}$/.test(d) ? d : '';
-}
-function isRetryableGeminiError(err) {
-    const st = err && err.response && err.response.status;
-    if (!st) return true;   // หมดเวลา / เน็ตหลุด / DNS
-    return st === 429 || st >= 500;
-}
-function geminiRetryDelayMs(err) {
-    try {
-        const details = (err.response.data.error.details) || [];
-        const info = details.find(x => String(x['@type'] || '').includes('RetryInfo'));
-        const sec = info ? parseFloat(String(info.retryDelay)) : NaN;
-        if (sec > 0) return Math.min(sec * 1000, 120000);
-    } catch (e) { /* ไม่มีข้อมูลเวลารอ */ }
-    try {
-        const h = Number(err.response.headers['retry-after']);
-        if (h > 0) return Math.min(h * 1000, 120000);
-    } catch (e) { /* ไม่มีหัว retry-after */ }
-    return 0;
-}
+// (normalizeThaiPhone / isRetryableGeminiError / geminiRetryDelayMs ย้ายไป lib/address.js แล้ว — ดึงมาชื่อเดิมด้านบน)
 async function callGeminiAddress(text) {
     const prompt = `คุณคือผู้ช่วยสกัดที่อยู่จัดส่งพัสดุในประเทศไทย กรุณาวิเคราะห์ข้อความต่อไปนี้ และตอบกลับเป็น JSON เท่านั้น
 ข้อกำหนด:
@@ -5033,25 +4709,7 @@ async function callGeminiAddress(text) {
     if (!rawJson) { const e = new Error('Gemini ตอบกลับว่างเปล่า'); e.retryable = true; throw e; }
     return JSON.parse(rawJson);
 }
-// คำตอบ Gemini เป็นหลัก ช่องที่ว่าง/รูปแบบผิดค่อยเติมจากระบบสำรองของข้อความเดียวกัน ไม่มีทั้งเบอร์และรหัสไปรษณีย์ = ไม่ใช่ที่อยู่ (null)
-function finishAiAddress(ai, fb, defaultName) {
-    if (!ai || typeof ai !== 'object') return null;
-    const out = Object.assign({}, ai);
-    out.phone = normalizeThaiPhone(ai.phone) || (fb && fb.phone) || '';
-    const pc = String(ai.postcode || '').trim();
-    out.postcode = /^\d{5}$/.test(pc) ? pc : ((fb && fb.postcode) || '');
-    for (const f of ['address', 'subdistrict', 'district', 'province']) {
-        out[f] = String(out[f] || '').trim();
-        if (!out[f] && fb && fb[f]) out[f] = fb[f];
-    }
-    out.remark = String(ai.remark || '').trim();
-    if (!out.phone && !out.postcode) return null;
-    const genericNames = ['ลูกค้า line', 'ลูกค้าline', 'ลูกค้า', 'คุณ', 'คุณลูกค้า', 'ลูกค้าทั่วไป'];
-    let finalName = out.recipient_name ? String(out.recipient_name).trim() : '';
-    if (!finalName || genericNames.includes(finalName.toLowerCase())) finalName = defaultName || 'ลูกค้า LINE';
-    out.recipient_name = finalName;
-    return out;
-}
+// (finishAiAddress ย้ายไป lib/address.js แล้ว — ดึงมาชื่อเดิมด้านบน)
 async function parseThaiAddressWithAI(text, defaultName = 'ลูกค้า LINE') {
     const fallbackParsed = parseThaiAddressFallback(text, defaultName);
     let aiRetry = null;

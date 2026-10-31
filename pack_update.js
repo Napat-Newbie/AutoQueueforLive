@@ -109,6 +109,9 @@ function runPack(targetVersion, rawChangelog, shouldPublish) {
         }
     });
 
+    // v1.0.19: สูตรเงินอยู่ใน lib/ — ถ้าไม่แนบไป index.js บนเครื่องแม่ค้าจะ require ไม่เจอหลังอัปเดต (บังคับแนบเสมอ)
+    copyFolderSync(path.join(__dirname, 'lib'), path.join(stagingDir, 'lib'));
+
     // Copy sentinel module (ไม่รวมไฟล์ข้อมูล runtime ของเครื่องผู้พัฒนา)
     if (fs.existsSync(path.join(__dirname, 'sentinel'))) {
         copyFolderSync(path.join(__dirname, 'sentinel'), path.join(stagingDir, 'sentinel'), ['proposals.json', 'README.md']);

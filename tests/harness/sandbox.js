@@ -74,6 +74,7 @@ class Sandbox {
         sb.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aq-sandbox-'));
         // runtime files only (same set pack_update.js ships) - never the repo's data/.env
         for (const f of ['index.js', 'db.js', 'keep_awake.js', 'package.json']) fs.copyFileSync(path.join(APP, f), path.join(sb.dir, f));
+        copyDir(path.join(APP, 'lib'), path.join(sb.dir, 'lib'));   // v1.0.19: สูตรเงินอยู่ใน lib/ แล้ว — ไม่ก็อป index.js จะ require ไม่เจอ
         copyDir(path.join(APP, 'sentinel'), path.join(sb.dir, 'sentinel'), (s) => path.basename(s) === 'proposals.json');
         copyDir(path.join(APP, 'templates'), path.join(sb.dir, 'templates'));
         copyDir(path.join(APP, 'public'), path.join(sb.dir, 'public'), (s, e) => e.isDirectory() && ['manual_images', 'uploads'].includes(e.name));
