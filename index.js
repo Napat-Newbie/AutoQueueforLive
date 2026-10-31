@@ -116,6 +116,16 @@ enableSleepBlocker();
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+// v1.0.18 (เจ้าของขอ 2026-10-31): ทุกครั้งที่ส่งเหตุการณ์ที่เป็นการแจ้งเตือนไปหน้าจอ บันทึกลงฐานข้อมูลร้านที่นี่จุดเดียว
+// (notificationFromEvent / recordNotification) จึงมีบันทึกแม้ตอนนั้นไม่มีหน้าจอเปิดอยู่ และไม่หายเมื่อจบไลฟ์/ปิดโปรแกรม
+{
+    const rawEmit = io.emit.bind(io);
+    io.emit = function (event, ...args) {
+        const result = rawEmit(event, ...args);
+        try { const n = notificationFromEvent(event, args[0]); if (n) recordNotification(n, event); } catch (e) { /* การบันทึกแจ้งเตือนต้องไม่ทำให้การส่งหน้าจอล้ม */ }
+        return result;
+    };
+}
 
 // 🛡️ DEV-ONLY GUARD: เส้นทางของ Sentinel / Pixel Office / Telemetry ถูกประกาศก่อน RBAC middleware หลัก
 // จึงต้องป้องกันแยก: อนุญาตเฉพาะ (1) คำขอจากเครื่องนี้โดยตรง (ไม่ผ่าน Tunnel) หรือ (2) Session ของ Dreamdev
@@ -1335,7 +1345,8 @@ app.use((req, res, next) => {
         p.startsWith('/api/kerry/') ||
         p.startsWith('/api/queue/') ||
         (p.startsWith('/api/live_session/') && (p === '/api/live_session/start' || p === '/api/live_session/end' || p === '/api/live_session/hold' || p === '/api/live_session/pending_merge')) ||
-        p === '/api/history_data'
+        p === '/api/history_data' ||
+        p.startsWith('/api/notifications')
     );
     if (isTierA) {
         if (isDirectLocalRequest(req)) return next();
@@ -2366,6 +2377,76 @@ app.post('/api/queue/clear', async (req, res) => {
 });
 
 // ⚠️ ลูกค้าที่ยังมีเงินค้างในกระเป๋า (ใช้เตือนแม่ค้าก่อนกดเริ่มไลฟ์ เพราะเริ่มไลฟ์ใหม่จะรีเซ็ตยอดเหล่านี้เป็น 0)
+// ===== v1.0.18 (เจ้าของขอ 2026-10-31): การแจ้งเตือนเก็บถาวรในฐานข้อมูลร้าน + แผงด้านขวาของหน้าจอ =====
+// แปลงเหตุการณ์ที่ส่งไปหน้าจอ เป็นการแจ้งเตือน 1 รายการ ข้อความเดียวกับที่หน้าจอเคยสร้างเอง (kind: bad = ด่วน/สีแดง, warn, ok, info)
+// สลิปซ้ำ/โอนผิดบัญชี = เงินที่ระบบไม่บันทึก จึงเป็นเรื่องด่วน (สีแดง) ส่วนตรวจการ์ดรอใส่ยอด/สลิปตรงกับยอดที่กรอก = สีส้ม
+function notificationFromEvent(event, d) {
+    d = d || {};
+    if (event === 'topup_needed') {
+        if (!d.name) return null;
+        return { kind: 'warn', title: '💸 โอนไม่ครบ', text: 'ลูกค้า ' + d.name + ' โอนไม่ครบ ต้องโอนเพิ่มอีก ' + Number(d.need).toLocaleString('en-US') + ' บาท' + (d.held ? ' (ค่าส่ง)' : '') };
+    }
+    if (event === 'image_failed') return { kind: 'bad', title: '🖼️ โหลดรูปสลิปไม่ได้', text: 'โหลดรูปสลิปจาก LINE ไม่สำเร็จ — เปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง' };
+    if (event === 'slip_warning') {
+        const titles = { duplicate: '⚠️ สลิปซ้ำ', wrong_account: '⚠️ โอนเข้าผิดบัญชี', check_pending: '⚠️ ตรวจการ์ดรอใส่ยอด', manual_match: '❓ สลิปตรงกับยอดที่กรอกไว้' };
+        const notUrgent = d.kind === 'check_pending' || d.kind === 'manual_match';
+        return { kind: notUrgent ? 'warn' : 'bad', title: titles[d.kind] || '⚠️ สลิปที่ระบบไม่บันทึก', text: (d.name ? d.name + ' — ' : '') + (d.reason || '') };
+    }
+    if (event === 'address_updated') return { kind: 'ok', title: '📍 ที่อยู่จัดส่ง', text: 'คุณ' + (d.name || 'ลูกค้า') + ' อัปเดตที่อยู่จัดส่งแล้ว' };
+    if (event === 'pending_amount_slip') {
+        const hasBank = d.bankName !== undefined && d.bankName !== null;
+        return { kind: 'warn', title: '🕒 สลิปรอใส่ยอด', text: (d.name ? d.name + ' ' : '') + (hasBank ? 'ส่งสลิปธนาคาร' + d.bankName + 'ที่ยังตรวจไม่ได้' + (d.delay ? ' (ต้องรอ ~' + d.delay + ' นาทีหลังโอน)' : '') + ' — ให้ลูกค้าส่งรูปเดิมซ้ำทีหลัง' : 'ส่งสลิปที่ระบบอ่านยอดไม่ได้ — รอแม่ค้ากดเช็คสลิปและใส่ยอด') };
+    }
+    if (event === 'provider_quota_alert') return { kind: 'bad', title: '💳 เครดิตตรวจสลิป', text: String(d.message || '').replace(/^⚠️\s*(\[แจ้งเตือนด่วน\]:\s*)?/, '') };
+    return null;
+}
+// บันทึก 1 รายการ (ข้อความเดิมซ้ำภายใน 1 นาที บันทึกครั้งเดียว เหมือนประวัติเดิมในหน้าจอ) แล้วส่งให้ทุกหน้าจอที่เปิดอยู่
+function recordNotification(n, source) {
+    const kinds = ['bad', 'warn', 'ok', 'info'];
+    const text = String((n && n.text) || '').trim().slice(0, 1000);
+    if (!text || !kinds.includes(n.kind)) return null;
+    const now = Date.now();
+    const dup = supabase.db.prepare('SELECT id FROM notifications WHERE kind = ? AND text = ? AND created_at > ? LIMIT 1').get(n.kind, text, now - 60000);
+    if (dup) return null;
+    const title = String(n.title || '').slice(0, 120);
+    const src = String(source || '').slice(0, 40);
+    const sessionId = activeLiveSession ? activeLiveSession.id : null;
+    const info = supabase.db.prepare('INSERT INTO notifications (created_at, kind, title, text, source, session_id) VALUES (?, ?, ?, ?, ?, ?)').run(now, n.kind, title, text, src, sessionId);
+    const row = { id: Number(info.lastInsertRowid), t: now, kind: n.kind, title, text, source: src, sessionId };
+    io.emit('notification', row);
+    return row;
+}
+app.get('/api/notifications', (req, res) => {
+    try {
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+        const before = parseInt(req.query.before, 10);
+        const where = []; const params = [];
+        if (Number.isFinite(before)) { where.push('id < ?'); params.push(before); }
+        if (req.query.important === '1') where.push("kind IN ('bad', 'warn')");
+        const rows = supabase.db.prepare(`SELECT id, created_at, kind, title, text, source, session_id FROM notifications ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ?`).all(...params, limit + 1);
+        res.json({
+            success: true,
+            hasMore: rows.length > limit,
+            items: rows.slice(0, limit).map(r => ({ id: r.id, t: r.created_at, kind: r.kind, title: r.title || '', text: r.text, source: r.source || '', sessionId: r.session_id || null }))
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+// เรื่องที่หน้าจอเห็นเอง (เช่น ระบบเชื่อมต่อ LINE หลุด) ส่งมาให้โปรแกรมบันทึกและกระจายให้ทุกหน้าจอ
+app.post('/api/notifications', (req, res) => {
+    const b = req.body || {};
+    if (!['bad', 'warn', 'ok', 'info'].includes(b.kind) || !String(b.text || '').trim()) {
+        return res.status(400).json({ success: false, error: 'ข้อมูลการแจ้งเตือนไม่ถูกต้อง' });
+    }
+    try {
+        const row = recordNotification({ kind: b.kind, title: b.title, text: b.text }, b.source === 'tunnel' ? 'tunnel' : 'dashboard');
+        res.json({ success: true, recorded: !!row });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 app.get('/api/queue/pending_balances', (req, res) => {
     try {
         const rows = supabase.db.prepare('SELECT name, line_id, balance FROM customers WHERE balance > 0 ORDER BY balance DESC, name ASC').all();
