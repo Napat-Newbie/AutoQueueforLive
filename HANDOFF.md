@@ -2,6 +2,8 @@
 
 ไฟล์นี้เขียนไว้ให้ทำงานต่อบนเครื่องอื่น ข้อมูลทั้งหมดมาจากงานในเซสชันนี้ ส่วนที่ไม่ได้ตรวจ/ไม่ได้รันระบุไว้ว่า "ยังไม่ได้ตรวจ"
 
+> ⚠️ **อัปเดตสถานะ 2026-10-31 (บ่าย):** รายงานนี้เป็นภาพ ณ 2026-10-30 — งานส่วนใหญ่ในนี้เสร็จและรวมอยู่ใน **v1.0.17 ซึ่ง publish เป็น Latest แล้ว** (2026-10-31 15:49 ICT, tag `v1.0.17` = `8efacbe`, PR #8/#9 merged เข้า `main`) สถานะล่าสุดอ่านที่ `MEMORY.md` สรุปสิ่งที่ปิดแล้ว: §1 commits เข้า `main` หมดแล้ว; §3 ขอบล่าง 60 นาที เจ้าของตัดสินแล้ว (commit `dc6ee18`, เคส yesterday-slip ผ่านจริง เหลือ 2 `todo` เป็นข้อจำกัดที่บันทึกไว้); §5 แก้แล้ว: edit-items ห้าม 0 ชิ้น (`019b365`), release notes ให้ตรง manifest, supervisor `.env` parser รองรับ export/คอมเมนต์ท้ายบรรทัด — ส่วน Gemini redaction เจ้าของปฏิเสธ (2026-10-30) อย่าเอามาทำซ้ำ; §6 v1.0.17 publish แล้ว ยังค้างตามเดิม: การทดลอง QR↔transRef ด้วยคีย์จริง (§4), `saveEditItems` ส่งทีละสลิป, `/api/queue/edit_items_context` ไม่จำกัดจำนวน `slipIds`
+
 ## 1. ตำแหน่งงาน
 - Branch: `test/manual-match-back-to-back` แยกจาก `main` ที่ `7e81aa5` (merge PR #7)
 - มี 3 commit ที่ยังไม่อยู่ใน `main`:
@@ -55,8 +57,8 @@
 
 ## 6. สถานะการปล่อยเวอร์ชัน
 - v1.0.16: publish เป็น Latest แล้ว (2026-10-29) tag `v1.0.16` อยู่บน `main` แล้วหลัง PR #7
-- v1.0.17: เป็น **draft** ยังไม่ publish zip ใน draft มี sha256 ตรง manifest
-- ยังไม่ได้ทำเช็กลิสต์ทดสอบมือตาม `MEMORY.md` และ `tests/MANUAL_TEST_CHECKLIST.md` ยังไม่ได้ทดสอบ `updater.bat` กับ zip v1.0.17
+- v1.0.17: **publish เป็น Latest แล้ว** (2026-10-31 15:49 ICT, tag `v1.0.17` = `8efacbe`, zip sha256 `8e0a8a6a…9957` ตรง manifest, 26 รายการ, 240 เทสต์ = 238 ผ่าน + 2 todo) ตรวจแล้วว่า `releases/latest/download/version.json` ตอบ 1.0.17 — ห้ามแทนที่ asset/ย้าย tag ของเวอร์ชันที่ publish แล้ว งานถัดไปเป็น v1.0.18
+- อัปเดตแบบ one-click v1.0.16 → v1.0.17 ผ่านการทดสอบจริงบนเครื่อง Windows จริงแล้ว (field test ก่อน re-pack #3) สิ่งที่ยังไม่มีใครทำจริงบนเครื่องร้าน: LINE webhook/tunnel/SlipOK/Gemini/Discord จริง และการฟังเสียงเตือนจริงข้าง OBS — ให้เฝ้าไลฟ์แรกหลังร้านอัปเดต
 - แพ็กด้วย `core.autocrlf=false` เสมอ เพื่อให้ `updater.bat` เป็น 2,168 ไบต์ CR=0 เหมือนรุ่นก่อน
 - ต้องยืนยันด้วยว่าคีย์ Gemini แบบ header `x-goog-api-key` ใช้ได้กับ Gemini API จริง (ทดสอบกับ mock เท่านั้น) ก่อนออกรุ่นที่มีการแก้นี้
 
