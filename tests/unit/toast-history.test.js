@@ -20,40 +20,43 @@ function grab(name) {
     return html.slice(start, i);
 }
 function makeCtx(extra = {}) {
-    const store = {};
+    const posted = [];
+    const added = [];
     const ctx = {
-        sessionStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } },
         document: { getElementById: () => null },
-        Date, JSON, Number, String, Array, Math, Set, console,
+        fetch: (url, opts) => { posted.push({ url, opts }); return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true }) }); },
+        Date, JSON, Number, String, Array, Math, Set, console, Promise, posted, added,
         ...extra,
     };
     vm.createContext(ctx);
-    vm.runInContext(`const NOTIF_HISTORY_MAX = 20; const NOTIF_STORAGE_KEY = 'k'; let __notifHistory = []; let __notifUnread = 0; function renderNotifBadge() {} function renderNotifDrawer() {}
+    vm.runInContext(`function addNotif(n, isNew) { added.push(n); }
         const __pendingSeen = new Set(); let __pendingSeenReady = false;`, ctx);
     ['pushNotif', 'mergeUnrecordedIntoRecent', 'markPendingFlash', 'playToneSequence'].forEach(n => vm.runInContext(grab(n), ctx));
-    return { ctx, store };
+    return { ctx, posted, added };
 }
-const get = (ctx, expr) => vm.runInContext(expr, ctx);
+const tick = () => new Promise(r => setTimeout(r, 0));
 
-test('history keeps only the 20 latest, newest first', () => {
-    const { ctx } = makeCtx();
-    for (let i = 1; i <= 25; i++) ctx.pushNotif('warn', 'msg ' + i);
-    assert.equal(get(ctx, '__notifHistory.length'), 20);
-    assert.equal(get(ctx, '__notifHistory[0].text'), 'msg 25');
-    assert.equal(get(ctx, '__notifHistory[19].text'), 'msg 6');
-    assert.equal(get(ctx, '__notifUnread'), 25, 'drawer closed: every new one counts as unread');
+// v1.0.18 (owner decision 2026-10-31): the 20-item history that lived in the browser tab (sessionStorage) is gone —
+// notifications are saved by the program (tests/system/notifications.test.js). Things only the dashboard notices
+// (the LINE connection going down) are sent to the program to be saved and shared with every open screen.
+test('pushNotif sends what the dashboard noticed to the program to be saved', async () => {
+    const { ctx, posted } = makeCtx();
+    ctx.pushNotif('bad', 'ระบบเชื่อมต่อ LINE หลุด', 'tunnel');
+    ctx.pushNotif('bad', '   '); ctx.pushNotif('bad', '');
+    await tick();
+    assert.equal(posted.length, 1, 'blank messages are ignored');
+    assert.equal(posted[0].url, '/api/notifications');
+    assert.equal(posted[0].opts.method, 'POST');
+    assert.deepEqual(JSON.parse(posted[0].opts.body), { kind: 'bad', text: 'ระบบเชื่อมต่อ LINE หลุด', source: 'tunnel' });
 });
 
-test('the same message within a minute is recorded once; blank messages are ignored', () => {
-    const { ctx } = makeCtx();
-    ctx.pushNotif('bad', 'ท่อหลุด'); ctx.pushNotif('bad', 'ท่อหลุด'); ctx.pushNotif('bad', '   '); ctx.pushNotif('bad', '');
-    assert.equal(get(ctx, '__notifHistory.length'), 1);
-});
-
-test('history is saved in sessionStorage (survives F5)', () => {
-    const { ctx, store } = makeCtx();
-    ctx.pushNotif('ok', 'บันทึกไว้');
-    assert.match(store.k, /บันทึกไว้/);
+test('if the program cannot be reached, the item still shows on this screen', async () => {
+    const { ctx, added } = makeCtx({ fetch: () => Promise.reject(new Error('offline')) });
+    ctx.pushNotif('bad', 'หน้าจอหลุดจากโปรแกรม');
+    await tick(); await tick();
+    assert.equal(added.length, 1);
+    assert.equal(added[0].text, 'หน้าจอหลุดจากโปรแกรม');
+    assert.equal(added[0].kind, 'bad');
 });
 
 test('recent table: unrecorded slips (wrong account / duplicate) come first as red rows without an amount; download failures are not added; max 30', () => {
@@ -104,8 +107,8 @@ test('chord sound plays 3 notes together; a normal sequence plays one note per s
 });
 
 test('static guards: the page wires every new event, has the bell + toast roots, and the sounds are synthesized', () => {
-    ['slip_warning', 'address_updated', 'pending_amount_slip'].forEach(ev => assert.ok(html.includes(`socket.on('${ev}'`), ev));
-    ['id="notifBellBtn"', 'id="notifDrawer"', 'id="toastStackTR"', 'id="toastStackBL"', 'id="notifBadge"'].forEach(s => assert.ok(html.includes(s), s));
+    ['slip_warning', 'pending_amount_slip', 'notification'].forEach(ev => assert.ok(html.includes(`socket.on('${ev}'`), ev));
+    ['id="notifBellBtn"', 'id="notifPanel"', 'id="toastStackTR"', 'id="toastStackBL"', 'id="notifBadge"'].forEach(s => assert.ok(html.includes(s), s));
     assert.ok(/warnBeep:\s*\{\s*freqs:\s*\[600, 0, 600\]/.test(html), 'warning beep is 600Hz x2');
     assert.ok(/pendingChord:\s*\{\s*freqs:\s*\[\[/.test(html), 'chord preset');
     assert.ok(!/topup-copy-btn|addr-copy-btn|buildTopupMessage|buildAddressRequestMessage|function copyText/.test(html), 'v1.0.17: no copy-message buttons at all (owner decision)');

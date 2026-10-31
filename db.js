@@ -51,6 +51,18 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     line_id TEXT UNIQUE
   );
+
+  -- v1.0.18 (เจ้าของขอ 2026-10-31): การแจ้งเตือนบนหน้าจอเก็บถาวร (เดิมอยู่ในแท็บเบราว์เซอร์ 20 รายการ ปิดแล้วหาย) ไม่ลบอัตโนมัติ
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'info',
+    title TEXT,
+    text TEXT NOT NULL,
+    source TEXT,
+    session_id TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_notifications_kind_id ON notifications(kind, id);
 `);
 
 // 🛡️ Migration: เพิ่ม trans_ref & session_id หากยังไม่มี และสร้าง UNIQUE INDEX ป้องกันสลิปซ้ำระดับฐานข้อมูล

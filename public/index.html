@@ -83,10 +83,29 @@
         .queue-card.pending-flash { animation: pendingFlash 0.6s ease-in-out 4; }
         @keyframes pendingFlash { 0%, 100% { background: transparent; } 50% { background: rgba(230, 81, 0, 0.30); } }
         @media (prefers-reduced-motion: reduce) { .toast, .queue-card.pending-flash { animation: none !important; } }
-        #notifDrawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(400px, 100vw); background: #fff; box-shadow: -4px 0 20px rgba(0,0,0,0.25); z-index: 3500; transform: translateX(105%); transition: transform 0.2s; display: flex; flex-direction: column; }
-        #notifDrawer.open { transform: none; }
-        #notifDrawer .notif-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid #e2e8f0; }
-        #notifList { overflow-y: auto; flex: 1; padding: 8px 12px; }
+        /* v1.0.18 (เจ้าของขอ 2026-10-31): แผงการแจ้งเตือนด้านขวา แสดงตลอด ย่อเป็นแถบเล็กได้ -- จอแคบกว่า 1200px เปิดจากปุ่มกระดิ่ง */
+        :root { --np-w: 0px; }
+        body { padding-right: calc(20px + var(--np-w)); }
+        .toast-stack.tr { right: calc(12px + var(--np-w)); }
+        #notifPanel { position: fixed; top: var(--alert-h, 0px); right: 0; bottom: 0; width: 330px; background: #fff; border-left: 1px solid #e2e8f0; box-shadow: -4px 0 16px rgba(15, 23, 42, 0.08); z-index: 900; display: flex; flex-direction: column; }
+        #notifPanel .np-strip { display: none; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0; cursor: pointer; height: 100%; color: #475569; }
+        #notifPanel .np-strip:hover { background: #f8fafc; }
+        #notifPanel .np-strip-text { writing-mode: vertical-rl; font-size: 0.9em; }
+        #notifPanel .np-count { background: #dc2626; color: #fff; border-radius: 10px; padding: 1px 7px; font-size: 0.8em; font-weight: 700; }
+        #notifPanel .np-body { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+        #notifPanel .np-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #e2e8f0; }
+        #notifPanel .np-btn { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 5px 12px; border-radius: 8px; cursor: pointer; font-family: 'Kanit', sans-serif; }
+        #notifPanel .np-filter { display: flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 0.88em; color: #475569; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
+        #notifList { overflow-y: auto; flex: 1; padding: 6px 12px; }
+        .np-day { font-size: 0.8em; font-weight: 700; color: #64748b; margin: 10px 2px 6px; }
+        .np-live { display: inline-block; font-size: 0.85em; background: #fee2e2; color: #b91c1c; border-radius: 6px; padding: 0 6px; margin-left: 6px; }
+        #notifPanel .np-more { margin: 6px 12px 12px; padding: 8px; border-radius: 8px; border: 1px dashed #cbd5e1; background: #f8fafc; color: #475569; cursor: pointer; font-family: 'Kanit', sans-serif; }
+        #notifPanel.collapsed { width: 46px; }
+        #notifPanel.collapsed .np-body { display: none; }
+        #notifPanel.collapsed .np-strip { display: flex; }
+        #notifPanel.narrow { width: min(380px, 100vw); top: 0; z-index: 3500; transform: translateX(105%); transition: transform 0.2s; box-shadow: -4px 0 20px rgba(0, 0, 0, 0.25); }
+        #notifPanel.narrow.open { transform: none; }
+        #notifBellBtn.np-hidden { display: none !important; }
         .notif-row { padding: 8px 10px; margin-bottom: 8px; border-radius: 8px; border-left: 5px solid #94a3b8; background: #f8fafc; font-size: 0.9em; word-break: break-word; }
         .notif-row.bad { border-left-color: #b91c1c; background: #fef2f2; }
         .notif-row.warn { border-left-color: #ea580c; background: #fff7ed; }
@@ -506,16 +525,24 @@
         <div id="floatingTotal" aria-hidden="true"><span class="ft-label">ยอดโอนรวม</span><span class="ft-amount">฿ <span id="floatingTotalAmount">0.00</span></span></div>
         <div id="toastStackTR" class="toast-stack tr"></div>
         <div id="toastStackBL" class="toast-stack bl"></div>
-        <div id="notifDrawer" aria-label="ประวัติแจ้งเตือน">
-            <div class="notif-head">
-                <strong>🔔 ประวัติแจ้งเตือน (20 รายการล่าสุด)</strong>
-                <div style="display:flex; gap:6px;">
-                    <button onclick="clearNotifHistory()" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; padding:6px 10px; border-radius:8px; cursor:pointer;">ล้าง</button>
-                    <button onclick="toggleNotifDrawer(false)" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; padding:6px 10px; border-radius:8px; cursor:pointer;">✕ ปิด</button>
-                </div>
+        <!-- v1.0.18 (เจ้าของขอ 2026-10-31): แผงการแจ้งเตือนด้านขวา แสดงตลอด ย่อได้ เก็บไว้ในโปรแกรมถาวร (เดิมเก็บในแท็บ 20 รายการ ปิดแล้วหาย) -->
+        <aside id="notifPanel" aria-label="การแจ้งเตือน">
+            <div class="np-strip" onclick="setNotifPanelCollapsed(false)" title="กดเพื่อเปิดรายการแจ้งเตือน">
+                <span style="font-size: 1.3em;">🔔</span>
+                <span id="notifStripCount" class="np-count" style="display: none;">0</span>
+                <span class="np-strip-text">การแจ้งเตือน</span>
             </div>
-            <div id="notifList"></div>
-        </div>
+            <div class="np-body">
+                <div class="np-head">
+                    <strong>🔔 การแจ้งเตือน</strong>
+                    <button class="np-btn" onclick="setNotifPanelCollapsed(true)" title="ย่อให้เหลือแถบเล็กด้านขวา">ย่อ ›</button>
+                </div>
+                <label class="np-filter"><input type="checkbox" id="notifImportantOnly" onchange="renderNotifPanel()"> เฉพาะเรื่องสำคัญ (สีแดง/สีส้ม)</label>
+                <div id="notifList"></div>
+                <button id="notifMoreBtn" class="np-more" onclick="loadOlderNotifs()" style="display: none;">ดูย้อนหลังเพิ่ม</button>
+            </div>
+        </aside>
+        <!-- /notifPanel -->
         <div class="live-control-panel">
             <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
                 <div id="liveStatusBadge" class="live-status-pill offline">
@@ -563,7 +590,7 @@
                 <button class="btn-kerry" onclick="openKerryExportModal()">
                     📦 Export Kerry Excel
                 </button>
-                <button id="notifBellBtn" onclick="toggleNotifDrawer()" title="ดูประวัติแจ้งเตือนย้อนหลัง 20 รายการล่าสุด" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-family: 'Kanit'; display: flex; align-items: center; gap: 6px;">
+                <button id="notifBellBtn" onclick="toggleNotifDrawer()" title="เปิดรายการแจ้งเตือน" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-family: 'Kanit'; display: flex; align-items: center; gap: 6px;">
                     🔔 แจ้งเตือน <span id="notifBadge" style="display:none; margin-left:4px; background:#dc2626; color:#fff; border-radius:10px; padding:1px 7px; font-size:0.8em; font-weight:700;">0</span>
                 </button>
                 <button onclick="openDevAuthModal()" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-family: 'Kanit'; display: flex; align-items: center; gap: 6px;">
@@ -1641,61 +1668,141 @@
         setInterval(updateSoundStatus, 5000);
         updateSoundStatus();
 
-        // ===== v1.0.16: ประวัติแจ้งเตือน 20 รายการล่าสุด + Toast + การ์ดรอใส่ยอดกะพริบ =====
-        const NOTIF_HISTORY_MAX = 20;
-        const NOTIF_STORAGE_KEY = 'aq_notif_history_v1';
-        let __notifHistory = [];
+        // ===== v1.0.18 (เจ้าของขอ 2026-10-31): แผงการแจ้งเตือนด้านขวา -- โปรแกรมบันทึกทุกการแจ้งเตือนถาวร (ตาราง notifications) =====
+        // หน้าจอโหลดมาแสดง (/api/notifications) และรับรายการใหม่ทาง socket "notification" เดิมเก็บในแท็บ 20 รายการ ปิดแท็บ/จบไลฟ์แล้วหาย
+        const NOTIF_PANEL_MIN_WIDTH = 1200;   // จอแคบกว่านี้ แผงเปิดจากปุ่มกระดิ่งแทน (ไม่บังคิว)
+        let __notifs = [];                  // ใหม่สุดก่อน
+        let __notifHasMore = false;
         let __notifUnread = 0;
-        try { const saved = JSON.parse(sessionStorage.getItem(NOTIF_STORAGE_KEY) || '[]'); if (Array.isArray(saved)) __notifHistory = saved.slice(0, NOTIF_HISTORY_MAX); } catch (e) {}
-        function pushNotif(kind, text) {
-            const msg = String(text || '').trim();
-            if (!msg) return;
-            const last = __notifHistory[0];
-            if (last && last.text === msg && Date.now() - last.t < 60000) return;   // ข้อความเดิมซ้ำภายใน 1 นาที ไม่บันทึกซ้ำ
-            __notifHistory.unshift({ t: Date.now(), kind: kind || 'info', text: msg });
-            if (__notifHistory.length > NOTIF_HISTORY_MAX) __notifHistory.length = NOTIF_HISTORY_MAX;
-            try { sessionStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify(__notifHistory)); } catch (e) {}
-            const drawer = document.getElementById('notifDrawer');
-            if (drawer && drawer.classList.contains('open')) renderNotifDrawer(); else __notifUnread++;
+        let __notifCollapsed = false;
+        try { __notifCollapsed = localStorage.getItem('aq_notif_panel_collapsed') === '1'; } catch (e) {}
+        function notifDayKey(t) { return new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' }); }
+        function groupNotifsByDay(items, nowMs) {
+            const today = notifDayKey(nowMs), yesterday = notifDayKey(nowMs - 86400000);
+            const groups = [];
+            (items || []).forEach(n => {
+                const key = notifDayKey(n.t);
+                let g = groups[groups.length - 1];
+                if (!g || g.key !== key) {
+                    const label = key === today ? 'วันนี้' : (key === yesterday ? 'เมื่อวาน' : new Date(n.t).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Bangkok' }));
+                    g = { key, label, items: [] };
+                    groups.push(g);
+                }
+                g.items.push(n);
+            });
+            return groups;
+        }
+        // เด้งป๊อปอัปเฉพาะเรื่องด่วน (สีแดง) ยกเว้นเรื่องที่มีแถบแดงด้านบนอยู่แล้ว (ระบบเชื่อมต่อ LINE หลุด, เครดิตตรวจสลิปหมด)
+        function shouldPopupNotification(n) {
+            return !!n && n.kind === 'bad' && n.source !== 'provider_quota_alert' && n.source !== 'tunnel';
+        }
+        function notifWide() { return window.innerWidth >= NOTIF_PANEL_MIN_WIDTH; }
+        function notifPanelVisible() {
+            const p = document.getElementById('notifPanel');
+            return !!p && (notifWide() ? !__notifCollapsed : p.classList.contains('open'));
+        }
+        function applyNotifLayout() {
+            const panel = document.getElementById('notifPanel');
+            if (!panel) return;
+            const wide = notifWide();
+            panel.classList.toggle('narrow', !wide);
+            panel.classList.toggle('collapsed', wide && __notifCollapsed);
+            if (wide) panel.classList.remove('open');
+            document.documentElement.style.setProperty('--np-w', (!wide ? 0 : (__notifCollapsed ? 46 : 330)) + 'px');
+            const bell = document.getElementById('notifBellBtn');
+            if (bell) bell.classList.toggle('np-hidden', wide);
+            if (notifPanelVisible()) __notifUnread = 0;
             renderNotifBadge();
         }
-        function renderNotifBadge() {
-            const b = document.getElementById('notifBadge');
-            if (!b) return;
-            b.style.display = __notifUnread > 0 ? 'inline-block' : 'none';
-            b.innerText = String(__notifUnread);
+        function setNotifPanelCollapsed(collapsed) {
+            if (!notifWide()) { toggleNotifDrawer(false); return; }
+            __notifCollapsed = !!collapsed;
+            try { localStorage.setItem('aq_notif_panel_collapsed', __notifCollapsed ? '1' : '0'); } catch (e) {}
+            applyNotifLayout();
         }
-        function renderNotifDrawer() {
-            const list = document.getElementById('notifList');
-            if (!list) return;
-            list.innerHTML = '';
-            if (!__notifHistory.length) { list.innerHTML = '<div style="color:#94a3b8; padding:16px; text-align:center;">ยังไม่มีการแจ้งเตือน</div>'; return; }
-            const icons = { bad: '🔴', warn: '🟠', ok: '🟢', info: 'ℹ️' };
-            __notifHistory.forEach(n => {
-                const row = document.createElement('div'); row.className = 'notif-row ' + n.kind;
-                const head = document.createElement('div'); head.className = 'notif-time';
-                head.textContent = (icons[n.kind] || '') + ' ' + new Date(n.t).toLocaleTimeString('th-TH', { hour12: false, timeZone: 'Asia/Bangkok' });
-                const body = document.createElement('div'); body.textContent = n.text;
-                row.appendChild(head); row.appendChild(body); list.appendChild(row);
+        // ปุ่มกระดิ่ง (จอแคบ): เปิด/ปิดแผงแบบลอย
+        function toggleNotifDrawer(force) {
+            const panel = document.getElementById('notifPanel');
+            if (!panel) return;
+            if (notifWide()) { setNotifPanelCollapsed(!__notifCollapsed); return; }
+            const open = typeof force === 'boolean' ? force : !panel.classList.contains('open');
+            panel.classList.toggle('open', open);
+            if (open) { __notifUnread = 0; renderNotifBadge(); renderNotifPanel(); }
+        }
+        function renderNotifBadge() {
+            const show = __notifUnread > 0;
+            ['notifBadge', 'notifStripCount'].forEach(id => {
+                const b = document.getElementById(id);
+                if (b) { b.style.display = show ? 'inline-block' : 'none'; b.innerText = String(__notifUnread); }
             });
         }
-        function toggleNotifDrawer(force) {
-            const d = document.getElementById('notifDrawer');
-            if (!d) return;
-            const open = typeof force === 'boolean' ? force : !d.classList.contains('open');
-            d.classList.toggle('open', open);
-            if (open) { __notifUnread = 0; renderNotifBadge(); renderNotifDrawer(); }
+        function renderNotifPanel() {
+            const list = document.getElementById('notifList');
+            if (!list) return;
+            const onlyImportant = !!(document.getElementById('notifImportantOnly') || {}).checked;
+            const items = onlyImportant ? __notifs.filter(n => n.kind === 'bad' || n.kind === 'warn') : __notifs;
+            list.innerHTML = '';
+            if (!items.length) list.innerHTML = '<div style="color:#94a3b8; padding:16px; text-align:center;">ยังไม่มีการแจ้งเตือน</div>';
+            const icons = { bad: '🔴', warn: '🟠', ok: '🟢', info: 'ℹ️' };
+            groupNotifsByDay(items, Date.now()).forEach(g => {
+                const day = document.createElement('div'); day.className = 'np-day'; day.textContent = g.label; list.appendChild(day);
+                g.items.forEach(n => {
+                    const row = document.createElement('div'); row.className = 'notif-row ' + n.kind;
+                    const head = document.createElement('div'); head.className = 'notif-time';
+                    head.textContent = (icons[n.kind] || '') + ' ' + new Date(n.t).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' }) + (n.title ? '  ' + n.title : '');
+                    if (n.sessionId) { const tag = document.createElement('span'); tag.className = 'np-live'; tag.textContent = 'ระหว่างไลฟ์'; head.appendChild(tag); }
+                    const body = document.createElement('div'); body.textContent = n.text;
+                    row.appendChild(head); row.appendChild(body); list.appendChild(row);
+                });
+            });
+            const more = document.getElementById('notifMoreBtn');
+            if (more) more.style.display = __notifHasMore ? 'block' : 'none';
         }
-        function clearNotifHistory() {
-            __notifHistory = []; __notifUnread = 0;
-            try { sessionStorage.removeItem(NOTIF_STORAGE_KEY); } catch (e) {}
-            renderNotifBadge(); renderNotifDrawer();
+        function addNotif(n, isNew) {
+            if (!n || __notifs.some(x => x.id === n.id)) return;
+            __notifs.unshift(n);
+            __notifs.sort((a, b) => b.id - a.id);
+            if (isNew && !notifPanelVisible()) __notifUnread++;
+            renderNotifBadge();
+            renderNotifPanel();
         }
+        function mergeNotifs(items) {
+            const known = new Set(__notifs.map(n => n.id));
+            (items || []).forEach(n => { if (!known.has(n.id)) __notifs.push(n); });
+            __notifs.sort((a, b) => b.id - a.id);
+        }
+        // โหลดล่าสุด 100 รายการ (ตอนเปิดหน้าและตอนต่อกลับหลังหลุด เพื่อเก็บรายการที่เกิดระหว่างหลุด)
+        async function loadNotifs() {
+            const r = await fetch('/api/notifications?limit=100').then(x => (x.ok ? x.json() : null)).catch(() => null);
+            if (!r || !r.success) return;
+            const first = __notifs.length === 0;
+            mergeNotifs(r.items);
+            if (first) __notifHasMore = !!r.hasMore;
+            renderNotifPanel();
+        }
+        async function loadOlderNotifs() {
+            const oldest = __notifs.filter(n => n.id > 0).map(n => n.id).sort((a, b) => a - b)[0];
+            const r = await fetch('/api/notifications?limit=100' + (oldest ? '&before=' + oldest : '')).then(x => (x.ok ? x.json() : null)).catch(() => null);
+            if (!r || !r.success) return;
+            mergeNotifs(r.items);
+            __notifHasMore = !!r.hasMore;
+            renderNotifPanel();
+        }
+        // เรื่องที่หน้าจอเห็นเอง (เช่น ระบบเชื่อมต่อ LINE หลุด) ส่งให้โปรแกรมบันทึกและกระจายให้ทุกหน้าจอ ส่งไม่ได้ = แสดงเฉพาะหน้าจอนี้
+        function pushNotif(kind, text, source) {
+            const msg = String(text || '').trim();
+            if (!msg) return;
+            const k = kind || 'info';
+            fetch('/api/notifications', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: k, text: msg, source: source || 'dashboard' }) })
+                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); })
+                .catch(() => addNotif({ id: -Date.now(), t: Date.now(), kind: k, title: '', text: msg, source: source || 'dashboard', sessionId: null }, true));
+        }
+        try { window.addEventListener('resize', applyNotifLayout); applyNotifLayout(); renderNotifPanel(); loadNotifs(); } catch (e) { console.warn('notification panel unavailable:', e); }
         // opts: { kind: 'warn'|'bad'|'ok'|'info', pos: 'tr' (บนขวา) | 'bl' (ล่างซ้าย), ms, title, record: false = ไม่ลงประวัติ }
         function showToast(message, opts) {
             opts = opts || {};
             const kind = opts.kind || 'info';
-            if (opts.record !== false) pushNotif(kind, (opts.title ? opts.title + ' — ' : '') + message);
+            // v1.0.18: ป๊อปอัปไม่ลงประวัติเองแล้ว -- โปรแกรมบันทึกการแจ้งเตือนทุกรายการ (แผงด้านขวา)
             const root = document.getElementById(opts.pos === 'bl' ? 'toastStackBL' : 'toastStackTR');
             if (!root) return null;
             const el = document.createElement('div');
@@ -1755,7 +1862,7 @@
                 __tunnelBadTimer = null;
                 __tunnelAlertShown = true;
                 showGlobalAlertBanner(v.message, 'tunnel');
-                try { pushNotif('bad', v.message.replace(/^⚠️\s*/, '')); } catch (e) {}
+                try { pushNotif('bad', v.message.replace(/^⚠️\s*/, ''), 'tunnel'); } catch (e) {}
                 tunnelSirenOnce();
                 __tunnelSirenTimer = setInterval(tunnelSirenOnce, TUNNEL_SIREN_REPEAT_MS);
             }, TUNNEL_ALERT_GRACE_MS);
@@ -2273,7 +2380,7 @@
 
         // 💬 เสียงเตือนเบาๆ เมื่อมีลูกค้าโอนไม่ครบ (สร้างเสียงเอง ไม่พึ่งอินเทอร์เน็ต)
         socket.on('topup_needed', (d) => {
-            try { if (d && d.name) pushNotif('warn', 'ลูกค้า ' + d.name + ' โอนไม่ครบ ต้องโอนเพิ่มอีก ' + Number(d.need).toLocaleString('en-US') + ' บาท' + (d.held ? ' (ค่าส่ง)' : '')); } catch (e) {}
+            // v1.0.18: โปรแกรมบันทึกการแจ้งเตือนนี้เอง (แผงด้านขวา) หน้าจอเล่นแค่เสียง
             try {
                 // v1.0.17: ใช้ AudioContext ตัวเดียวกับเสียงอื่น (ตัวที่ปลดล็อกแล้วตอนแม่ค้าแตะหน้าจอ) เดิมสร้างใหม่ทุกครั้งจึงอาจโดนบล็อก
                 playToneSequence([660], [0.5], 'sine', 0.15);
@@ -2282,7 +2389,7 @@
 
         // 🔴 เสียงเตือนเมื่อโหลดรูปสลิปจาก LINE ไม่สำเร็จ (โทนต่ำ 2 ครั้ง แยกจากเสียงโอนไม่ครบ)
         socket.on('image_failed', () => {
-            try { pushNotif('bad', 'โหลดรูปสลิปจาก LINE ไม่สำเร็จ — เปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง'); } catch (e) {}
+            // v1.0.18: โปรแกรมบันทึกการแจ้งเตือนนี้เอง (แผงด้านขวา + ป๊อปอัปสีแดง) หน้าจอเล่นแค่เสียง
             try {
                 const Ctx = window.AudioContext || window.webkitAudioContext;
                 if (!Ctx) return;
@@ -2305,19 +2412,23 @@
         // v1.0.16: สลิปซ้ำ / โอนเข้าผิดบัญชี (ระบบไม่บันทึก) = Toast ส้มแดงมุมบนขวา + บี๊ปคู่สั้น 600Hz (การ์ดแดงกับแถวแดงในตารางมาจาก full_sync)
         socket.on('slip_warning', (d) => {
             try {
-                const title = d && d.kind === 'duplicate' ? '⚠️ สลิปซ้ำ' : (d && d.kind === 'wrong_account' ? '⚠️ โอนเข้าผิดบัญชี' : (d && d.kind === 'check_pending' ? '⚠️ ตรวจการ์ดรอใส่ยอด' : (d && d.kind === 'manual_match' ? '❓ สลิปตรงกับยอดที่กรอกไว้' : '⚠️ สลิปที่ระบบไม่บันทึก')));
-                showToast((d && d.name ? d.name + ' — ' : '') + ((d && d.reason) || ''), { kind: 'warn', pos: 'tr', title, ms: 12000 });
+                // v1.0.18: ข้อความ/ป๊อปอัปมาจากการแจ้งเตือนที่โปรแกรมบันทึก (สลิปซ้ำ/โอนผิดบัญชี = สีแดง เด้งป๊อปอัป) ที่นี่เหลือแค่เสียง
                 playPreset('warnBeep');
             } catch (e) {}
         });
-        // v1.0.16: ลูกค้าส่งที่อยู่เข้ามา = Toast เขียวมุมล่างซ้าย ไม่มีเสียง (ไอคอน 📍 บนการ์ดเปลี่ยนเองจาก full_sync)
-        socket.on('address_updated', (d) => {
-            try { showToast('คุณ' + ((d && d.name) || 'ลูกค้า') + ' อัปเดตที่อยู่จัดส่งแล้ว', { kind: 'ok', pos: 'bl', ms: 6000 }); } catch (e) {}
+        // v1.0.18: ลูกค้าส่งที่อยู่เข้ามา = รายการสีเขียวในแผงแจ้งเตือน (ไม่เด้งป๊อปอัปแล้ว ตามที่เจ้าของเลือก: เด้งเฉพาะเรื่องด่วน)
+        // รายการใหม่จากโปรแกรม: ใส่แผงด้านขวา + เด้งป๊อปอัปเฉพาะเรื่องด่วน (สีแดง)
+        socket.on('notification', (n) => {
+            try {
+                addNotif(n, true);
+                if (shouldPopupNotification(n)) showToast(n.text, { kind: 'bad', pos: 'tr', title: n.title || undefined, ms: 12000 });
+            } catch (e) {}
         });
+        socket.on('connect', () => { try { loadNotifs(); } catch (e) {} });   // ต่อกลับหลังหลุด: ดึงรายการที่เกิดระหว่างหลุด
         // v1.0.16: สลิปที่ไม่มี QR / อ่านยอดไม่ได้ (รอแม่ค้าใส่ยอด) = เสียงคอร์ดเฉพาะ + การ์ดส้มกะพริบ ไม่มีเลขคิว
         socket.on('pending_amount_slip', (d) => {
             try {
-                pushNotif('warn', ((d && d.name) ? d.name + ' ' : '') + ((d && d.bankName !== undefined && d.bankName !== null) ? 'ส่งสลิปธนาคาร' + d.bankName + 'ที่ยังตรวจไม่ได้' + (d.delay ? ' (ต้องรอ ~' + d.delay + ' นาทีหลังโอน)' : '') + ' — ให้ลูกค้าส่งรูปเดิมซ้ำทีหลัง' : 'ส่งสลิปที่ระบบอ่านยอดไม่ได้ — รอแม่ค้ากดเช็คสลิปและใส่ยอด'));
+                // v1.0.18: โปรแกรมบันทึกการแจ้งเตือนนี้เอง (แผงด้านขวา) หน้าจอเล่นแค่เสียง
                 playPreset('pendingChord');
             } catch (e) {}
         });
@@ -2972,7 +3083,7 @@
         socket.on('provider_quota_alert', (data) => {
             updateQuotaUI(data);
             showGlobalAlertBanner(data.message);
-            try { pushNotif('bad', String(data.message || '').replace(/^⚠️\s*(\[แจ้งเตือนด่วน\]:\s*)?/, '')); } catch (e) {}
+            // v1.0.18: โปรแกรมบันทึกการแจ้งเตือนนี้เอง (แผงด้านขวา; แถบแดงด้านบนยังแสดงตามเดิม)
             try {
                 playPreset('quotaAlert');
             } catch(e) {}
