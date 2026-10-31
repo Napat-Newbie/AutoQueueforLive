@@ -89,7 +89,11 @@ try {
   // v1.0.18: รหัสประจำรายการที่ถอดจาก QR ของรูปสลิป (sub-tag 02) — เก็บตั้งแต่รูปเข้าระบบแม้ยังตรวจไม่ผ่าน
   // พิสูจน์ด้วยคีย์จริง 2026-10-31 ว่ารหัสนี้ตรงกับ transRef ที่ SlipOK ตอบตอนตรวจผ่าน (สลิปกรุงไทยตรงเป๊ะทุกตัว)
   // ใช้จับคู่ "สลิปที่ตรวจผ่าน" กับ "การ์ดที่แม่ค้ากรอกยอดเอง" แบบชัวร์ แทนการเดาจากช่วงเวลา
-  if (!slipCols.includes('qr_ref')) {
+  if (!slipCols.includes('qr_bank')) {
+    db.exec(`ALTER TABLE slips ADD COLUMN qr_bank TEXT;`);   // v1.0.19: รหัสธนาคารผู้โอนจาก QR (sub-tag 01)
+    console.log('✅ Migration: เพิ่มคอลัมน์ qr_bank ในตาราง slips สำเร็จ');
+}
+if (!slipCols.includes('qr_ref')) {
     db.exec(`ALTER TABLE slips ADD COLUMN qr_ref TEXT;`);
     console.log('✅ Migration: เพิ่มคอลัมน์ qr_ref ในตาราง slips สำเร็จ');
   }
