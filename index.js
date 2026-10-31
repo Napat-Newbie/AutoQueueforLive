@@ -3098,7 +3098,8 @@ async function getOrdersForKerry(options = {}) {
         if (bd) customerOrders[custKey].breakdowns.push(bd);
     });
 
-    const orders = Object.values(customerOrders).map(cust => {
+    // v1.0.17 (เจ้าของสั่ง 2026-10-31): ส่งของเฉพาะลูกค้าที่ได้สินค้าอย่างน้อย 1 ชิ้น -- คนที่ยอดยังไม่พอ (0 ชิ้น) ไม่อยู่ในรายชื่อ Kerry และไฟล์ Excel
+    const orders = Object.values(customerOrders).filter(cust => cust.totalDraws > 0).map(cust => {
         const addr = cust.lineId ? addressMap[cust.lineId] : null;
         const itemSummary = mergeBreakdowns(cust.breakdowns) || `สินค้า ${cust.totalDraws} ชิ้น`;
         
