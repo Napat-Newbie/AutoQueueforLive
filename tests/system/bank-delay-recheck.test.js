@@ -66,3 +66,20 @@ test('the recheck runs the same account check: money to another account is not r
     await sb.waitFor(() => /โอนผิดบัญชี/.test(readLog(sb)), 10000, 'wrong-account line missing');
     assert.equal(sb.slips()[0].amount, 0, 'nothing applied to the card');
 }, null, ENV));
+
+// 2026-10-31: runBankDelayRecheck declared `const parts` and then re-assigned it when the stored payload was not in
+// the manual_image|url|breakdown shape -> TypeError "Assignment to constant variable", the card never upgraded and the
+// error was swallowed by the timer. Not reachable through today's webhook (it always writes manual_image), so this
+// forces the other shape to pin the fallback branch.
+test('re-check still upgrades a card whose stored payload is not in the manual_image shape', () => withSandbox(async sb => {
+    const id = await send1010(sb);
+    sb.exec("UPDATE slips SET qr_payload = 'legacy-shape' WHERE id = ?", id);
+    sb.mock.slipOk('kbbl', { amount: 140, transRef: 'AUTO0009', transDate: bkkDate(), transTime: bkkTimeAgo(60) });
+    const failLine = () => (readLog(sb).match(/ตรวจสลิปซ้ำเองหลังพ้นเวลารอ \(สลิป #\d+\) ไม่สำเร็จ: [^\n]*/) || [null])[0];
+    await sb.waitFor(() => sb.slips()[0].amount === 140 || failLine(), 10000, 'neither upgraded nor logged a failure');
+    assert.equal(failLine(), null, 'the re-check must not crash');
+    const row = sb.slips()[0];
+    assert.equal(row.trans_ref, 'AUTO0009');
+    assert.equal(row.draws, 1);
+    assert.match(row.qr_payload, /^manual_image\|\|/, 'rebuilt into the manual_image shape (empty image url)');
+}, null, ENV));

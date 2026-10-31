@@ -3930,7 +3930,7 @@ async function runBankDelayRecheck(slipId, imageFile, delayMin, attempt) {
     const virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
     const result = calculateBestDraws(virtualBalance, pastDrawsToday, { holdExactPrice: true });
     const breakdownStr = result.breakdown.join(', ');
-    const parts = String(slip.qr_payload || '').split('|');   // คงรูป manual_image|url|breakdown เดิม (ปุ่มดูรูปและหน้าต่างแก้ไขสินค้าใช้อยู่)
+    let parts = String(slip.qr_payload || '').split('|');     // คงรูป manual_image|url|breakdown เดิม (ปุ่มดูรูปและหน้าต่างแก้ไขสินค้าใช้อยู่)
     if (parts[0] === 'manual_image') parts[2] = breakdownStr;
     else parts = ['manual_image', '', breakdownStr];
 
