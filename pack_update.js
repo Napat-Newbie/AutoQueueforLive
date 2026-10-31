@@ -91,7 +91,7 @@ function runPack(targetVersion, rawChangelog, shouldPublish) {
 
     // Files to include
     // ⚠️ index.js ต้องใช้ keep_awake.js และโฟลเดอร์ sentinel/ ตอนเปิดโปรแกรม ถ้าไม่แนบไป เครื่องแม่ค้าจะเปิดโปรแกรมไม่ขึ้นหลังอัปเดต
-    // ⚠️ v1.0.19: updater.bat ใหญ่ขึ้น (locale-safe backup name) — ตอนตรวจ zip ให้เทียบ "LF-only" ไม่ใช่ตัวเลขไบต์เดิม 2,168
+    // ⚠️ v1.0.19: updater.bat = 4,824 B ASCII + LF, รันจากสำเนาใน %TEMP% และมีจุดรับช่วงของตัวอัปเดตรุ่นเก่าที่ไบต์ 1920 — ตอนตรวจ zip ให้เทียบกับไฟล์ในซอร์สทุกไบต์ + CR=0 (รูปแบบไฟล์คุมโดย tests/unit/updater-bat.test.js)
     const filesToCopy = [
         'index.js',
         'db.js',
