@@ -1746,13 +1746,14 @@ function canHoldSession(rec) {
 // v1.0.16: ยอดที่ลูกค้าโอน "นอกรอบไลฟ์" (ก่อนกดเริ่มไลฟ์ หรือระหว่างสองรอบ) ผูกเข้ากับรอบที่เริ่มถัดไป (กติกา ก ที่เจ้าของร้านเลือก)
 // เดิมสลิปพวกนี้ไม่มีรหัสรอบ (session_id ว่าง) จึงหายจากหน้าคิวทันทีที่กดเริ่มไลฟ์ เพราะหน้าคิวตอนไลฟ์กรองตามรหัสรอบ
 // ผูกเฉพาะสลิปที่ตรงเงื่อนไขทั้งหมด:
-//  - session_id ว่าง และสถานะยังค้างอยู่ (waiting / called / skipped / abnormal_pending)
-//    ที่แม่ค้าจัดการจบแล้ว (completed / cleared / rejected) ไม่แตะ และ accumulated (ยอดไม่พอ) ไม่แตะ
-//    เพราะเงินในกระเป๋าลูกค้าถูกรีเซ็ตตอนเริ่มไลฟ์ตามกติกา v1.0.13
+//  - session_id ว่าง และสถานะยังค้างอยู่ (waiting / called / skipped / abnormal_pending / accumulated)
+//    ที่แม่ค้าจัดการจบแล้ว (completed / cleared / rejected) ไม่แตะ
+//    v1.0.17 (เจ้าของร้านสั่ง 2026-10-31): accumulated (ยอดไม่พอ) ผูกเข้ารอบด้วย และคืนเงินเข้ากระเป๋าหลังรีเซ็ต v1.0.13
+//    (เดิมไม่แตะ ทำให้เงินที่ลูกค้าโอนก่อนไลฟ์แต่ยังไม่พอซื้อหายจากระบบตอนกดเริ่มไลฟ์)
 //  - id มากกว่าสลิปล่าสุดที่มีรหัสรอบ = เข้ามาหลังรอบก่อนหน้า (ไม่ดึงของเก่าก่อนรอบที่แล้วกลับมา)
 //  - วันที่โอนเป็นวันนี้หรือย้อนหลังไม่เกิน OUT_OF_ROUND_LOOKBACK_DAYS วัน (เวลาไทย)
 const OUT_OF_ROUND_LOOKBACK_DAYS = 1;
-const OUT_OF_ROUND_PENDING_STATUSES = ['waiting', 'called', 'skipped', 'abnormal_pending'];
+const OUT_OF_ROUND_PENDING_STATUSES = ['waiting', 'called', 'skipped', 'abnormal_pending', 'accumulated'];
 function bangkokDateString(offsetDays = 0) {
     const d = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Bangkok"}));
     d.setDate(d.getDate() + offsetDays);
@@ -1766,10 +1767,25 @@ function outOfRoundSlipFilter() {
         params: [Number(last && last.m) || 0, bangkokDateString(-OUT_OF_ROUND_LOOKBACK_DAYS), ...OUT_OF_ROUND_PENDING_STATUSES]
     };
 }
-function claimOutOfRoundSlips(sessionId) {
-    if (!LIVE_ID_RE.test(String(sessionId))) return 0;
+// v1.0.17: คืนเงินของสลิปยอดไม่พอ (accumulated) ที่ผูกเข้ารอบ กลับเข้ากระเป๋าหลังรีเซ็ต
+//  - คืนไม่เกินยอดที่อยู่ในกระเป๋าก่อนรีเซ็ต (preResetBalances) = เงินที่ใช้ซื้อชิ้นไปแล้วไม่ถูกคืนซ้ำ
+//  - คืนไม่เกินผลรวมยอดของสลิป accumulated นอกรอบของคนนั้น = เศษเงินของรอบก่อนยังถูกรีเซ็ตตามกติกา v1.0.13
+//  - ผูกรอบและคืนเงินอยู่ใน transaction เดียว (สำเร็จพร้อมกันหรือไม่เกิดทั้งคู่)
+function claimOutOfRoundSlips(sessionId, preResetBalances = new Map()) {
+    if (!LIVE_ID_RE.test(String(sessionId))) return { claimed: 0, restored: [] };
     const f = outOfRoundSlipFilter();
-    return supabase.db.prepare(`UPDATE slips SET session_id = ? WHERE ${f.where}`).run(sessionId, ...f.params).changes;
+    return supabase.db.transaction(() => {
+        const owedBySlips = supabase.db.prepare(`SELECT line_id, MAX(line_name) AS name, SUM(amount) AS total FROM slips WHERE ${f.where} AND status = 'accumulated' AND line_id IS NOT NULL GROUP BY line_id`).all(...f.params);
+        const claimed = supabase.db.prepare(`UPDATE slips SET session_id = ? WHERE ${f.where}`).run(sessionId, ...f.params).changes;
+        const restored = [];
+        for (const r of owedBySlips) {
+            const amount = Math.min(Number(preResetBalances.get(r.line_id)) || 0, Number(r.total) || 0);
+            if (!(amount > 0)) continue;
+            supabase.db.prepare('UPDATE customers SET balance = balance + ? WHERE line_id = ?').run(amount, r.line_id);
+            restored.push({ lineId: r.line_id, name: r.name, amount });
+        }
+        return { claimed, restored };
+    })();
 }
 
 // v1.0.11: นับจำนวนชิ้นที่ลูกค้าได้ไปแล้ว เพื่อตัดสินว่าจ่ายค่าส่งไปแล้วหรือยัง
@@ -2811,10 +2827,12 @@ app.post('/api/live_session/start', async (req, res) => {
         }
 
         // 🔄 v1.0.13: เริ่มไลฟ์รอบใหม่ = รีเซ็ตยอดโอนสะสม (เศษเงินในกระเป๋า) ของลูกค้าทุกคนเป็น 0
+        const preResetBalances = new Map();   // v1.0.17: ยอดก่อนรีเซ็ต ใช้คืนเงินของสลิปยอดไม่พอที่โอนนอกรอบ (claimOutOfRoundSlips)
         try {
             const owed = supabase.db.prepare('SELECT name, line_id, balance FROM customers WHERE balance != 0').all();
             if (owed.length > 0) {
                 supabase.db.prepare('UPDATE customers SET balance = 0 WHERE balance != 0').run();
+                owed.forEach(c => { if (c.line_id) preResetBalances.set(c.line_id, Number(c.balance) || 0); });
                 const total = owed.reduce((sum, c) => sum + (Number(c.balance) || 0), 0);
                 const detail = owed.slice(0, 20).map(c => `${c.name || c.line_id}: ${c.balance}฿`).join(', ');
                 addLog('INFO', `เริ่มไลฟ์รอบใหม่: รีเซ็ตยอดสะสมของลูกค้า ${owed.length} คน รวม ${total} บาท (${detail}${owed.length > 20 ? ', ...' : ''})`);
@@ -2826,9 +2844,15 @@ app.post('/api/live_session/start', async (req, res) => {
         // v1.0.16: ผูกสลิปที่ลูกค้าโอนนอกรอบ (ก่อนกดเริ่ม/ระหว่างรอบ) เข้ากับรอบนี้ ทำหลังสำรองฐานข้อมูลและรีเซ็ตกระเป๋า เพื่อให้ไฟล์สำรองเป็นสภาพก่อนเริ่มไลฟ์
         let claimedOutOfRound = 0;
         try {
-            claimedOutOfRound = claimOutOfRoundSlips(sessionId);
+            const claim = claimOutOfRoundSlips(sessionId, preResetBalances);
+            claimedOutOfRound = claim.claimed;
             carryOutOfRoundNotices(sessionId);
             if (claimedOutOfRound > 0) addLog('INFO', `เริ่มไลฟ์รอบใหม่: ผูกสลิปที่ลูกค้าโอนนอกรอบไลฟ์ ${claimedOutOfRound} ใบ เข้ากับรอบนี้ (ยังค้างอยู่ในคิว)`);
+            if (claim.restored.length > 0) {
+                const restoredTotal = claim.restored.reduce((sum, r) => sum + r.amount, 0);
+                const restoredDetail = claim.restored.slice(0, 20).map(r => `${r.name || r.lineId}: ${fmtBaht(r.amount)}฿`).join(', ');
+                addLog('INFO', `เริ่มไลฟ์รอบใหม่: คืนยอดที่ลูกค้าโอนนอกรอบแต่ยังไม่พอซื้อ กลับเข้ากระเป๋า ${claim.restored.length} คน รวม ${fmtBaht(restoredTotal)} บาท (${restoredDetail}${claim.restored.length > 20 ? ', ...' : ''}) ลูกค้าขึ้นการ์ดรอโอนเพิ่มในรอบนี้`);
+            }
         } catch (claimErr) {
             claimedOutOfRound = 0;
             addLog('ERROR', `ผูกสลิปนอกรอบเข้ากับรอบไลฟ์ไม่สำเร็จ (ไลฟ์เริ่มตามปกติ): ${claimErr.message}`);

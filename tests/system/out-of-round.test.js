@@ -79,7 +79,8 @@ test('only unfinished, recent slips are attached; finished/rejected/odd/old ones
     await slipFor(sb, 'Udave', 'Dave', 'md', 'kd', 140, 'REFD'); await sb.waitForSlips(4);
     await slipFor(sb, 'Ufrank', 'Frank', 'mf', 'kf', 140, 'REFF'); await sb.waitForSlips(5);
     await slipFor(sb, 'Uerin', 'Erin', 'me', 'ke', 140, 'REFE'); await sb.waitForSlips(6);
-    // not enough money (wallet only, no item) -> left alone
+    // not enough money (wallet only, no item) -> attached too since 2026-10-31 (owner decision, Phase A:
+    // the money used to vanish at the wallet reset; see tests/system/out-of-round-accumulated.test.js)
     await slipFor(sb, 'Ucarol', 'Carol', 'mc', 'kc', 60, 'REFC'); await sb.waitForSlips(7);
 
     const idOf = (name) => sb.slips().find(r => r.line_name === name).id;
@@ -94,9 +95,9 @@ test('only unfinished, recent slips are attached; finished/rejected/odd/old ones
 
     const live = await sb.startLive();
     const sessionOf = (name) => sb.slips().find(r => r.line_name === name).session_id;
-    for (const n of ['Gina', 'Hank', 'Ivy', 'Yesterday']) assert.equal(sessionOf(n), live.session.id, `${n} should be attached`);
-    for (const n of ['Dave', 'Frank', 'Erin', 'Carol', 'TooOld']) assert.equal(sessionOf(n), null, `${n} should be left alone`);
-    assert.equal(live.claimedOutOfRound, 4);
+    for (const n of ['Gina', 'Hank', 'Ivy', 'Carol', 'Yesterday']) assert.equal(sessionOf(n), live.session.id, `${n} should be attached`);
+    for (const n of ['Dave', 'Frank', 'Erin', 'TooOld']) assert.equal(sessionOf(n), null, `${n} should be left alone`);
+    assert.equal(live.claimedOutOfRound, 5);
     assert.ok(yesterday && tooOld);
 }));
 
@@ -118,9 +119,14 @@ test('shipping is not charged twice: pre-live buyer sends 100 more during the li
     assert.equal(second.status, 'waiting');
 }));
 
-test('customer wallet is still reset to 0 when a live starts (v1.0.13 rule is unchanged)', () => withSandbox(async sb => {
+// v1.0.13 rule, narrowed 2026-10-31 (owner decision, Phase A): a leftover from an EARLIER round is still reset to 0.
+// Money sent OUT of round that is not enough yet is kept instead (tests/system/out-of-round-accumulated.test.js);
+// before Phase A this test sent Carol's 60 before any live and expected 0 -- that was the money-vanishing bug.
+test('customer wallet left over from an earlier round is still reset to 0 when a live starts (v1.0.13 rule)', () => withSandbox(async sb => {
+    await sb.startLive();
     await slipFor(sb, 'Ucarol', 'Carol', 'mc', 'kc', 60, 'REFC'); await sb.waitForSlips(1);
     assert.equal(sb.sql('SELECT balance FROM customers WHERE line_id = ?', 'Ucarol')[0].balance, 60);
+    await sb.endLive();
     await sb.startLive();
     assert.equal(sb.sql('SELECT balance FROM customers WHERE line_id = ?', 'Ucarol')[0].balance, 0);
 }));
