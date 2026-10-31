@@ -221,3 +221,19 @@ test('shop keyed 140 but the slip says 140.50 -> no link, both are counted (docu
     assert.equal(sb.slips().length, 2);
     assert.equal((await sb.stats()).stats.totalAmount, 280.5);
 }));
+
+// 2026-11-01 (from the first real shop live on v1.0.18): the QR reference proves it is the SAME transfer, but if the
+// merchant keyed a different amount than the slip really says, the link used to be silent. Now: still linked (no double
+// count), the keyed amount is not changed silently, and the merchant gets an orange "check the amount" warning.
+test('customer re-sends the slip, QR reference matches, but the keyed amount differs: linked + orange "check the amount" warning', () => withSandbox(async sb => {
+    await firstTransferKeyed(sb, 140, '10:00:00', 'REFX0001');
+    sb.mock.slipOk('ksame', { amount: 145, transRef: 'REFX0001', transDate: bkkDate(), transTime: '09:59:30' });
+    await sb.sendSlip('Ualice', 'm2', 'ksame'); await processed(sb, 'Ualice', 2);
+    const st = await sb.stats();
+    assert.equal(sb.slips().length, 1, 'same transfer: no second slip row');
+    assert.equal(st.stats.totalAmount, 140, 'keyed amount kept - the merchant decides');
+    const items = (await sb.get('/api/notifications?limit=50')).json.items || [];
+    const n = items.find(x => x.kind === 'warn' && /145/.test(x.text) && /140/.test(x.text));
+    assert.ok(n, 'orange warning naming both amounts');
+    assert.match(n.text, /ตรวจยอด/);
+}));

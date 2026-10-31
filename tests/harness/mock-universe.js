@@ -117,8 +117,12 @@ class MockUniverse {
                 this.geminis.push({ path: u.pathname, url: orig, headers: { ...req.headers }, body: JSON.parse(body.toString('utf8') || '{}') });
                 if (this.geminiQueue.length) {
                     const next = this.geminiQueue.shift();
-                    if (next.text !== undefined) return reply(200, { candidates: [{ content: { parts: [{ text: next.text }] } }] });
-                    return reply(next.status || 500, next.body || { error: { message: 'scripted gemini error' } });
+                    const answer = () => (next.text !== undefined
+                        ? reply(200, { candidates: [{ content: { parts: [{ text: next.text }] } }] })
+                        : reply(next.status || 500, next.body || { error: { message: 'scripted gemini error' } }));
+                    // { delayMs } = a slow Gemini (seen on a real shop live 2026-10-31: 5 of 36 answers took > 4 s)
+                    if (next.delayMs) { setTimeout(() => { try { answer(); } catch (e) { /* client gave up */ } }, next.delayMs); return; }
+                    return answer();
                 }
                 if (this.geminiReply === null) return reply(500, { error: { message: 'no scripted gemini reply' } });
                 return reply(200, { candidates: [{ content: { parts: [{ text: this.geminiReply }] } }] });
