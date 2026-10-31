@@ -138,7 +138,7 @@ class Sandbox {
         if (!this._db) this._db = new DatabaseSync(path.join(this.dir, 'data.sqlite'), { readOnly: true });
         return this._db.prepare(query).all(...params);
     }
-    slips() { return this.sql('SELECT id, line_id, line_name, amount, draws, status, session_id, trans_date, trans_ref, qr_payload, qr_ref FROM slips ORDER BY id'); }
+    slips() { return this.sql('SELECT id, line_id, line_name, amount, draws, status, session_id, trans_date, trans_ref, qr_payload, qr_ref, qr_bank FROM slips ORDER BY id'); }
     /** Write a test fixture straight into the sandbox database (separate connection, WAL-safe). */
     exec(query, ...params) {
         if (!this._wdb) { this._wdb = new DatabaseSync(path.join(this.dir, 'data.sqlite')); this._wdb.exec('PRAGMA busy_timeout = 5000'); }

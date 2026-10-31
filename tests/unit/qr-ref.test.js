@@ -35,3 +35,13 @@ test('garbage input is rejected, never guessed', () => {
     assert.equal(f('0006abc'), null);       // length field not numeric
     assert.equal(f('0099ZZ'), null);        // declared length overruns the text
 });
+
+// 2026-11-01: the sending bank code (sub-tag 01) tells whether the reference rule is proven for that bank
+const sv = require(require('path').join(process.env.AQ_TEST_APP_ROOT || require('path').join(__dirname, '..', '..'), 'lib', 'slipVerify.js'));
+test('extractQrBank reads the sending bank code; KTB / BBL / SCB are the proven banks', () => {
+    assert.equal(sv.extractQrBank('0046000600000101030140225202610312tAnFhPlaoapq4QaN5102TH9104D43A'), '014');
+    assert.equal(sv.extractQrBank('004600060000010103002022520261101013741230095425085102TH910456FA'), '002');
+    assert.equal(sv.extractQrBank('not a qr'), null);
+    assert.equal(sv.extractQrBank(''), null);
+    assert.deepEqual([...sv.PROVEN_QR_BANKS].sort(), ['002', '006', '014']);
+});

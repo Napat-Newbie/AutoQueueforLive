@@ -168,13 +168,16 @@ test('same slip re-sent, shop clock 2.5 minutes behind the bank clock (arrival 1
 // BBL 1010 -> the shop keys the amount -> the customer re-sends the same picture after the bank delay.
 // So only EQUALITY is used as proof; a differing / incomparable reference keeps the safe default (linked, one slip,
 // persistent confirmation card with one-tap "count the second transfer").
-test('REAL BBL flow: 1010 stores the QR ref, shop keys 140, the SAME picture is re-sent and SlipOK answers a differently-shaped transRef -> NOT counted twice, card shown', () => withSandbox(async sb => {
+// 2026-11-01: BBL/SCB/KTB are now PROVEN (QR sub-tag 02 == transRef, real shop log), so this scenario can only happen for an
+// UNPROVEN bank - the QR below is the same layout with bank code 004 (KBank, not proven yet).
+test('UNPROVEN bank flow: 1010 stores the QR ref, shop keys 140, the SAME picture is re-sent and SlipOK answers a differently-shaped transRef -> NOT counted twice, card shown', () => withSandbox(async sb => {
     sb.mock.profile('Ualice', 'Alice');
     // the real Bangkok Bank slip QR captured in the owner-key experiment (tests/unit/qr-ref.test.js)
-    sb.mock.slips.set('kbblreal', { status: 400, body: { code: 1010, message: 'wait', data: { qrcodeData: '004600060000010103002022520261031140047230057235085102TH910468F0', bankCode: '002', bankName: 'กรุงเทพ', delay: 7 } } });
+    sb.mock.slips.set('kbblreal', { status: 400, body: { code: 1010, message: 'wait', data: { qrcodeData: '004600060000010103004022520261031140047230057235085102TH910468F0', bankCode: '004', bankName: 'กสิกรไทย', delay: 7 } } });
     await sb.sendSlip('Ualice', 'm1', 'kbblreal'); await sb.waitForSlips(1); await sleep(300);
     const id = sb.slips()[0].id;
     assert.equal(sb.slips()[0].qr_ref, '2026103114004723005723508', 'precondition: the pending card got its qr_ref from the 1010 answer');
+    assert.equal(sb.slips()[0].qr_bank, '004', 'precondition: the sending bank code from the QR is stored too');
     sb.exec('UPDATE slips SET trans_date = ?, trans_time = ? WHERE id = ?', bkkDate(), '10:00:00', id);
     assert.equal((await sb.post('/api/queue/manual_amount', { slipId: id, amount: 140 })).json.success, true);
     // same picture after the delay: SlipOK now verifies it. Its transRef format for BBL is UNKNOWN (never captured);
@@ -211,6 +214,7 @@ test('a 1010 slip whose answer carries real qrcodeData gets its qr_ref stored on
     await sb.sendSlip('Ualice', 'm1', 'kscb'); await sb.waitForSlips(1); await sleep(300);
     const row = sb.slips()[0];
     assert.equal(row.qr_ref, '202610039r7bISZu9bair2yQu', 'the QR sub-tag 02 from the 1010 answer is stored as the row identity');
+    assert.equal(sb.slips()[0].qr_bank, '014', 'SCB bank code from the QR is stored with the card');
 }));
 
 // Known limitation (characterization, passes today): the amounts must match to 0.005 baht. If the shop keyed a rounded amount, the same slip counts again.
@@ -237,3 +241,40 @@ test('customer re-sends the slip, QR reference matches, but the keyed amount dif
     assert.ok(n, 'orange warning naming both amounts');
     assert.match(n.text, /ตรวจยอด/);
 }));
+
+// Owner 2026-11-01 ("ทำทั้ง 2 ข้อ"): QR sub-tag 02 == SlipOK transRef is PROVEN for KTB (006), BBL (002) and SCB (014) - SCB and
+// BBL from the first real shop live (system-log_LIVE_1793458669895, 4 of 4 byte-equal). For a keyed slip from a proven bank a
+// DIFFERENT reference is now proof of a second transfer: it is counted automatically, no card for the merchant to tap.
+test('proven bank: the keyed slip QR reference differs from the new verified slip -> second transfer counted automatically, no card', () => withSandbox(async sb => {
+    const id = await firstTransferKeyed(sb, 140, '10:00:00', 'FIRST0001');
+    sb.exec('UPDATE slips SET qr_bank = ? WHERE id = ?', '002', id);
+    sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SECOND0002', transDate: bkkDate(), transTime: '09:59:00' });
+    await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
+    const st = await sb.stats();
+    assert.equal(st.stats.totalAmount, 280, 'both transfers counted');
+    assert.equal(st.manualMatches.length, 0, 'no card - the references prove it is another transfer');
+    assert.ok(sb.slips().some(s => s.trans_ref === 'SECOND0002' && s.status !== 'rejected'), 'the second transfer has its own slip row');
+    assert.match(readLog(sb), /\[INFO\][^\n]*นับเป็นยอดใหม่อัตโนมัติ/);
+}));
+
+test('unproven bank (or no bank recorded): a different reference still gets the safe link + card', () => withSandbox(async sb => {
+    const id = await firstTransferKeyed(sb, 140, '10:00:00', 'FIRST0001');
+    sb.exec('UPDATE slips SET qr_bank = ? WHERE id = ?', '004', id);
+    sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SECOND0002', transDate: bkkDate(), transTime: '09:59:00' });
+    await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
+    const st = await sb.stats();
+    assert.equal(st.stats.totalAmount, 140);
+    assert.equal(st.manualMatches.length, 1);
+}));
+
+test('every verified slip writes one QR evidence line: bank code + whether the QR reference equals the SlipOK reference', () => withSandbox(async sb => {
+    sb.mock.profile('Ubob', 'Bob');
+    sb.mock.slipOk('kscb', { amount: 140, transRef: '202610312tAnFhPlaoapq4QaN', qrcodeData: '0046000600000101030140225202610312tAnFhPlaoapq4QaN5102TH9104D43A' });
+    await sb.sendSlip('Ubob', 'm1', 'kscb'); await sb.waitForSlips(1);
+    const line = await sb.waitFor(() => readLog(sb).split('\n').find(l => /หลักฐานรหัส QR/.test(l)), 8000, 'no evidence line');
+    assert.match(line, /\[INFO\]/);
+    assert.match(line, /014/);
+    assert.match(line, /ตรงกับ/);
+    assert.doesNotMatch(line, /ไม่ตรงกับ/);
+}));
+

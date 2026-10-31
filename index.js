@@ -3987,7 +3987,7 @@ let providerQuotaState = {
 // level: WARN = เหตุการณ์ปกติของลูกค้า/ธนาคาร (ไม่ส่ง Dev Report) | ERROR = ตั้งค่าผิด/แพ็กเกจหมด/ไม่รู้จัก (ควรดู)
 // v1.0.19: ตัวแปลผลรหัส SlipOK + ตัวถอดรหัส QR ย้ายไป lib/slipVerify.js แล้ว (ตรรกะล้วน — ตัวอักษรเดิมทุกตัว)
 // ห้ามตีความรหัส SlipOK ที่อื่นนอกจากตัวนี้ (กฎ AGENTS) / เทสต์ตรง: tests/unit/slipok-codes.test.js + tests/unit/qr-ref.test.js
-const { classifySlipOkError, extractQrRef } = require('./lib/slipVerify');
+const { classifySlipOkError, extractQrRef, extractQrBank, PROVEN_QR_BANKS } = require('./lib/slipVerify');
 // ป้ายบนการ์ดรอใส่ยอด: สลิปธนาคารที่ต้องรอ (เก็บในหน่วยความจำ หายตอนปิดโปรแกรม = การ์ดกลับไปใช้ข้อความทั่วไป)
 const bankDelayHints = new Map();
 function rememberBankDelayHint(slipId, info) {
@@ -4122,6 +4122,30 @@ async function runBankDelayRecheck(slipId, imageFile, delayMin, attempt) {
 // v1.0.19: ตัวถอด (extractQrRef) ย้ายไป lib/slipVerify.js แล้ว — ดึงมาไว้ตัวแปรชื่อเดิมด้านบน (จุดเรียกใช้ไม่เปลี่ยน)
 // ถอด QR จากรูปสลิปเอง (jsqr + jimp ติดตั้งอยู่แล้ว) — ใช้เมื่อ SlipOK ไม่ได้ส่ง qrcodeData มาให้ (เช่น รูปไม่มี QR ที่ตรวจไม่ผ่าน)
 // ถอดไม่ได้ = คืน null → ระบบกลับไปใช้วิธีเดิม (หน้าต่างเวลา + การ์ดยืนยัน) ไม่มีอะไรพัง
+// v1.0.19: คืนข้อความใน QR ทั้งหมด (ใช้ได้ทั้งรหัสรายการและรหัสธนาคาร)
+async function decodeImageQrText(imageBuffer) {
+    try {
+        const JimpMod = require('jimp');
+        const jsqrMod = require('jsqr');
+        const jsQR = jsqrMod.default || jsqrMod;
+        const Jimp = JimpMod.default || JimpMod;
+        const img = await Jimp.read(Buffer.from(imageBuffer));
+        const res = jsQR(img.bitmap.data, img.bitmap.width, img.bitmap.height);
+        return res && res.data ? res.data : null;
+    } catch (e) { return null; }
+}
+// v1.0.19 (เจ้าของสั่ง 2026-11-01): ทุกสลิปที่ตรวจผ่าน เขียนหลักฐาน 1 บรรทัดว่าธนาคารไหน และรหัสใน QR ตรงกับรหัส SlipOK หรือไม่
+// (ใช้ qrcodeData ถ้า SlipOK ส่งมา ไม่งั้นถอดจากรูป) ทำเบื้องหลัง ไม่หน่วงคิว -- ใช้พิสูจน์ธนาคารเพิ่มก่อนเพิ่มลง PROVEN_QR_BANKS
+async function logQrEvidence(imageBuffer, slipData) {
+    try {
+        const qrText = (slipData && slipData.qrcodeData) || (imageBuffer ? await decodeImageQrText(imageBuffer) : null);
+        const ref = extractQrRef(qrText);
+        const bank = extractQrBank(qrText);
+        if (!ref || !bank || !slipData || !slipData.transRef) return;
+        const same = ref === slipData.transRef;
+        addLog('INFO', `🔎 หลักฐานรหัส QR: ธนาคารรหัส ${bank}${PROVEN_QR_BANKS.includes(bank) ? ' (พิสูจน์แล้ว)' : ''} -- รหัสใน QR ${same ? 'ตรงกับ' : 'ไม่ตรงกับ'} รหัส SlipOK (QR ${ref} / SlipOK ${slipData.transRef})`);
+    } catch (e) { /* หลักฐานเสริม ล้มได้ไม่กระทบสลิป */ }
+}
 async function decodeImageQrRef(imageBuffer) {
     try {
         const JimpMod = require('jimp');
@@ -5026,11 +5050,12 @@ app.post('/webhook', async (req, res) => {
                     continue;
                 }
 
+                logQrEvidence(imageBuffer, slipData);   // v1.0.19: เบื้องหลัง ไม่รอ
                 // v1.0.17: กันนับยอดซ้ำ -- ถ้าแม่ค้ากรอกยอดสลิปใบนี้เองไปแล้ว (เช่น สลิปธนาคารที่ต้องรอ แล้วลูกค้าส่งรูปเดิมซ้ำตอนตรวจผ่าน)
                 // ให้ผูกรหัสสลิปเข้ากับใบเดิม ไม่สร้างใบใหม่ และถ้ายังมีรูปรอใส่ยอดค้างของลูกค้าคนเดียวกัน ให้เตือนไม่ให้กรอกซ้ำ
                 try {
                     const transferSec = stampToSec(slipData.transDate, slipData.transTime);
-                    const manualRows = supabase.db.prepare("SELECT id, amount, trans_date, trans_time, status, trans_ref, qr_ref FROM slips WHERE line_id = ? AND qr_payload LIKE 'manual_image%' AND status != 'rejected' AND trans_date >= ? ORDER BY id ASC").all(userId, bangkokDateString(-2));
+                    const manualRows = supabase.db.prepare("SELECT id, amount, trans_date, trans_time, status, trans_ref, qr_ref, qr_bank FROM slips WHERE line_id = ? AND qr_payload LIKE 'manual_image%' AND status != 'rejected' AND trans_date >= ? ORDER BY id ASC").all(userId, bangkokDateString(-2));
                     const keyedCandidates = manualRows.filter(r => Number(r.amount) > 0 && !r.trans_ref);
                     // v1.0.18: จับคู่ด้วยรหัส QR ก่อน (แม่นยำ 100% — พิสูจน์ด้วยคีย์จริงว่า sub-tag 02 == transRef) ไม่ต้องพึ่งหน้าต่างเวลา
                     // รหัสตรงกัน = รายการเดียวกันแน่นอน แม้นาฬิกาเครื่องร้านเพี้ยนเกิน 120 วินาที
@@ -5040,7 +5065,14 @@ app.post('/webhook', async (req, res) => {
                         await reportKeyedSlipLink({ name: lineName, ref: transRef, slipId: refMatch.id, keyedAmount: refMatch.amount, realAmount: amount, where: `ลูกค้า "${lineName}" ส่งสลิปซ้ำ (ผูกด้วยรหัส QR แม่นยำ ไม่ใช่การเดาจากเวลา)` });
                         continue;
                     }
-                    const keyedMatch = pickManualMatch(keyedCandidates, amount, transferSec);
+                    let keyedMatch = pickManualMatch(keyedCandidates, amount, transferSec);
+                    // v1.0.19 (เจ้าของสั่ง 2026-11-01): สลิปที่แม่ค้ากรอกยอดมาจากธนาคารที่พิสูจน์แล้ว (QR == transRef ทุกตัวอักษร)
+                    // รหัส QR ของใบนั้นจึงเท่ากับรหัสธนาคารของมันแน่นอน -- รหัสไม่ตรงกับสลิปใหม่ = คนละรายการ นับเป็นยอดใหม่อัตโนมัติ
+                    // ไม่ต้องรอแม่ค้ากดการ์ด (ธนาคารอื่น / ไม่มีรหัส ยังใช้ทางปลอดภัยเดิม: ผูก + การ์ดยืนยัน)
+                    if (keyedMatch && keyedMatch.qr_ref && PROVEN_QR_BANKS.includes(keyedMatch.qr_bank) && keyedMatch.qr_ref !== transRef) {
+                        addLog('INFO', `ลูกค้า "${lineName}" โอนยอดเท่ากันซ้ำ: รหัสสลิปใหม่ ${transRef} ไม่ตรงกับรหัส QR ของสลิปที่แม่ค้ากรอกยอดเอง (#${keyedMatch.id}, ธนาคารรหัส ${keyedMatch.qr_bank} ที่พิสูจน์แล้ว) = คนละรายการ นับเป็นยอดใหม่อัตโนมัติ`);
+                        keyedMatch = null;
+                    }
                     // แก้ 2026-10-31 (เจ้าของสั่ง "แก้ความเสี่ยงก่อน"): รหัส QR "ไม่ตรง" ไม่ใช่หลักฐานว่าเป็นคนละรายการ -- QR sub-tag 02 == transRef
                     // พิสูจน์แล้วกับสลิป KTB ใบเดียว ส่วน BBL/SCB ยังเทียบไม่ได้ และรูปแบบรหัสอาจต่างกันเสมอแม้เป็นสลิปใบเดิม ถ้าถือว่า "ไม่ตรง = คนละรายการ"
                     // จะนับเงินซ้ำในเคสที่ตัวกันนี้มีไว้พอดี (BBL 1010 -> แม่ค้ากรอกยอด -> ลูกค้าส่งรูปเดิมซ้ำ) จึงใช้เฉพาะ "ตรงกัน" (refMatch ด้านบน)
@@ -5204,7 +5236,9 @@ app.post('/webhook', async (req, res) => {
 
                 // v1.0.18: เก็บตัวตนของรายการจาก QR ไว้ตั้งแต่รูปเข้า (ใช้ qrcodeData ที่ SlipOK ตอบมาใน 1010 ก่อน — ฟรีและเร็ว
                 // ถอด QR จากรูปเองเป็นทางสำรอง) เพื่อจับคู่กับสลิปที่ตรวจผ่านภายหลังได้แบบแม่นยำ ไม่ต้องเดาจากช่วงเวลา
-                const qrRef = extractQrRef(slipResult && slipResult.data && slipResult.data.qrcodeData) || (await decodeImageQrRef(imageBuffer)) || null;
+                const qrText = (slipResult && slipResult.data && slipResult.data.qrcodeData) || (await decodeImageQrText(imageBuffer)) || null;
+                const qrRef = extractQrRef(qrText) || null;
+                const qrBank = extractQrBank(qrText) || null;   // v1.0.19: ธนาคารผู้โอน (บอกว่ากติการหัส QR พิสูจน์แล้วหรือยัง)
 
                 const payloadRef = `manual_image|${imageUrl}`;
                 addLog('INFO', `ได้รับภาพจากลูกค้า "${lineName}" ที่ระบบอัตโนมัติอ่านสลิปไม่ได้ นำเข้าคิวเพื่อให้แอดมินตรวจเช็คภาพเอง${qrRef ? ` (จดรหัส QR ของรายการไว้: ${qrRef})` : ''}`);
@@ -5219,6 +5253,7 @@ app.post('/webhook', async (req, res) => {
                     trans_time: getLocalTimeString(),
                     qr_payload: payloadRef,
                     qr_ref: qrRef,   // v1.0.18: ตัวตนรายการจาก QR (NULL ถ้าถอดไม่ได้ — ใช้วิธีเดิม)
+                    qr_bank: qrBank,
                     status: 'waiting',
                     arrived_out_of_round: activeLiveSession ? 0 : 1   // v1.0.16: รูปที่เข้าตอนไม่มีไลฟ์ ติดป้ายโอนนอกรอบเหมือนสลิปปกติ
                 }]).select().single();
