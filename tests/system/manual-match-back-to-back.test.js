@@ -13,27 +13,67 @@ const BBL = () => ({ code: 1010, message: 'wait', data: { qrcodeData: 'QR', bank
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const processed = (sb, user, times = 1) => sb.waitFor(() => sb.mock.calls.filter(c => c.path === `/v2/bot/profile/${user}`).length >= times, 10000, `slip of ${user} not processed`).then(() => sleep(500));
 
-/** transfer #1 image (1010) reaches the shop at 10:00:00 and is keyed as `amount` */
-async function firstTransferKeyed(sb, amount = 140, arrival = '10:00:00') {
+/** transfer #1 image (1010) reaches the shop at 10:00:00 and is keyed as `amount`. qrRef (optional) simulates a decoded slip-QR reference stored on the row. */
+async function firstTransferKeyed(sb, amount = 140, arrival = '10:00:00', qrRef = null) {
     sb.mock.profile('Ualice', 'Alice');
     sb.mock.slips.set('kbbl', { status: 400, body: BBL() });
     await sb.sendSlip('Ualice', 'm1', 'kbbl'); await sb.waitForSlips(1); await sleep(300);
     const id = sb.slips()[0].id;
     sb.exec('UPDATE slips SET trans_date = ?, trans_time = ? WHERE id = ?', bkkDate(), arrival, id);
+    if (qrRef) sb.exec('UPDATE slips SET qr_ref = ? WHERE id = ?', qrRef, id);
     const r = await sb.post('/api/queue/manual_amount', { slipId: id, amount });
     assert.equal(r.json.success, true);
     return id;
 }
 
-// TODO(review finding 1): fails today by design -> marked `todo` so CI stays green until the owner decides the policy (see the note at the top).
-test('two same-amount transfers back to back: transfer #2 (verified, own bank reference, 09:59:00) arrives AFTER transfer #1 was keyed -> both must be counted', { todo: 'index.js pickManualMatch links transfer #2 to the keyed slip and drops it (only 140 of 280 counted); needs a policy decision' }, () => withSandbox(async sb => {
+// Owner decision 2026-10-31 ("ปิดรูรั่ว", after seeing this very todo): the DEFAULT stays safe — transfer #2 is still
+// linked to the keyed slip (140 counted, no auto double count, because without the real-key QR experiment the guard
+// cannot tell "same slip re-sent" from "a second transfer", HANDOFF §4). What changed: the dropped payment is no longer
+// a 12-second toast — the merchant gets a persistent confirmation card (full_sync `manualMatches`) and ONE-TAP recovery:
+//   POST /api/queue/manual_match_count_second  = "it really was a second transfer" (records it, 280 counted)
+//   POST /api/queue/manual_match_dismiss       = "it was the same slip re-sent" (keeps 140, card closes)
+test('back-to-back second transfer: default stays linked (140, no auto double count) and the merchant sees an actionable confirmation card', () => withSandbox(async sb => {
     await firstTransferKeyed(sb, 140);
     sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SEC0002', transDate: bkkDate(), transTime: '09:59:00' });
     await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
     const st = await sb.stats();
-    assert.equal(st.stats.totalAmount, 280, 'the customer paid 2 x 140 but only ' + st.stats.totalAmount + ' is counted');
+    assert.equal(st.stats.totalAmount, 140, 'safe default: linked as one slip, nothing counted twice');
+    assert.ok(Array.isArray(st.manualMatches) && st.manualMatches.length === 1, 'an actionable confirmation card exists');
+    const m = st.manualMatches[0];
+    assert.equal(m.transRef, 'SEC0002');
+    assert.equal(Number(m.amount), 140);
+}));
+
+test('back-to-back second transfer: one-tap "count the second transfer" records it (280 / 2 draws, own slip row) and cannot be pressed twice', () => withSandbox(async sb => {
+    await firstTransferKeyed(sb, 140);
+    sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SEC0002', transDate: bkkDate(), transTime: '09:59:00' });
+    await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
+    const matchId = (await sb.stats()).manualMatches[0].id;
+    const r = await sb.post('/api/queue/manual_match_count_second', { matchId });
+    assert.equal(r.json.success, true);
+    const st = await sb.stats();
+    assert.equal(st.stats.totalAmount, 280, 'the customer paid 2 x 140 and both are counted now');
     assert.equal(st.stats.totalDraws, 2);
     assert.ok(sb.slips().some(s => s.trans_ref === 'SEC0002' && s.status !== 'rejected'), 'the second transfer has its own recorded slip');
+    const keyed = sb.slips().find(s => (s.qr_payload || '').startsWith('manual_image'));
+    assert.ok(keyed && !keyed.trans_ref, 'the keyed slip (transfer #1) no longer carries the second transfer reference');
+    assert.equal(st.manualMatches.length, 0, 'the confirmation card is gone after the decision');
+    const again = await sb.post('/api/queue/manual_match_count_second', { matchId });
+    assert.equal(again.status, 404, 'pressing again finds no card — idempotent');
+    assert.equal((await sb.stats()).stats.totalAmount, 280, 'nothing extra was counted');
+}));
+
+test('back-to-back second transfer: dismissing as "same slip re-sent" keeps 140 and closes the card', () => withSandbox(async sb => {
+    await firstTransferKeyed(sb, 140);
+    sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SEC0002', transDate: bkkDate(), transTime: '09:59:00' });
+    await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
+    const matchId = (await sb.stats()).manualMatches[0].id;
+    const d = await sb.post('/api/queue/manual_match_dismiss', { matchId });
+    assert.equal(d.json.success, true);
+    const after = await sb.stats();
+    assert.equal(after.stats.totalAmount, 140, 'dismiss = the old behaviour stands (one slip, 140)');
+    assert.equal(after.stats.totalDraws, 1);
+    assert.equal(after.manualMatches.length, 0, 'card closed');
 }));
 
 test('same two transfers but the verified slip arrives BEFORE the shop keys transfer #1 -> both are counted (shows the result depends only on the order)', () => withSandbox(async sb => {
@@ -107,14 +147,41 @@ test('still-open pending warning: a transfer 8 hours before the pending image do
     assert.ok(sb.slips().some(s => s.trans_ref === 'OLD00001'), 'the verified slip is recorded on its own');
 }));
 
-// The tolerance exists for clock differences; beyond it the SAME slip is counted twice. Shop PC clock 2.5 min behind the bank clock:
-// the image is stamped 10:02:30 while the bank says the transfer was 10:05:00.
-test('same slip re-sent, shop clock 2.5 minutes behind the bank clock (arrival 10:02:30, bank time 10:05:00) -> must be linked, not counted twice', { todo: 'skew beyond MANUAL_MATCH_TOLERANCE_SEC (120 s) makes the same slip count twice' }, () => withSandbox(async sb => {
-    await firstTransferKeyed(sb, 140, '10:02:30');
+// v1.0.18 (owner decision 2026-10-31 "close the leak" + the owner-key experiment the same evening):
+// the slip-QR sub-tag 02 IS the transaction identity (proven: KTB slip's QR ref == the transRef SlipOK
+// returned, byte for byte). So when the keyed row carries a qr_ref, matching is done BY REFERENCE and the
+// time window no longer matters — this closes the old clock-skew limitation documented below.
+// The tolerance exists for clock differences; beyond it the SAME slip used to be counted twice. Shop PC clock
+// 2.5 min behind the bank clock: the image is stamped 10:02:30 while the bank says the transfer was 10:05:00.
+test('same slip re-sent, shop clock 2.5 minutes behind the bank clock (arrival 10:02:30, bank time 10:05:00) -> linked BY QR REFERENCE, not counted twice', () => withSandbox(async sb => {
+    await firstTransferKeyed(sb, 140, '10:02:30', 'SAME001');   // 270 s of skew — far outside the 120 s window
     sb.mock.slipOk('ksame', { amount: 140, transRef: 'SAME001', transDate: bkkDate(), transTime: '10:05:00' });
     await sb.sendSlip('Ualice', 'm2', 'ksame'); await processed(sb, 'Ualice', 2);
-    assert.equal(sb.slips().length, 1, 'one slip, linked');
+    assert.equal(sb.slips().length, 1, 'one slip, linked by reference');
     assert.equal((await sb.stats()).stats.totalAmount, 140);
+}));
+
+// v1.0.18: different QR reference = provably a DIFFERENT payment, even inside the time window where the old
+// guard would have linked and dropped it. Both transfers are counted automatically — no confirmation card.
+test('second same-amount transfer INSIDE the window but with a DIFFERENT qr_ref -> counted automatically, no confirmation card', () => withSandbox(async sb => {
+    await firstTransferKeyed(sb, 140, '10:00:00', 'FIRST01');
+    sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SEC0002', transDate: bkkDate(), transTime: '09:59:00' });
+    await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
+    const st = await sb.stats();
+    assert.equal(st.stats.totalAmount, 280, 'the customer paid 2 x 140 and BOTH are counted');
+    assert.equal(st.stats.totalDraws, 2);
+    assert.ok(sb.slips().some(s => s.trans_ref === 'SEC0002' && s.status !== 'rejected'), 'the second transfer has its own slip row');
+    assert.equal(st.manualMatches.length, 0, 'no confirmation card — the references already prove these are different payments');
+}));
+
+// v1.0.18: the pending card stores its slip-QR reference at creation time. SlipOK hands the QR text back for
+// free inside the 1010 (bank-delay) answer, so no image decoding is needed in the common case.
+test('a 1010 slip whose answer carries real qrcodeData gets its qr_ref stored on the pending card', () => withSandbox(async sb => {
+    sb.mock.profile('Ualice', 'Alice');
+    sb.mock.slips.set('kscb', { status: 400, body: { code: 1010, message: 'wait', data: { qrcodeData: '0046000600000101030140225202610039r7bISZu9bair2yQu5102TH91044849', bankCode: '014', bankName: 'ไทยพาณิชย์', delay: 2 } } });
+    await sb.sendSlip('Ualice', 'm1', 'kscb'); await sb.waitForSlips(1); await sleep(300);
+    const row = sb.slips()[0];
+    assert.equal(row.qr_ref, '202610039r7bISZu9bair2yQu', 'the QR sub-tag 02 from the 1010 answer is stored as the row identity');
 }));
 
 // Known limitation (characterization, passes today): the amounts must match to 0.005 baht. If the shop keyed a rounded amount, the same slip counts again.

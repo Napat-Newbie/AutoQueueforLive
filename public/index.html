@@ -622,6 +622,7 @@
         </div>
 
         <!-- 🔴 รูปสลิปที่โหลดจาก LINE ไม่สำเร็จ (เน็ตสะดุด) ต้องให้แม่ค้าเช็กในแชท LINE OA เอง -->
+        <div id="manualmatch-box" style="display:none; margin-bottom: 20px;"></div>
         <div id="imgfail-box" style="display:none; margin-bottom: 20px;"></div>
 
         <!-- 🎮 กระดานคิวหลัก -->
@@ -2126,6 +2127,41 @@
             });
         }
 
+        // ❓ v1.0.18: การ์ดยืนยัน — สลิปตรวจผ่านตรงกับยอดที่แม่ค้ากรอกเองไว้ ระบบถือเป็นใบเดียวกันชั่วคราว (ไม่นับซ้ำ)
+        // แม่ค้าเป็นคนเดียวที่รู้ความจริงว่าลูกค้าโอนแยก 2 ครั้งหรือส่งรูปเดิมซ้ำ — กด 1 ปุ่มจบ การ์ดอยู่จนกด
+        function renderManualMatches(list) {
+            const box = document.getElementById('manualmatch-box');
+            if (!box) return;
+            box.innerHTML = '';
+            if (!Array.isArray(list) || list.length === 0) { box.style.display = 'none'; return; }
+            box.style.display = 'block';
+            list.forEach(m => {
+                const el = document.createElement('div');
+                el.className = 'queue-card';
+                el.style.borderLeft = '6px solid #e65100';
+                el.style.background = 'rgba(255,152,0,0.10)';
+                const amt = Number(m.amount) > 0 ? Number(m.amount).toLocaleString('en-US') : '?';
+                el.innerHTML = `
+                    <div class="queue-number" style="color:#e65100;">❓</div>
+                    <div class="queue-info">
+                        <div class="name">👤 <span>${escapeHtml(m.name || 'ลูกค้า')}</span></div>
+                        <div style="font-size: 0.95em; color:#e65100; margin-top:6px; font-weight:600;">สลิปรหัส ${escapeHtml(m.transRef || '')} (ยอด ${escapeHtml(String(amt))} บาท) ตรงกับยอดที่กรอกไว้เอง — ระบบถือเป็นใบเดียวกัน ไม่นับซ้ำ</div>
+                        <div style="font-size: 0.85em; color:#777; margin-top:3px;">ถ้าลูกค้าบอกว่าโอนแยก 2 ครั้งจริง กดปุ่มส้มเพื่อบวกยอดครั้งที่ 2 ให้ลูกค้า (คิดชิ้นให้ตามสูตรเดิม) ถ้าเป็นรูปเดิมส่งซ้ำ กดปิดเตือน เวลา ${escapeHtml(m.time || '')}</div>
+                    </div>
+                    <div class="queue-actions">
+                        <button type="button" class="btn-warning mm-count-btn" title="บันทึกเป็นการโอนครั้งที่ 2 (บวกยอดและคิดชิ้นให้ลูกค้า)">➕ โอนครั้งที่ 2 จริง (บวก ${escapeHtml(String(amt))} บาท)</button>
+                        <button type="button" class="btn-danger-outline mm-dismiss-btn" title="ยืนยันว่าเป็นสลิปใบเดิมส่งซ้ำ (ไม่นับยอดซ้ำ)">✔ ใบเดียวกัน</button>
+                    </div>`;
+                el.querySelector('.mm-count-btn').addEventListener('click', () => {
+                    notifyIfActionFailed(fetch('/api/queue/manual_match_count_second', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchId: m.id }) }));
+                });
+                el.querySelector('.mm-dismiss-btn').addEventListener('click', () => {
+                    notifyIfActionFailed(fetch('/api/queue/manual_match_dismiss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matchId: m.id }) }));
+                });
+                box.append(el);
+            });
+        }
+
         // v1.0.16: สลิปที่ระบบไม่บันทึกโดยตั้งใจ (โอนผิดบัญชี/ซ้ำ) ขึ้นเป็นแถวสีแดงบนสุดของตารางด้วย (ข้อมูลมาจากการ์ดแดงเดิม ไม่ได้อยู่ในฐานข้อมูล)
         function mergeUnrecordedIntoRecent(recent, fails) {
             const rows = (Array.isArray(fails) ? fails : []).filter(f => f && f.reason).slice().reverse()
@@ -2165,6 +2201,7 @@
             updateStatsUI(data.stats);
             renderRecent(mergeUnrecordedIntoRecent(data.recentSlips || [], data.imageFails || []));
             renderImageFails(data.imageFails || []);
+            renderManualMatches(data.manualMatches || []);
             document.getElementById('queue-list').innerHTML = '';
             document.getElementById('active-queue-list').innerHTML = '';
             document.getElementById('skipped-queue-list').innerHTML = '';
@@ -2268,7 +2305,7 @@
         // v1.0.16: สลิปซ้ำ / โอนเข้าผิดบัญชี (ระบบไม่บันทึก) = Toast ส้มแดงมุมบนขวา + บี๊ปคู่สั้น 600Hz (การ์ดแดงกับแถวแดงในตารางมาจาก full_sync)
         socket.on('slip_warning', (d) => {
             try {
-                const title = d && d.kind === 'duplicate' ? '⚠️ สลิปซ้ำ' : (d && d.kind === 'wrong_account' ? '⚠️ โอนเข้าผิดบัญชี' : (d && d.kind === 'check_pending' ? '⚠️ ตรวจการ์ดรอใส่ยอด' : '⚠️ สลิปที่ระบบไม่บันทึก'));
+                const title = d && d.kind === 'duplicate' ? '⚠️ สลิปซ้ำ' : (d && d.kind === 'wrong_account' ? '⚠️ โอนเข้าผิดบัญชี' : (d && d.kind === 'check_pending' ? '⚠️ ตรวจการ์ดรอใส่ยอด' : (d && d.kind === 'manual_match' ? '❓ สลิปตรงกับยอดที่กรอกไว้' : '⚠️ สลิปที่ระบบไม่บันทึก')));
                 showToast((d && d.name ? d.name + ' — ' : '') + ((d && d.reason) || ''), { kind: 'warn', pos: 'tr', title, ms: 12000 });
                 playPreset('warnBeep');
             } catch (e) {}
