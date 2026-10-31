@@ -16,7 +16,7 @@ function cut(name, keyword = 'function') {
 }
 const ctx = { Number, String, Object, Math, Date, Array };
 vm.createContext(ctx);
-vm.runInContext('const MANUAL_MATCH_TOLERANCE_SEC = 120;', ctx);
+vm.runInContext('const MANUAL_MATCH_TOLERANCE_SEC = 120;\nconst MANUAL_MATCH_MAX_AGE_SEC = 60 * 60;', ctx);
 ['classifySlipOkError', 'stampToSec', 'pickManualMatch'].forEach(n => vm.runInContext(cut(n), ctx));
 const BBL = { code: 1010, message: 'x', data: { bankCode: '002', bankName: 'กรุงเทพ', delay: 7, qrcodeData: 'Q' } };
 
@@ -65,6 +65,15 @@ test('same payment: the image reached the system after the transfer -> matched; 
     assert.equal(ctx.pickManualMatch(rows, 140, T('10:30:00')), null, 'transferred 30 min after the first image: a second payment');
     assert.equal(ctx.pickManualMatch(rows, 140, T('10:01:00')).id, 1, 'clock difference up to 2 minutes is tolerated');
     assert.equal(ctx.pickManualMatch(rows, 140, T('10:03:30')), null, 'beyond the tolerance it is a new payment');
+});
+
+test('v1.0.17 review (owner decision 2026-10-31): a transfer older than the image by more than 60 minutes is NOT the keyed slip', () => {
+    const rows = [manual(1, 140, '10:00:00')];
+    assert.equal(ctx.pickManualMatch(rows, 140, T('09:10:00')).id, 1, '50 minutes before the image: inside the window');
+    assert.equal(ctx.pickManualMatch(rows, 140, T('09:00:00')).id, 1, 'exactly 60 minutes: the inclusive edge of the window');
+    assert.equal(ctx.pickManualMatch(rows, 140, T('08:59:59')), null, '60 minutes and 1 second: outside');
+    assert.equal(ctx.pickManualMatch(rows, 140, T('02:00:00')), null, '8 hours before: an older, different payment');
+    assert.equal(ctx.pickManualMatch(rows, 140, ctx.stampToSec('20261028', '18:00:00')), null, 'yesterday 18:00: never the keyed slip of today');
 });
 
 test('different amount, no rows, or unreadable time never match', () => {

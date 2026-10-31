@@ -59,6 +59,12 @@
         .status-skipped { background:#ffebee; color:#c62828; }
         .status-accumulated { background:#fff8e1; color:#f57f17; }
         .status-default { background:#eee; color:#333; }
+        /* v1.0.17 (Phase D): มุมมองจัดกลุ่มตามลูกค้า */
+        .view-toggle { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+        .view-btn { background: #fff; color: #555; padding: 8px 14px; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; font-family: 'Kanit'; font-size: 0.95em; }
+        .view-btn.active { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+        tr.group-day td { background: #eef3fb; font-weight: 600; color: #1a3d7c; padding: 10px; }
+        tr.group-customer td { background: #fafafa; padding: 10px; border-top: 2px solid #eee; }
     </style>
 </head>
 <body>
@@ -128,6 +134,12 @@
         </div>
 
         <div class="table-container">
+            <!-- v1.0.17 (Phase D): สลับมุมมองตาราง -->
+            <div class="view-toggle">
+                <span style="color:#555; font-weight:500;">มุมมอง:</span>
+                <button id="viewBySlip" class="view-btn active" onclick="setHistoryView('slip')">📋 ตารางรายสลิป (เรียงตามเวลา)</button>
+                <button id="viewByCustomer" class="view-btn" onclick="setHistoryView('customer')">👤 จัดกลุ่มตามลูกค้า (รายวัน)</button>
+            </div>
             <table>
                 <thead>
                     <tr>
@@ -240,6 +252,85 @@
             return labels;
         }
 
+        // v1.0.17 (Phase D, ร้านขอ 2026-10-31): แถวสลิป 1 แถว (คอลัมน์เดิมครบ 8 ช่อง) ใช้ร่วมกันทั้งมุมมองตารางรายสลิปและมุมมองจัดกลุ่มตามลูกค้า
+        function historyRowHtml(item) {
+            const st = statusInfo(item.status);
+            const payloadParts = (item.ref || '').split('|');
+            const safeRef = escapeHtml(payloadParts[0] ? payloadParts[0].replace('-test-', '***').substring(0, 18) : '-');
+            const breakdownHtml = payloadParts[1] ? `<br><span style="color:#1a73e8; font-size: 0.9em; font-weight:500;">📦 ${escapeHtml(payloadParts[1])}</span>` : '';
+            return `<tr>
+                <td style="color: #444; font-weight: 500;">${escapeHtml(formatDisplayDate(item.date))}</td>
+                <td style="color: #666;">${escapeHtml(item.time || '-')}</td>
+                <td style="font-size: 0.85em; color: #555; min-width: 120px;">${roundCellHtml(item.sessionId, item.outOfRound)}</td>
+                <td><strong>${escapeHtml(item.name)}</strong> <br><span style="font-size:0.85em; color:#00b900;">${item.lineName ? '📱 '+escapeHtml(item.lineName) : ''}</span></td>
+                <td style="font-weight: 500; color:#111;">฿${item.amount.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                <td style="color:#4caf50; font-weight:500;">🎟️ ${item.draws} ชิ้น ${breakdownHtml}</td>
+                <td><span class="badge ${st.cls}">${escapeHtml(st.text)}</span></td>
+                <td style="font-size: 0.85em; color: #aaa; font-family: monospace;">${safeRef}...</td>
+            </tr>`;
+        }
+
+        // v1.0.17 (Phase D): จัดกลุ่มรายวัน -> รายลูกค้า (ตามรหัส LINE, ชื่อซ้ำได้ "(คนที่ 2)") กติกาเดียวกับ summarizeHistory:
+        // สลิปปัดตก/ยกเลิก (rejected) ไม่เข้ากลุ่มและไม่นับยอด สลิปอื่นนับยอดเงิน/ชิ้น/จำนวนสลิป -> ผลรวมทุกกลุ่มเท่ากับตัวเลขสรุปด้านบน
+        function groupHistoryByCustomer(rows) {
+            const days = new Map();
+            let rejectedSlips = 0;
+            (rows || []).forEach(item => {
+                if (item.status === 'rejected') { rejectedSlips += 1; return; }
+                const day = item.date || '-';
+                if (!days.has(day)) days.set(day, new Map());
+                const byKey = days.get(day);
+                const key = item.customerKey || item.name || '-';
+                if (!byKey.has(key)) byKey.set(key, { key: key, name: item.name, lineName: item.lineName, totalAmount: 0, totalDraws: 0, slips: [] });
+                const g = byKey.get(key);
+                g.totalAmount += (Number(item.amount) || 0);
+                g.totalDraws += (Number(item.draws) || 0);
+                g.slips.push(item);
+            });
+            const out = [];
+            Array.from(days.keys()).sort((a, b) => String(b).localeCompare(String(a))).forEach(day => {
+                const customers = Array.from(days.get(day).values()).sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'th'));
+                const labels = customerLabels(new Map(customers.map(c => [c.key, c.name])));
+                const list = customers.map((c, i) => Object.assign({}, c, { label: labels[i], slipCount: c.slips.length }));
+                out.push({ date: day, customers: list, totalAmount: list.reduce((sum, c) => sum + c.totalAmount, 0) });
+            });
+            return { days: out, rejectedSlips: rejectedSlips };
+        }
+
+        function historyGroupedHtml(rows) {
+            const g = groupHistoryByCustomer(rows);
+            const money = (n) => '฿' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            let html = '';
+            if (g.rejectedSlips > 0) html += `<tr><td colspan="8" style="color:#888; font-size:0.9em; padding:8px 10px;">ไม่แสดงสลิปที่ปัดตก/ยกเลิก ${g.rejectedSlips} ใบ (ไม่นับยอด ดูได้ในมุมมองตารางรายสลิป)</td></tr>`;
+            if (g.days.length === 0) return html + '<tr><td colspan="8" style="text-align:center; padding: 40px; color: #999;">ไม่มีสลิปที่นับยอดในช่วงวันที่เลือก</td></tr>';
+            g.days.forEach(day => {
+                html += `<tr class="group-day"><td colspan="8">📅 ${escapeHtml(formatDisplayDate(day.date))} — ลูกค้า ${day.customers.length} คน รวม ${money(day.totalAmount)}</td></tr>`;
+                day.customers.forEach(c => {
+                    const line = c.lineName ? ` <span style="font-size:0.85em; color:#00b900;">📱 ${escapeHtml(c.lineName)}</span>` : '';
+                    html += `<tr class="group-customer"><td colspan="8"><strong>👤 ${escapeHtml(c.label)}</strong>${line} — รวม <strong style="color:#1a73e8;">${money(c.totalAmount)}</strong> • 🎟️ ${c.totalDraws} ชิ้น • ${c.slipCount} สลิป</td></tr>`;
+                    c.slips.forEach(item => { html += historyRowHtml(item); });
+                });
+            });
+            return html;
+        }
+
+        // มุมมองตาราง: ค่าเริ่มต้น = ตารางรายสลิปเรียงตามเวลาเหมือนเดิม (จำที่แม่ค้าเลือกไว้ในเบราว์เซอร์นี้)
+        let __historyRows = [];
+        let historyView = 'slip';
+        try { if (localStorage.getItem('aq_history_view') === 'customer') historyView = 'customer'; } catch (e) {}
+        function setHistoryView(v) {
+            historyView = v === 'customer' ? 'customer' : 'slip';
+            try { localStorage.setItem('aq_history_view', historyView); } catch (e) {}
+            renderHistoryBody();
+        }
+        function renderHistoryBody() {
+            const bySlip = document.getElementById('viewBySlip'); const byCustomer = document.getElementById('viewByCustomer');
+            if (bySlip) bySlip.classList.toggle('active', historyView !== 'customer');
+            if (byCustomer) byCustomer.classList.toggle('active', historyView === 'customer');
+            if (!__historyRows.length) return;
+            document.getElementById('history-table-body').innerHTML = historyView === 'customer' ? historyGroupedHtml(__historyRows) : __historyRows.map(historyRowHtml).join('');
+        }
+
         function renderHistoryTable(data) {
             const tbody = document.getElementById('history-table-body');
             tbody.innerHTML = '';
@@ -252,31 +343,14 @@
                 document.getElementById('sumSlipsNote').innerText = '';
                 document.getElementById('product-summary-list').innerHTML = '<li style="color: #999; justify-content: center;">ไม่พบข้อมูลสินค้า</li>';
                 document.getElementById('customer-summary-list').innerHTML = '<div style="color: #999; text-align: center;">ไม่พบข้อมูลลูกค้า</div>';
+                __historyRows = [];
                 return;
             }
 
             const summary = summarizeHistory(data);
 
-            data.forEach(item => {
-                const st = statusInfo(item.status);
-                const payloadParts = (item.ref || '').split('|');
-                const safeRef = escapeHtml(payloadParts[0] ? payloadParts[0].replace('-test-', '***').substring(0, 18) : '-');
-                const breakdownHtml = payloadParts[1] ? `<br><span style="color:#1a73e8; font-size: 0.9em; font-weight:500;">📦 ${escapeHtml(payloadParts[1])}</span>` : '';
-
-                // สร้างตารางประวัติสลิปปกติ
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td style="color: #444; font-weight: 500;">${escapeHtml(formatDisplayDate(item.date))}</td>
-                    <td style="color: #666;">${escapeHtml(item.time || '-')}</td>
-                    <td style="font-size: 0.85em; color: #555; min-width: 120px;">${roundCellHtml(item.sessionId, item.outOfRound)}</td>
-                    <td><strong>${escapeHtml(item.name)}</strong> <br><span style="font-size:0.85em; color:#00b900;">${item.lineName ? '📱 '+escapeHtml(item.lineName) : ''}</span></td>
-                    <td style="font-weight: 500; color:#111;">฿${item.amount.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                    <td style="color:#4caf50; font-weight:500;">🎟️ ${item.draws} ชิ้น ${breakdownHtml}</td>
-                    <td><span class="badge ${st.cls}">${escapeHtml(st.text)}</span></td>
-                    <td style="font-size: 0.85em; color: #aaa; font-family: monospace;">${safeRef}...</td>
-                `;
-                tbody.appendChild(tr);
-            });
+            __historyRows = data;
+            renderHistoryBody();
 
             // 🆕 อัปเดตตัวเลขรวมด้านบน
             document.getElementById('sumAmount').innerText = summary.totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});

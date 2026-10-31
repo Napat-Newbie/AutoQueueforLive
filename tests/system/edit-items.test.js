@@ -60,14 +60,19 @@ test('merchant edits the item list: card, Kerry file and log all reflect the cor
     await waitForLog(sb, /แม่ค้าแก้ไขรายการสินค้า — Alice: เดิม "A x1" → ใหม่ "B x1"/);
 }));
 
-test('editing to zero items is allowed (merchant removes wrongly granted items)', () => withSandbox(async sb => {
+test('editing to zero items is rejected — a card with no items has no meaning in the queue (v1.0.17 review: use the reject button instead)', () => withSandbox(async sb => {
     await slipFor(sb, 'Ubob', 'Bob', 'm2', 'k2', 140, 'EDIT2');
     await sb.waitForSlips(1);
     const slipId = sb.slips()[0].id;
+    assert.equal(sb.slips()[0].draws, 1, 'precondition: auto-picked 1 item');
+
     const r = await sb.post('/api/queue/edit_items', { slipId, items: [{ name: 'A', qty: 0 }] });
-    assert.equal(r.json.success, true);
-    assert.equal(r.json.draws, 0);
-    assert.equal(sb.slips()[0].draws, 0);
+    assert.equal(r.status, 400);
+    assert.match(r.json.message, /ปัดตกรูป/, 'the error points the merchant at the right button');
+    assert.equal(sb.slips()[0].draws, 1, 'record untouched (still the auto-picked item)');
+    assert.match(sb.slips()[0].qr_payload, /A x1/);
+
+    assert.equal((await sb.post('/api/queue/edit_items', { slipId, items: [] })).status, 400, 'empty item list is the same 0-piece case');
 }));
 
 test('validation: only pending cards can be edited; bad quantities are rejected', () => withSandbox(async sb => {
@@ -107,6 +112,9 @@ test('edit_items_context: tells the modal how many items this customer already h
 
     assert.equal((await sb.get('/api/queue/edit_items_context')).status, 400);
     assert.equal((await sb.get('/api/queue/edit_items_context?slipIds=999999')).status, 404);
+    // v1.0.17: จำกัดจำนวนรหัสต่อคำขอ (ปกติหน้าเว็บส่ง 1-2 รหัส — กันคำขอผิดปกติที่ยาวเกิน)
+    assert.equal((await sb.get(`/api/queue/edit_items_context?slipIds=${Array(11).fill(s2.id).join(',')}`)).status, 400, 'more than 10 ids is rejected');
+    assert.equal((await sb.get(`/api/queue/edit_items_context?slipIds=${Array(10).fill(s2.id).join(',')}`)).json.success, true, '10 ids still fine');
 }));
 
 test('a "|" in an item name is rejected (it is the field separator inside the slip record)', () => withSandbox(async sb => {
@@ -117,3 +125,58 @@ test('a "|" in an item name is rejected (it is the field separator inside the sl
     assert.equal(r.status, 400);
     assert.match(sb.slips()[0].qr_payload, /A x1/, 'record untouched');
 }));
+
+// v1.0.17 (HANDOFF §5): หน้าต่างแก้ไขของการ์ดรวมบิลมีได้หลายสลิป — เดิมหน้าเว็บส่งทีละใบ ถ้าใบหลังล้ม
+// การแก้จะติดอยู่ครึ่งเดียวโดยไม่มีทางย้อน ตอนนี้ endpoint รับหลายใบในคำขอเดียว: ตรวจครบทุกใบก่อน แล้วบันทึกทีเดียว
+test('multi-slip edit saves every slip in one request (merged-bill card)', () => withSandbox(async sb => {
+    await slipFor(sb, 'Ugin', 'Gin', 'm9', 'k9', 140, 'MULTI1');    // A x1
+    await sb.waitForSlips(1);
+    await slipFor(sb, 'Ugin', 'Gin', 'm10', 'k10', 100, 'MULTI2');  // A x1 (ค่าส่งจ่ายแล้ว)
+    await sb.waitForSlips(2);
+    const [s1, s2] = sb.slips();
+
+    const r = await sb.post('/api/queue/edit_items', { edits: [
+        { slipId: s1.id, items: [{ name: 'B', qty: 1 }] },
+        { slipId: s2.id, items: [{ name: 'A', qty: 2 }] },
+    ]});
+    assert.equal(r.json.success, true);
+    const rows = sb.slips();
+    assert.match(rows[0].qr_payload, /B x1/, 'first slip follows its own edit');
+    assert.match(rows[1].qr_payload, /A x2/, 'second slip follows its own edit');
+    assert.equal(rows[0].draws + rows[1].draws, 3);
+}));
+
+test('multi-slip edit is all-or-nothing: one un-editable slip rejects the whole request, nothing is half-applied', () => withSandbox(async sb => {
+    await slipFor(sb, 'Uhex', 'Hex', 'm11', 'k11', 140, 'ATOM1');    // A x1
+    await sb.waitForSlips(1);
+    await slipFor(sb, 'Uhex', 'Hex', 'm12', 'k12', 100, 'ATOM2');    // A x1
+    await sb.waitForSlips(2);
+    const [s1, s2] = sb.slips();
+
+    // ปิดการ์ดใบที่ 2 ก่อน (จบแล้ว แก้ไม่ได้) — คำขอที่ปนใบแก้ได้กับใบแก้ไม่ได้ต้องถูกปฏิเสธทั้งชุด ก่อนเขียนอะไรเลย
+    await sb.post('/api/queue/action', { action: 'completed', slipIds: [s2.id] });
+    const r = await sb.post('/api/queue/edit_items', { edits: [
+        { slipId: s1.id, items: [{ name: 'B', qty: 2 }] },
+        { slipId: s2.id, items: [{ name: 'A', qty: 1 }] },
+    ]});
+    assert.equal(r.status, 409);
+    const rows = sb.slips();
+    assert.match(rows[0].qr_payload, /A x1/, 'the editable slip was NOT touched — no half-applied edit');
+    assert.equal(rows[0].draws, 1);
+}));
+
+test('multi-slip edit refuses a mixed request where one slip totals zero pieces (per-slip rule still applies)', () => withSandbox(async sb => {
+    await slipFor(sb, 'Uzed', 'Zed', 'm13', 'k13', 140, 'ZERO1');
+    await sb.waitForSlips(1);
+    await slipFor(sb, 'Uzed', 'Zed', 'm14', 'k14', 100, 'ZERO2');
+    await sb.waitForSlips(2);
+    const [s1, s2] = sb.slips();
+
+    const r = await sb.post('/api/queue/edit_items', { edits: [
+        { slipId: s1.id, items: [{ name: 'B', qty: 1 }] },
+        { slipId: s2.id, items: [{ name: 'A', qty: 0 }] },
+    ]});
+    assert.equal(r.status, 400);
+    assert.match(sb.slips()[0].qr_payload, /A x1/, 'nothing applied');
+}));
+

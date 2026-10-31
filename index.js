@@ -2,6 +2,26 @@
 // ถ้าโปรแกรมหลักปิดตัวเองผิดปกติ ระบบจะเปิดใหม่ให้อัตโนมัติภายใน 5 วินาที (สูงสุด 5 ครั้งใน 10 นาที กันวนไม่จบ)
 // ปิดปกติ (ปุ่มปิดโปรแกรม / ติดตั้งอัปเดต / เปิดซ้ำ) = รหัส 0 -> ตัวเฝ้าปิดตามทันที ไม่เปิดใหม่
 // ตั้ง AQ_NO_SUPERVISOR=1 เพื่อปิดตัวเฝ้า
+// v1.0.17: ตัวอ่าน .env แบบง่ายของตัวเฝ้า — แยกเป็นฟังก์ชันเพื่อให้เทสต์ (tests/unit/env-parser.test.js) ตัดไปตรวจได้
+// ทำตัวเหมือนตัวอ่านมาตรฐานในจุดที่เคยพลาด: รองรับ "export " นำหน้า, ตัดคอมเมนต์ท้ายบรรทัด (# ที่มีช่องว่างนำหน้า)
+// และค่าครอบด้วย "..."/'...' — ไม่ใช่ตัวอ่าน .env เต็มรูปแบบ (multiline/escape) เพราะตัวเฝ้าต้องการแค่ webhook ตัวเดียว
+function parseEnvLines(text) {
+    const env = {};
+    String(text || '').split(/\r?\n/).forEach(l => {
+        const m = l.match(/^\s*(?:export\s+)?([A-Za-z0-9_]+)\s*=\s*(.*)$/);
+        if (!m) return;
+        let v = m[2];
+        const q = v.charAt(0);
+        if (q === '"' || q === "'") {              // ค่าครอบด้วย quote: หยุดที่ quote ปิด ไม่สนข้อความหลังจากนั้น
+            const end = v.indexOf(q, 1);
+            v = end > 0 ? v.slice(1, end) : v.slice(1);
+        } else {
+            v = v.replace(/\s+#.*$/, '');          // คอมเมนต์ท้ายบรรทัด: # ที่มีช่องว่างนำหน้า (URL ที่มี # ติด ๆ กันไม่โดนตัด)
+        }
+        env[m[1]] = v.trim();
+    });
+    return env;
+}
 if (!process.env.AQ_SUPERVISED && process.env.AQ_NO_SUPERVISOR !== '1') {
     const { spawn } = require('child_process');
     const fsSup = require('fs');
@@ -15,8 +35,7 @@ if (!process.env.AQ_SUPERVISED && process.env.AQ_NO_SUPERVISOR !== '1') {
         const finish = () => { if (!finished) { finished = true; process.exit(code || 1); } };
         try {
             const envText = fsSup.readFileSync(pathSup.join(__dirname, '.env'), 'utf8');
-            const env = {};
-            envText.split(/\r?\n/).forEach(l => { const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, ''); });
+            const env = parseEnvLines(envText);
             const url = env.DISCORD_DEVREPORT_WEBHOOK_URL || env.DISCORD_WEBHOOK_URL || '';
             if (!/^https:\/\/(discord|discordapp)\.com\/api\/webhooks\//.test(url)) { finish(); return; }
             let version = '?';
@@ -1727,13 +1746,14 @@ function canHoldSession(rec) {
 // v1.0.16: ยอดที่ลูกค้าโอน "นอกรอบไลฟ์" (ก่อนกดเริ่มไลฟ์ หรือระหว่างสองรอบ) ผูกเข้ากับรอบที่เริ่มถัดไป (กติกา ก ที่เจ้าของร้านเลือก)
 // เดิมสลิปพวกนี้ไม่มีรหัสรอบ (session_id ว่าง) จึงหายจากหน้าคิวทันทีที่กดเริ่มไลฟ์ เพราะหน้าคิวตอนไลฟ์กรองตามรหัสรอบ
 // ผูกเฉพาะสลิปที่ตรงเงื่อนไขทั้งหมด:
-//  - session_id ว่าง และสถานะยังค้างอยู่ (waiting / called / skipped / abnormal_pending)
-//    ที่แม่ค้าจัดการจบแล้ว (completed / cleared / rejected) ไม่แตะ และ accumulated (ยอดไม่พอ) ไม่แตะ
-//    เพราะเงินในกระเป๋าลูกค้าถูกรีเซ็ตตอนเริ่มไลฟ์ตามกติกา v1.0.13
+//  - session_id ว่าง และสถานะยังค้างอยู่ (waiting / called / skipped / abnormal_pending / accumulated)
+//    ที่แม่ค้าจัดการจบแล้ว (completed / cleared / rejected) ไม่แตะ
+//    v1.0.17 (เจ้าของร้านสั่ง 2026-10-31): accumulated (ยอดไม่พอ) ผูกเข้ารอบด้วย และคืนเงินเข้ากระเป๋าหลังรีเซ็ต v1.0.13
+//    (เดิมไม่แตะ ทำให้เงินที่ลูกค้าโอนก่อนไลฟ์แต่ยังไม่พอซื้อหายจากระบบตอนกดเริ่มไลฟ์)
 //  - id มากกว่าสลิปล่าสุดที่มีรหัสรอบ = เข้ามาหลังรอบก่อนหน้า (ไม่ดึงของเก่าก่อนรอบที่แล้วกลับมา)
 //  - วันที่โอนเป็นวันนี้หรือย้อนหลังไม่เกิน OUT_OF_ROUND_LOOKBACK_DAYS วัน (เวลาไทย)
 const OUT_OF_ROUND_LOOKBACK_DAYS = 1;
-const OUT_OF_ROUND_PENDING_STATUSES = ['waiting', 'called', 'skipped', 'abnormal_pending'];
+const OUT_OF_ROUND_PENDING_STATUSES = ['waiting', 'called', 'skipped', 'abnormal_pending', 'accumulated'];
 function bangkokDateString(offsetDays = 0) {
     const d = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Bangkok"}));
     d.setDate(d.getDate() + offsetDays);
@@ -1747,10 +1767,25 @@ function outOfRoundSlipFilter() {
         params: [Number(last && last.m) || 0, bangkokDateString(-OUT_OF_ROUND_LOOKBACK_DAYS), ...OUT_OF_ROUND_PENDING_STATUSES]
     };
 }
-function claimOutOfRoundSlips(sessionId) {
-    if (!LIVE_ID_RE.test(String(sessionId))) return 0;
+// v1.0.17: คืนเงินของสลิปยอดไม่พอ (accumulated) ที่ผูกเข้ารอบ กลับเข้ากระเป๋าหลังรีเซ็ต
+//  - คืนไม่เกินยอดที่อยู่ในกระเป๋าก่อนรีเซ็ต (preResetBalances) = เงินที่ใช้ซื้อชิ้นไปแล้วไม่ถูกคืนซ้ำ
+//  - คืนไม่เกินผลรวมยอดของสลิป accumulated นอกรอบของคนนั้น = เศษเงินของรอบก่อนยังถูกรีเซ็ตตามกติกา v1.0.13
+//  - ผูกรอบและคืนเงินอยู่ใน transaction เดียว (สำเร็จพร้อมกันหรือไม่เกิดทั้งคู่)
+function claimOutOfRoundSlips(sessionId, preResetBalances = new Map()) {
+    if (!LIVE_ID_RE.test(String(sessionId))) return { claimed: 0, restored: [] };
     const f = outOfRoundSlipFilter();
-    return supabase.db.prepare(`UPDATE slips SET session_id = ? WHERE ${f.where}`).run(sessionId, ...f.params).changes;
+    return supabase.db.transaction(() => {
+        const owedBySlips = supabase.db.prepare(`SELECT line_id, MAX(line_name) AS name, SUM(amount) AS total FROM slips WHERE ${f.where} AND status = 'accumulated' AND line_id IS NOT NULL GROUP BY line_id`).all(...f.params);
+        const claimed = supabase.db.prepare(`UPDATE slips SET session_id = ? WHERE ${f.where}`).run(sessionId, ...f.params).changes;
+        const restored = [];
+        for (const r of owedBySlips) {
+            const amount = Math.min(Number(preResetBalances.get(r.line_id)) || 0, Number(r.total) || 0);
+            if (!(amount > 0)) continue;
+            supabase.db.prepare('UPDATE customers SET balance = balance + ? WHERE line_id = ?').run(amount, r.line_id);
+            restored.push({ lineId: r.line_id, name: r.name, amount });
+        }
+        return { claimed, restored };
+    })();
 }
 
 // v1.0.11: นับจำนวนชิ้นที่ลูกค้าได้ไปแล้ว เพื่อตัดสินว่าจ่ายค่าส่งไปแล้วหรือยัง
@@ -2684,11 +2719,11 @@ async function getAiOpinionsForUnknownIssues(rawGroups) {
 
 ${list.join('\n')}`;
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent`;
         const res = await axios.post(url, {
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { responseMimeType: 'application/json' }
-        }, { timeout: 8000 });
+        }, { timeout: 8000, headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY } });
 
         const rawJson = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!rawJson) return out;
@@ -2792,10 +2827,12 @@ app.post('/api/live_session/start', async (req, res) => {
         }
 
         // 🔄 v1.0.13: เริ่มไลฟ์รอบใหม่ = รีเซ็ตยอดโอนสะสม (เศษเงินในกระเป๋า) ของลูกค้าทุกคนเป็น 0
+        const preResetBalances = new Map();   // v1.0.17: ยอดก่อนรีเซ็ต ใช้คืนเงินของสลิปยอดไม่พอที่โอนนอกรอบ (claimOutOfRoundSlips)
         try {
             const owed = supabase.db.prepare('SELECT name, line_id, balance FROM customers WHERE balance != 0').all();
             if (owed.length > 0) {
                 supabase.db.prepare('UPDATE customers SET balance = 0 WHERE balance != 0').run();
+                owed.forEach(c => { if (c.line_id) preResetBalances.set(c.line_id, Number(c.balance) || 0); });
                 const total = owed.reduce((sum, c) => sum + (Number(c.balance) || 0), 0);
                 const detail = owed.slice(0, 20).map(c => `${c.name || c.line_id}: ${c.balance}฿`).join(', ');
                 addLog('INFO', `เริ่มไลฟ์รอบใหม่: รีเซ็ตยอดสะสมของลูกค้า ${owed.length} คน รวม ${total} บาท (${detail}${owed.length > 20 ? ', ...' : ''})`);
@@ -2807,9 +2844,15 @@ app.post('/api/live_session/start', async (req, res) => {
         // v1.0.16: ผูกสลิปที่ลูกค้าโอนนอกรอบ (ก่อนกดเริ่ม/ระหว่างรอบ) เข้ากับรอบนี้ ทำหลังสำรองฐานข้อมูลและรีเซ็ตกระเป๋า เพื่อให้ไฟล์สำรองเป็นสภาพก่อนเริ่มไลฟ์
         let claimedOutOfRound = 0;
         try {
-            claimedOutOfRound = claimOutOfRoundSlips(sessionId);
+            const claim = claimOutOfRoundSlips(sessionId, preResetBalances);
+            claimedOutOfRound = claim.claimed;
             carryOutOfRoundNotices(sessionId);
             if (claimedOutOfRound > 0) addLog('INFO', `เริ่มไลฟ์รอบใหม่: ผูกสลิปที่ลูกค้าโอนนอกรอบไลฟ์ ${claimedOutOfRound} ใบ เข้ากับรอบนี้ (ยังค้างอยู่ในคิว)`);
+            if (claim.restored.length > 0) {
+                const restoredTotal = claim.restored.reduce((sum, r) => sum + r.amount, 0);
+                const restoredDetail = claim.restored.slice(0, 20).map(r => `${r.name || r.lineId}: ${fmtBaht(r.amount)}฿`).join(', ');
+                addLog('INFO', `เริ่มไลฟ์รอบใหม่: คืนยอดที่ลูกค้าโอนนอกรอบแต่ยังไม่พอซื้อ กลับเข้ากระเป๋า ${claim.restored.length} คน รวม ${fmtBaht(restoredTotal)} บาท (${restoredDetail}${claim.restored.length > 20 ? ', ...' : ''}) ลูกค้าขึ้นการ์ดรอโอนเพิ่มในรอบนี้`);
+            }
         } catch (claimErr) {
             claimedOutOfRound = 0;
             addLog('ERROR', `ผูกสลิปนอกรอบเข้ากับรอบไลฟ์ไม่สำเร็จ (ไลฟ์เริ่มตามปกติ): ${claimErr.message}`);
@@ -3501,6 +3544,8 @@ app.post('/api/queue/manual_amount', async (req, res) => {
         const drawsTxt = result.draws > 0 ? `ได้ ${result.draws} ชิ้น` : 'ยอดยังไม่พอ (เข้าการ์ดส้มรอโอนเพิ่ม)';
         addLog('INFO', `🖥️ แม่ค้ากรอกยอดสลิปเอง ${amount} บาท — ${slip.line_name || 'ลูกค้า'} ${drawsTxt} (เงินคงเหลือในกระเป๋า ${finalBalance} บาท)`);
 
+        // v1.0.17: การ์ดรอใส่ยอดกลายเป็นคิวที่ได้สิทธิ์ = เสียงคิวใหม่เหมือนสลิปปกติ (เดิมเส้นทางนี้เงียบ)
+        if (result.draws > 0 && slip.status === 'waiting') io.emit('play_sound');
         broadcastTodayStats();
         res.json({ success: true, draws: result.draws, remainder: finalBalance });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
@@ -3557,43 +3602,67 @@ app.post('/api/queue/reject_slip', async (req, res) => {
 // ห้ามแตะ: ยอดเงินที่โอนมาจริง (amount), สถานะ, เงินในกระเป๋าลูกค้า — เงินเป็นข้อเท็จจริงจากสลิป ส่วนการ์ดที่ยังค้างในคิวเท่านั้นที่แก้ได้
 app.post('/api/queue/edit_items', async (req, res) => {
     try {
-        const slipId = Number(req.body && req.body.slipId);
-        const items = Array.isArray(req.body && req.body.items) ? req.body.items : null;
-        if (!Number.isInteger(slipId) || slipId <= 0 || !items) {
-            return res.status(400).json({ success: false, message: 'ข้อมูลไม่ถูกต้อง (ต้องระบุ slipId และรายการสินค้า)' });
+        // v1.0.17: รับได้ทั้งรูปเดิม { slipId, items } (การ์ดเดียว) และรูปใหม่ { edits: [{slipId, items}, ...] } (การ์ดรวมบิลหลายสลิป)
+        // ตรวจความถูกต้องครบทุกใบก่อน แล้วค่อยบันทึกทีเดียว — กัน "แก้ครึ่งเดียว" แบบตอนหน้าเว็บส่งทีละใบแล้วใบหลังล้ม (HANDOFF §5)
+        const rawEdits = Array.isArray(req.body && req.body.edits) ? req.body.edits
+            : (req.body && req.body.slipId !== undefined && req.body.items !== undefined) ? [{ slipId: req.body.slipId, items: req.body.items }]
+            : null;
+        if (!rawEdits || rawEdits.length === 0 || rawEdits.length > 10) {
+            return res.status(400).json({ success: false, message: 'ข้อมูลไม่ถูกต้อง (ต้องระบุ slipId และรายการสินค้า รับได้ครั้งละไม่เกิน 10 ใบ)' });
         }
 
-        // ตรวจรายการ: ชื่อ 1-60 ตัวอักษรหลังตัดช่องว่าง, จำนวนเป็นจำนวนเต็ม 0-99, ห้ามชื่อซ้ำ (qty=0 ตัดทิ้ง)
-        const clean = [];
-        for (const it of items) {
-            const name = String((it && it.name) || '').trim().slice(0, 60);
-            const qty = Number(it && it.qty);
-            if (!name || name.includes('|') || !Number.isInteger(qty) || qty < 0 || qty > 99) {   // "|" คือตัวคั่นข้อมูลในสลิป ห้ามอยู่ในชื่อสินค้า
-                return res.status(400).json({ success: false, message: `รายการสินค้าหรือจำนวนไม่ถูกต้อง: "${name || '?'}" x${qty}` });
+        const plan = [];   // ตรวจทุกใบให้ผ่านหมดก่อน — ถ้าใบใดไม่ผ่าน จะไม่บันทึกอะไรเลย
+        for (const edit of rawEdits) {
+            const slipId = Number(edit && edit.slipId);
+            const items = Array.isArray(edit && edit.items) ? edit.items : null;
+            if (!Number.isInteger(slipId) || slipId <= 0 || !items) {
+                return res.status(400).json({ success: false, message: 'ข้อมูลไม่ถูกต้อง (ต้องระบุ slipId และรายการสินค้า)' });
             }
-            if (qty > 0 && !clean.some(c => c.name === name)) clean.push({ name, qty });
+
+            // ตรวจรายการ: ชื่อ 1-60 ตัวอักษรหลังตัดช่องว่าง, จำนวนเป็นจำนวนเต็ม 0-99, ห้ามชื่อซ้ำ (qty=0 ตัดทิ้ง)
+            const clean = [];
+            for (const it of items) {
+                const name = String((it && it.name) || '').trim().slice(0, 60);
+                const qty = Number(it && it.qty);
+                if (!name || name.includes('|') || !Number.isInteger(qty) || qty < 0 || qty > 99) {   // "|" คือตัวคั่นข้อมูลในสลิป ห้ามอยู่ในชื่อสินค้า
+                    return res.status(400).json({ success: false, message: `รายการสินค้าหรือจำนวนไม่ถูกต้อง: "${name || '?'}" x${qty} (สลิป #${slipId})` });
+                }
+                if (qty > 0 && !clean.some(c => c.name === name)) clean.push({ name, qty });
+            }
+            const breakdown = clean.map(c => `${c.name} x${c.qty}`).join(', ');
+            const draws = clean.reduce((s, c) => s + c.qty, 0);
+            if (draws <= 0) {
+                // v1.0.17: การ์ดที่ไม่มีสินค้าเหลืออยู่เลยไม่มีความหมายในคิว — จะเอาการ์ดออก ใช้ปุ่มปัดตกรูปแทน
+                return res.status(400).json({ success: false, message: `รวมสินค้าต้องมากกว่า 0 ชิ้น (สลิป #${slipId}) — ถ้าต้องการเอาการ์ดนี้ออกจากคิว ใช้ปุ่มปัดตกรูปแทน` });
+            }
+
+            const slip = supabase.db.prepare('SELECT * FROM slips WHERE id = ?').get(slipId);
+            if (!slip) return res.status(404).json({ success: false, message: `ไม่พบสลิป #${slipId}` });
+            if (!['waiting', 'called', 'skipped', 'abnormal_pending'].includes(slip.status)) {
+                return res.status(409).json({ success: false, message: `แก้ไขได้เฉพาะการ์ดที่ยังค้างอยู่ในคิวเท่านั้น (สลิป #${slipId} จบแล้ว/ปัดตกแล้ว)` });
+            }
+
+            // คงส่วนอื่นของ qr_payload ไว้: ปกติคือ "รหัสอ้างอิง|breakdown" ส่วนของ manual_image คือ "manual_image|url|breakdown"
+            const parts = String(slip.qr_payload || '').split('|');
+            const isManual = slip.qr_payload && slip.qr_payload.startsWith('manual_image');
+            const oldBreakdown = isManual ? (parts[2] || '') : (parts[1] || '');
+            if (isManual) parts[2] = breakdown;
+            else if (parts.length > 1) parts[1] = breakdown;
+            else parts.push(breakdown);
+
+            plan.push({ slip, slipId, draws, breakdown, oldBreakdown, payload: parts.join('|') });
         }
-        const breakdown = clean.map(c => `${c.name} x${c.qty}`).join(', ');
-        const draws = clean.reduce((s, c) => s + c.qty, 0);
 
-        const slip = supabase.db.prepare('SELECT * FROM slips WHERE id = ?').get(slipId);
-        if (!slip) return res.status(404).json({ success: false, message: 'ไม่พบสลิปนี้' });
-        if (!['waiting', 'called', 'skipped', 'abnormal_pending'].includes(slip.status)) {
-            return res.status(409).json({ success: false, message: 'แก้ไขได้เฉพาะการ์ดที่ยังค้างอยู่ในคิวเท่านั้น (ไม่รวมที่จบแล้ว/ปัดตกแล้ว)' });
+        // ผ่านครบทุกใบแล้ว — บันทึกทีเดียว (better-sqlite3 ซิงโครนัส ไม่มีคำขออื่นแทรกกลางคัน)
+        const results = [];
+        for (const p of plan) {
+            supabase.db.prepare('UPDATE slips SET draws = ?, qr_payload = ? WHERE id = ?').run(p.draws, p.payload, p.slipId);
+            addLog('INFO', `🖥️ แม่ค้าแก้ไขรายการสินค้า — ${p.slip.line_name || 'ลูกค้า'}: เดิม "${p.oldBreakdown || '-'}" → ใหม่ "${p.breakdown || '-'}" รวม ${p.draws} ชิ้น (สลิป #${p.slipId}, ยอดโอน ${p.slip.amount} บาท ไม่เปลี่ยน)`);
+            results.push({ slipId: p.slipId, draws: p.draws, breakdown: p.breakdown });
         }
-
-        // คงส่วนอื่นของ qr_payload ไว้: ปกติคือ "รหัสอ้างอิง|breakdown" ส่วนของ manual_image คือ "manual_image|url|breakdown"
-        const parts = String(slip.qr_payload || '').split('|');
-        const isManual = slip.qr_payload && slip.qr_payload.startsWith('manual_image');
-        const oldBreakdown = isManual ? (parts[2] || '') : (parts[1] || '');
-        if (isManual) parts[2] = breakdown;
-        else if (parts.length > 1) parts[1] = breakdown;
-        else parts.push(breakdown);
-
-        supabase.db.prepare('UPDATE slips SET draws = ?, qr_payload = ? WHERE id = ?').run(draws, parts.join('|'), slipId);
-        addLog('INFO', `🖥️ แม่ค้าแก้ไขรายการสินค้า — ${slip.line_name || 'ลูกค้า'}: เดิม "${oldBreakdown || '-'}" → ใหม่ "${breakdown || '-'}" รวม ${draws} ชิ้น (สลิป #${slipId}, ยอดโอน ${slip.amount} บาท ไม่เปลี่ยน)`);
         await broadcastTodayStats();
-        res.json({ success: true, draws, breakdown });
+        if (results.length === 1) return res.json({ success: true, draws: results[0].draws, breakdown: results[0].breakdown, results });
+        res.json({ success: true, results });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -3607,6 +3676,7 @@ app.get('/api/queue/edit_items_context', (req, res) => {
     try {
         const slipIds = String(req.query.slipIds || '').split(',').map(Number).filter(n => Number.isInteger(n) && n > 0);
         if (slipIds.length === 0) return res.status(400).json({ success: false, message: 'ต้องระบุ slipIds' });
+        if (slipIds.length > 10) return res.status(400).json({ success: false, message: 'รับได้ครั้งละไม่เกิน 10 สลิป' });   // v1.0.17: การ์บุ๊กรวมบิลมีสลิปได้แค่ 2-3 ใบ — เกินนี้คือคำขอผิดปกติ
         const rows = slipIds.map(id => supabase.db.prepare('SELECT id, line_id, draws, status FROM slips WHERE id = ?').get(id));
         if (rows.some(r => !r)) return res.status(404).json({ success: false, message: 'ไม่พบสลิป' });
         const lineId = rows[0].line_id;
@@ -3765,22 +3835,141 @@ function rememberBankDelayHint(slipId, info) {
     bankDelayHints.set(slipId, { bankName: info.bankName || '', delay: info.delay || null, at: Date.now() });
     if (bankDelayHints.size > 300) bankDelayHints.delete(bankDelayHints.keys().next().value);
 }
+
+// ===== v1.0.17: ตรวจสลิปซ้ำเองหลังพ้นเวลารอ (Code 1010) =====
+// สลิปธนาคารที่ต้องรอ (เช่น กรุงเทพ ~7 นาที) ระบบเก็บรูปไว้แล้วตั้งเวลายิงตรวจซ้ำจากไฟล์เดิม สูงสุด 2 ครั้ง
+// (ครั้งแรกพ้นเวลารอ +1 นาที, ครั้งที่สองอีก 4 นาที) แทนการรอให้ลูกค้าส่งรูปเดิมซ้ำ
+// ผลตรวจเดินกฎชุดเดียวกับเส้นทางปกติ: ข้อมูลไม่ครบ/โอนผิดบัญชี/สลิปซ้ำ = ไม่บันทึก (แจ้งการ์ดแดง ไม่ปัดการ์ดเอง)
+// ถ้าแม่ค้าใส่ยอดไปก่อนแล้ว = ผูกรหัสเข้าใบเดิมผ่านหน้าต่างเวลาของ pickManualMatch (กันนับซ้ำ)
+// ถ้ายังไม่ใส่ = อัปเกรดการ์ดด้วยคณิตเดียวกับ /api/queue/manual_amount เดิมทุกบรรทัด
+// ข้อจำกัด: ตัวจับเวลาอยู่ในหน่วยความจำ ถ้าโปรแกรมรีสตาร์ทระหว่างรอ การ์ดกลับไปอยู่ในทางแม่ค้า (ใส่ยอดเอง/ขอให้ลูกค้าส่งซ้ำ) ตามพฤติกรรมเดิม
+const bankRecheckTimers = new Map();   // slipId -> Timeout
+function bankRecheckDelayMs(delayMin, attempt) {
+    const env = Number(process.env.AQ_BANK_RECHECK_DELAY_MS);   // ชุดทดสอบย่อเวลารอ
+    if (Number.isFinite(env) && env > 0) return env;
+    return attempt === 1 ? ((Number(delayMin) || 7) + 1) * 60000 : 4 * 60000;
+}
+function scheduleBankDelayRecheck(slipId, imageFile, delayMin, attempt = 1) {
+    if (bankRecheckTimers.has(slipId)) return;
+    const t = setTimeout(() => {
+        bankRecheckTimers.delete(slipId);
+        runBankDelayRecheck(slipId, imageFile, delayMin, attempt).catch(e => addLog('WARN', `ตรวจสลิปซ้ำเองหลังพ้นเวลารอ (สลิป #${slipId}) ไม่สำเร็จ: ${e.message}`));
+    }, bankRecheckDelayMs(delayMin, attempt));
+    t.unref();
+    bankRecheckTimers.set(slipId, t);
+}
+async function runBankDelayRecheck(slipId, imageFile, delayMin, attempt) {
+    const slip = supabase.db.prepare('SELECT * FROM slips WHERE id = ?').get(slipId);
+    if (!slip || ['rejected', 'completed', 'cleared'].includes(slip.status)) return;   // การ์ดถูกจัดการไปแล้ว — เลิกตรวจซ้ำเงียบ ๆ
+    let imageBuffer;
+    try { imageBuffer = await fs.promises.readFile(imageFile); }
+    catch (e) { addLog('WARN', `อ่านรูปสลิป #${slipId} กลับมาตรวจซ้ำไม่ได้ (${e.message}) ให้แม่ค้าใส่ยอดเองหรือขอให้ลูกค้าส่งรูปซ้ำ`); return; }
+
+    const slipResult = await verifySlipWithProvider(imageBuffer);
+    if (!slipResult || !slipResult.success) {
+        const info = (slipResult && Number(slipResult.code) === 1010) ? classifySlipOkError(400, slipResult) : null;
+        if (info && info.kind === 'bank_delay' && attempt === 1) {
+            addLog('INFO', `ธนาคารยังไม่ยืนยันสลิป #${slipId} ของ "${slip.line_name || 'ลูกค้า'}" หลังพ้นเวลารอ — ระบบจะลองตรวจซ้ำอีกครั้ง (ครั้งที่ 2 จาก 2)`);
+            scheduleBankDelayRecheck(slipId, imageFile, delayMin, 2);
+        } else if (info && info.kind === 'bank_delay') {
+            addLog('WARN', `ระบบพยายามตรวจสลิปซ้ำเอง 2 ครั้งแล้วยังไม่สำเร็จ (สลิป #${slipId} ของ "${slip.line_name || 'ลูกค้า'}"${info.bankName ? ' ธนาคาร' + info.bankName : ''}ยังไม่ยืนยัน) — ให้แม่ค้ากดเช็คสลิปแล้วใส่ยอดเอง หรือให้ลูกค้าส่งรูปเดิมซ้ำ`);
+        } else {
+            addLog('WARN', `ตรวจสลิปซ้ำเองหลังพ้นเวลารอไม่สำเร็จ (สลิป #${slipId}): ${slipResult && slipResult.message ? slipResult.message : 'ไม่ทราบสาเหตุ'} — การ์ดรอใส่ยอดยังอยู่ตามเดิม`);
+        }
+        return;
+    }
+
+    // ตรวจข้อมูลครบก่อนใช้ผลตรวจ (กฎเดียวกับเส้นทาง webhook)
+    const d = slipResult.data || {};
+    const amt = Number(d.amount);
+    const ref = String(d.transRef || '').trim();
+    const isSyntheticRef = /^(EASY|THUNDER|SLIPVERIFY)_\d{13}$/.test(ref);
+    if (!Number.isFinite(amt) || amt <= 0 || amt > 1000000 || !ref || isSyntheticRef) {
+        addLog('WARN', `ตรวจสลิปซ้ำเองได้ผลแต่ข้อมูลไม่ครบ (สลิป #${slipId}, ยอด ${d.amount}, รหัส ${ref || '-'}) ให้แม่ค้าตรวจเอง`);
+        return;
+    }
+
+    // โอนผิดบัญชี: ไม่บันทึก แจ้งการ์ดแดง (ไม่ปัดการ์ดเอง — แม่ค้ากดปัดตกเอง)
+    const shopNames = [merchantAccountName, merchantAccountNameEn];
+    const shopCheck = receiverMatchesShop(d.receiver, shopNames);
+    if (shopCheck.checked && !shopCheck.ok) {
+        const shopLabel = shopNames.map(n => String(n || '').trim()).filter(Boolean).map(n => `"${n}"`).join(' หรือ ');
+        await notifyUnrecordedSlip(slip.line_name || 'ลูกค้า', null, `สลิปรหัส ${ref} (ยอด ${fmtBaht(amt)} บาท) ที่ระบบตรวจซ้ำหลังพ้นเวลารอ โอนเข้าบัญชี "${shopCheck.shown || 'ไม่ทราบชื่อ'}" ไม่ตรงกับชื่อบัญชีร้าน ${shopLabel} ระบบไม่ได้นับยอดนี้`, 'wrong_account');
+        addLog('WARN', `ตรวจสลิปซ้ำเองเจอโอนผิดบัญชี: สลิป #${slipId} ของ "${slip.line_name || 'ลูกค้า'}" โอนเข้า "${shopCheck.shown}" (ไม่ใช่ ${shopLabel}) — ไม่บันทึก`);
+        return;
+    }
+
+    // สลิปซ้ำ: รหัสถูกบันทึกไปแล้ว (เช่น ลูกค้าส่งรูปซ้ำเองก่อนที่ระบบจะตรวจซ้ำทัน) — ไม่นับซ้ำ ทิ้งการ์ดไว้ให้แม่ค้าปัดตกเอง
+    const existing = supabase.db.prepare("SELECT id FROM slips WHERE trans_ref = ? AND trans_ref IS NOT NULL AND trans_ref != '' AND id != ? LIMIT 1").get(ref, slipId);
+    if (existing) {
+        addLog('WARN', `ตรวจสลิปซ้ำเอง (สลิป #${slipId}) เจอรหัส ${ref} ถูกบันทึกไปแล้ว (สลิป #${existing.id}) — ไม่นับซ้ำ ถ้าเป็นการ์ดรอใส่ยอดของสลิปเดิม ให้ปัดตกการ์ดนี้`);
+        return;
+    }
+
+    // แม่ค้าใส่ยอดไปก่อนแล้ว: ผูกรหัสเข้าใบเดิมเมื่อเข้าหน้าต่างเวลาของ pickManualMatch (กันนับซ้ำ)
+    if (Number(slip.amount) > 0) {
+        if (slip.trans_ref) return;   // มีรหัสแล้ว (เช่น ตรวจซ้ำชนกัน) ไม่ทำซ้ำ
+        const transferSec = stampToSec(d.transDate, d.transTime);
+        if (pickManualMatch([slip], amt, transferSec)) {
+            supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(ref, slipId);
+            await notifyUnrecordedSlip(slip.line_name || 'ลูกค้า', null, `สลิปรหัส ${ref} (ยอด ${fmtBaht(amt)} บาท) ที่ระบบตรวจซ้ำหลังพ้นเวลารอ ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (สลิป #${slipId}) ระบบถือเป็นใบเดียวกันและไม่นับยอดซ้ำ`, 'duplicate');
+            addLog('WARN', `ระบบตรวจสลิปซ้ำเอง: รหัส ${ref} ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${slipId}) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ`);
+            bankDelayHints.delete(slipId);
+            await broadcastTodayStats();
+        } else {
+            addLog('WARN', `ระบบตรวจสลิปซ้ำเองได้ยอด ${fmtBaht(amt)} บาท (รหัส ${ref}) แต่ไม่ตรงเงื่อนไขเวลา/ยอดกับที่แม่ค้ากรอกไว้ (${fmtBaht(slip.amount)} บาท, สลิป #${slipId}) — ให้แม่ค้าตรวจสอบเอง`);
+        }
+        return;
+    }
+
+    // ยังไม่มียอด: อัปเกรดการ์ดด้วยคณิตเดียวกับ /api/queue/manual_amount (เงินเป็นข้อเท็จจริงจากสลิปที่ตรวจผ่านแล้ว)
+    let { data: customer } = await supabase.from('customers').select('*').eq('line_id', slip.line_id).single();
+    const currentBalance = (customer ? customer.balance : 0) + amt;
+    const pastDrawsToday = countPastDraws(slip.line_id, { excludeId: slipId, excludeRejected: true });
+    const hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
+    const virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
+    const result = calculateBestDraws(virtualBalance, pastDrawsToday, { holdExactPrice: true });
+    const breakdownStr = result.breakdown.join(', ');
+    let parts = String(slip.qr_payload || '').split('|');     // คงรูป manual_image|url|breakdown เดิม (ปุ่มดูรูปและหน้าต่างแก้ไขสินค้าใช้อยู่)
+    if (parts[0] === 'manual_image') parts[2] = breakdownStr;
+    else parts = ['manual_image', '', breakdownStr];
+
+    await supabase.from('slips').update({
+        amount: amt, draws: result.draws, trans_ref: ref,
+        qr_payload: parts.join('|'),
+        status: result.draws > 0 ? slip.status : 'accumulated'   // ยอดไม่พอ = การ์ดส้มสะสมยอด เหมือนใส่ยอดเอง
+    }).eq('id', slipId);
+
+    const finalBalance = walletAfter(result, currentBalance);
+    if (customer) await supabase.from('customers').update({ balance: finalBalance }).eq('line_id', slip.line_id);
+    else if (slip.line_id) await supabase.from('customers').insert([{ line_id: slip.line_id, name: slip.line_name || 'ลูกค้า LINE', balance: finalBalance }]);
+
+    bankDelayHints.delete(slipId);
+    const drawsTxt = result.draws > 0 ? `ได้ ${result.draws} ชิ้น` : 'ยอดยังไม่พอ (เข้าการ์ดส้มรอโอนเพิ่ม)';
+    addLog('SUCCESS', `🔄 ระบบตรวจสลิปซ้ำเองหลังพ้นเวลารอสำเร็จ — ${slip.line_name || 'ลูกค้า'} ${fmtBaht(amt)} บาท ${drawsTxt} (สลิป #${slipId}, อ้างอิง ${ref}, เงินคงเหลือในกระเป๋า ${finalBalance} บาท)`);
+    if (result.draws > 0 && slip.status === 'waiting') io.emit('play_sound');   // v1.0.17: การ์ดอัปเกรดเป็นคิวเอง = เสียงคิวใหม่
+    await broadcastTodayStats();
+}
 // ===== v1.0.17: กันนับยอดซ้ำระหว่าง "สลิปที่แม่ค้ากรอกยอดเอง" กับ "สลิปใบเดียวกันที่ตรวจผ่านทีหลัง" =====
-// เวลาโอนบนสลิปที่ตรวจผ่าน ต้องไม่เกินเวลาที่รูปเข้ามาในระบบ (รูปมาหลังโอนเสมอ) -- ถ้าโอนใหม่ทีหลังรูปแรก เวลาโอนจะใหม่กว่า ถือเป็นเงินก้อนใหม่ ไม่ใช่ใบเดิม
+// ถือว่าเป็นใบเดียวกันเมื่อเวลาโอนอยู่ในหน้าต่าง [รูปเข้า - 60 นาที, รูปเข้า + 120 วินาที]:
+// ราวบน (โอนไม่ช้ากว่ารูป + 120 วิ) เผื่อนาฬิการ้าน/ธนาคารเพี้ยนเล็กน้อย -- โอนใหม่ทีหลังรูปแรกคือเงินก้อนใหม่
+// ราวล่าง (โอนไม่เก่ากว่ารูปเกิน 60 นาที, เจ้าของร้านตกลง 2026-10-31) กันสลิปเก่าของเมื่อวานที่ไม่เคยบันทึก
+//   ถูกดูดรวมกับยอดที่แม่ค้ากรอกของวันนี้จนเงินหาย -- 60 นาที = รอธนาคารยืนยัน ~8 นาที + เผื่อลูกค้าส่งรูปซ้ำช้า
 function stampToSec(dateStr, timeStr) {
     const d = String(dateStr || '').match(/^(\d{4})(\d{2})(\d{2})$/);
     const t = String(timeStr || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
     if (!d || !t) return null;
     return Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]), Number(t[3] || 0)) / 1000;
 }
-const MANUAL_MATCH_TOLERANCE_SEC = 120;   // เผื่อนาฬิกาเครื่องร้านกับนาฬิกาธนาคารต่างกันเล็กน้อย
-function pickManualMatch(rows, amount, transferSec, toleranceSec = MANUAL_MATCH_TOLERANCE_SEC) {
+const MANUAL_MATCH_TOLERANCE_SEC = 120;    // ราวบน: เผื่อนาฬิกาเครื่องร้านกับนาฬิกาธนาคารต่างกันเล็กน้อย
+const MANUAL_MATCH_MAX_AGE_SEC = 60 * 60;  // ราวล่าง: การโอนต้องไม่เก่ากว่ารูปที่เข้ามาเกิน 60 นาที
+function pickManualMatch(rows, amount, transferSec, toleranceSec = MANUAL_MATCH_TOLERANCE_SEC, maxAgeSec = MANUAL_MATCH_MAX_AGE_SEC) {
     if (transferSec === null || transferSec === undefined || !Number.isFinite(Number(amount))) return null;
     for (const r of rows || []) {
         if (Math.abs(Number(r.amount) - Number(amount)) > 0.005) continue;
         const arrive = stampToSec(r.trans_date, r.trans_time);
         if (arrive === null) continue;
-        if (arrive + toleranceSec >= transferSec) return r;
+        if (arrive + toleranceSec >= transferSec && transferSec >= arrive - maxAgeSec) return r;
     }
     return null;
 }
@@ -4300,6 +4489,45 @@ async function verifySlipWithProvider(imageBuffer) {
 }
 
 // 🇹🇭 ระบบวิเคราะห์ที่อยู่ภาษาไทยสำรองด้วย Regular Expression (ทำงานได้ 100% แม้ไม่มีเน็ตหรือ AI ไม่ว่าง)
+// v1.0.17 (Phase C, ร้านแจ้ง 2026-10-31: Kerry ใช้ชื่อ LINE แทนชื่อที่ลูกค้าพิมพ์ไว้ท้ายข้อความ)
+// หาชื่อผู้รับจากทุกบรรทัด ตามลำดับความน่าเชื่อ: (ก) บรรทัดที่ขึ้นต้นด้วย "ชื่อ"/"ผู้รับ" (ข) บรรทัดที่ขึ้นต้นด้วยคำนำหน้าชื่อคน
+// (ค) บรรทัดแรก (กติกาเดิม) (ง) ข้อความหน้าเบอร์โทรในบรรทัดเดียวกัน (จ) บรรทัดสุดท้าย
+// ข้อความที่มีตัวเลข / คำบอกที่อยู่ / คำทักทาย ไม่ใช่ชื่อ (กันเอาบรรทัดที่อยู่หรือ "ขอบคุณค่ะ" มาเป็นชื่อ) ไม่เจอ = คืนค่าว่าง ให้ผู้เรียกใช้ชื่อสำรอง
+function pickRecipientName(text, phoneText) {
+    const LABEL_RE = /^(ชื่อผู้รับ|ชื่อ-นามสกุล|ชื่อ|ผู้รับ)\s*[:.\-]?\s*/;
+    const TITLE_RE = /^(นางสาว|นาง|นาย|น\.ส\.|ด\.ช\.|ด\.ญ\.|คุณ)\s*[ก-๏a-zA-Z]/;
+    const NOT_NAME_RE = /(ต\.|อ\.|จ\.|ซ\.|ถ\.|ตำบล|อำเภอ|จังหวัด|ซอย|หมู่|ถนน|แขวง|เขต|รหัส|เลขที่|อาคาร|คอนโด|ไปรษณีย์|ที่อยู่|ส่งที่|กรุงเทพ|ขอบคุณ|ค่ะ|ครับ|ด่วน|ฝาก|สลิป|เปลี่ยน|เบอร์|โทร|tel|phone)/i;
+    const tidy = (s) => String(s || '').replace(/^คุณ\s*/, '').replace(/\s+/g, ' ').trim();
+    const looksLikeName = (s) => s.length >= 2 && s.length <= 40 && /[ก-๏a-zA-Z]/.test(s) && !/[0-9๐-๙]/.test(s) && !NOT_NAME_RE.test(s);
+    const raw = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+    const lines = raw.map(l => (phoneText ? l.replace(phoneText, '') : l).trim());
+    for (const l of lines) {
+        if (!LABEL_RE.test(l)) continue;
+        const s = tidy(l.replace(LABEL_RE, ''));
+        if (looksLikeName(s)) return s;
+    }
+    for (const l of lines) {
+        if (!TITLE_RE.test(l)) continue;
+        const s = tidy(l);
+        if (looksLikeName(s)) return s;
+    }
+    if (lines.length > 0) {
+        const s = tidy(lines[0].replace(/k\./gi, ''));
+        if (looksLikeName(s)) return s;
+    }
+    if (phoneText) {
+        const phoneLine = raw.find(l => l.includes(phoneText));
+        if (phoneLine) {
+            const s = tidy(phoneLine.slice(0, phoneLine.indexOf(phoneText)));
+            if (looksLikeName(s)) return s;
+        }
+    }
+    if (lines.length > 1) {
+        const s = tidy(lines[lines.length - 1]);
+        if (looksLikeName(s)) return s;
+    }
+    return '';
+}
 function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE') {
     if (!text || typeof text !== 'string') return null;
 
@@ -4336,15 +4564,8 @@ function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE')
     const subMatch = text.match(/(?:ต\.|ตำบล|แขวง)\s*([ก-๙a-zA-Z]+)/);
     if (subMatch) subdistrict = subMatch[1].trim();
 
-    // 6. สกัดชื่อผู้รับ (บรรทัดแรก หรือคำที่อยู่หน้าเบอร์โทร)
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    let recipient_name = '';
-    if (lines.length > 0) {
-        let firstLine = lines[0].replace(phoneMatch ? phoneMatch[0] : '', '').replace(/ชื่อ|ผู้รับ|คุณ|k\./gi, '').trim();
-        if (firstLine.length >= 2 && firstLine.length <= 40) {
-            recipient_name = firstLine;
-        }
-    }
+    // 6. สกัดชื่อผู้รับ — v1.0.17 (Phase C): หาจากทุกบรรทัด เพราะลูกค้ามักพิมพ์ชื่อไว้ท้ายข้อความ (ดู pickRecipientName)
+    let recipient_name = pickRecipientName(text, phoneMatch ? phoneMatch[0] : '');
 
     // 7. สกัดบ้านเลขที่/ซอย/ถนน (ข้อความที่เหลือ)
     let addressClean = text
@@ -4358,6 +4579,10 @@ function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE')
         .replace(/\n+/g, ' ')
         .trim();
 
+    // v1.0.17 (เจ้าของอนุมัติ 2026-10-31): ข้อความที่ไม่มีส่วนของที่อยู่เลย (เช่น "เปลี่ยนเบอร์ 08x") เดิมเก็บทั้งข้อความเป็นที่อยู่
+    // ทำให้ขั้นรวมที่อยู่เดิมใน webhook ไม่คืนที่อยู่เก่า และ Kerry ได้ "ที่อยู่" เป็นเบอร์โทร -> ให้ช่องที่อยู่ว่างแทน
+    const hasAddressPart = !!(postcode || province || district || subdistrict) || /[0-9๐-๙]/.test(addressClean);
+
     const genericNames = ['ลูกค้า line', 'ลูกค้าline', 'ลูกค้า', 'คุณ', 'คุณลูกค้า', 'ลูกค้าทั่วไป'];
     let finalRecipient = recipient_name ? recipient_name.trim() : '';
     if (!finalRecipient || genericNames.includes(finalRecipient.toLowerCase())) {
@@ -4367,7 +4592,7 @@ function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE')
     return {
         recipient_name: finalRecipient,
         phone: phone || '',
-        address: addressClean || text,
+        address: hasAddressPart ? (addressClean || text) : '',
         subdistrict: subdistrict || '',
         district: district || '',
         province: province || '',
@@ -4382,7 +4607,7 @@ async function parseThaiAddressWithAI(text, defaultName = 'ลูกค้า LI
         try {
             const prompt = `คุณคือผู้ช่วยสกัดที่อยู่จัดส่งพัสดุในประเทศไทย กรุณาวิเคราะห์ข้อความต่อไปนี้ และตอบกลับเป็น JSON เท่านั้น
 ข้อกำหนด:
-- recipient_name: ชื่อ-นามสกุลของผู้รับ (หากในข้อความไม่ได้ระบุชื่อคน ให้ตอบค่าว่าง "")
+- recipient_name: ชื่อ-นามสกุลของผู้รับ (หากในข้อความไม่ได้ระบุชื่อคน ให้ตอบค่าว่าง "") ชื่ออาจอยู่บรรทัดไหนก็ได้ รวมถึงท้ายข้อความ ไม่จำเป็นต้องอยู่บรรทัดแรก และห้ามเอาที่อยู่หรือคำทักทายมาเป็นชื่อ
 - phone: เบอร์โทรศัพท์ 10 หลัก (ตัดขีด ช่องว่าง หรือ +66 ให้เป็น 0XXXXXXXXX)
 - address: บ้านเลขที่ ซอย หมู่ ถนน อาคาร ชั้น
 - subdistrict: ตำบล หรือ แขวง (ตัดคำนำหน้า ต. หรือ แขวง ออกถ้ามี)
@@ -4393,11 +4618,11 @@ async function parseThaiAddressWithAI(text, defaultName = 'ลูกค้า LI
 
 ข้อความ: "${text}"`;
 
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent`;
             const res = await axios.post(url, {
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: { responseMimeType: 'application/json' }
-            }, { timeout: 4000 });
+            }, { timeout: 4000, headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY } });
 
             const rawJson = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
             if (rawJson) {
@@ -4530,10 +4755,13 @@ app.post('/webhook', async (req, res) => {
 
                 if (hasPhone || (hasPostcode && hasAddrKeyword)) {
                     const lineName = await getLineProfile(userId);
-                    const parsedAddress = await parseThaiAddressWithAI(text, lineName);
+                    // v1.0.17 (Phase C): ไม่ให้ตัวสกัดเติมชื่อ LINE เอง (ส่ง '') เพื่อรู้ว่าข้อความนี้มีชื่อผู้รับจริงหรือไม่
+                    const parsedAddress = await parseThaiAddressWithAI(text, '');
                     if (parsedAddress) {
                         const genericNames = ['ลูกค้า line', 'ลูกค้าline', 'ลูกค้า', 'คุณ', 'คุณลูกค้า', 'ลูกค้าทั่วไป'];
-                        if (!parsedAddress.recipient_name || genericNames.includes(parsedAddress.recipient_name.toLowerCase())) {
+                        const isGenericName = (n) => !n || genericNames.includes(String(n).trim().toLowerCase());
+                        const messageHasName = !isGenericName(parsedAddress.recipient_name);
+                        if (!messageHasName) {
                             parsedAddress.recipient_name = lineName || 'ลูกค้า LINE';
                         }
                         // บันทึกที่อยู่ลง configs ผูกกับ line_id ของลูกค้า
@@ -4546,6 +4774,10 @@ app.post('/webhook', async (req, res) => {
                                 for (const f of ['phone', 'address', 'subdistrict', 'district', 'province', 'postcode']) {
                                     const nv = parsedAddress[f];
                                     if ((nv === undefined || nv === null || String(nv).trim() === '') && prev[f]) parsedAddress[f] = prev[f];
+                                }
+                                // v1.0.17 (Phase C): ข้อความใหม่ไม่มีชื่อ (เช่น ส่งมาแค่เบอร์ใหม่) -> คงชื่อจริงที่ลูกค้าเคยพิมพ์ไว้ ไม่ทับด้วยชื่อ LINE
+                                if (!messageHasName && !isGenericName(prev.recipient_name) && String(prev.recipient_name).trim() !== String(lineName || '').trim()) {
+                                    parsedAddress.recipient_name = prev.recipient_name;
                                 }
                             }
                         } catch (mergeErr) { /* ไม่มีที่อยู่เดิม หรืออ่านไม่ได้ ใช้ข้อมูลใหม่ตามปกติ */ }
@@ -4659,7 +4891,7 @@ app.post('/webhook', async (req, res) => {
                         addLog('WARN', `สลิปรหัส ${transRef} ของ "${lineName}" ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${keyedMatch.id}, ${fmtBaht(amount)} บาท) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ`);
                         continue;
                     }
-                    const stillOpen = manualRows.filter(r => Number(r.amount) === 0 && r.status === 'waiting' && (() => { const a = stampToSec(r.trans_date, r.trans_time); return a !== null && transferSec !== null && a + MANUAL_MATCH_TOLERANCE_SEC >= transferSec; })());
+                    const stillOpen = manualRows.filter(r => Number(r.amount) === 0 && r.status === 'waiting' && (() => { const a = stampToSec(r.trans_date, r.trans_time); return a !== null && transferSec !== null && a + MANUAL_MATCH_TOLERANCE_SEC >= transferSec && a - MANUAL_MATCH_MAX_AGE_SEC <= transferSec; })());   // หน้าต่างเดียวกับ pickManualMatch
                     if (stillOpen.length > 0) {
                         addLog('WARN', `ลูกค้า "${lineName}" ส่งสลิปที่ตรวจผ่านแล้ว (${fmtBaht(amount)} บาท) และยังมีรูปรอใส่ยอดค้างอยู่ ${stillOpen.length} ใบ ถ้าเป็นสลิปใบเดียวกัน ให้ปัดตกการ์ดรอใส่ยอดใบเก่า อย่ากรอกยอดซ้ำ`);
                         io.emit('slip_warning', { kind: 'check_pending', name: lineName, reason: `ส่งสลิปที่ตรวจผ่านแล้ว ${fmtBaht(amount)} บาท แต่ยังมีรูปรอใส่ยอดค้างอยู่ ${stillOpen.length} ใบ ถ้าเป็นใบเดียวกัน ให้ปัดตกการ์ดเก่า อย่ากรอกยอดซ้ำ` });
@@ -4825,7 +5057,10 @@ app.post('/webhook', async (req, res) => {
                 if (inserted) {
                     // v1.0.17: ถ้าเหตุผลคือสลิปธนาคารที่ต้องรอ (Code 1010) จำไว้ให้การ์ดบอกเวลาที่ลองใหม่ได้
                     const bankInfo = (slipResult && Number(slipResult.code) === 1010) ? classifySlipOkError(400, slipResult) : null;
-                    if (bankInfo && bankInfo.kind === 'bank_delay') rememberBankDelayHint(inserted.id, bankInfo);
+                    if (bankInfo && bankInfo.kind === 'bank_delay') {
+                        rememberBankDelayHint(inserted.id, bankInfo);
+                        scheduleBankDelayRecheck(inserted.id, filePath, bankInfo.delay);   // v1.0.17: ระบบตรวจซ้ำเองหลังพ้นเวลารอ (ไม่ต้องรอลูกค้าส่งรูปซ้ำ)
+                    }
                     io.emit('pending_amount_slip', { name: lineName, bankName: bankInfo ? bankInfo.bankName : undefined, delay: bankInfo ? bankInfo.delay : undefined });   // v1.0.16: เสียงคอร์ด + การ์ดกะพริบ (แทน ping ปกติ)
                     broadcastTodayStats();
                     
