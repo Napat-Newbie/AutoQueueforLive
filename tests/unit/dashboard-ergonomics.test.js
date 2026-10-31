@@ -29,6 +29,9 @@ const byKey = (r, k) => r.find(x => x.key === k);
 test('tunnel health: down / not synced are critical, healthy or unknown-sync is fine', () => {
     assert.equal(ctx.tunnelHealthVerdict(null).bad, true);
     assert.equal(ctx.tunnelHealthVerdict({ active: false }).kind, 'down');
+    // owner 2026-11-01: merchant wording, no "Tunnel"
+    assert.match(ctx.tunnelHealthVerdict({ active: false }).message, /ระบบเชื่อมต่อ LINE หลุด/);
+    assert.doesNotMatch(ctx.tunnelHealthVerdict({ active: false }).message, /Tunnel|ท่อสัญญาณ/);
     assert.equal(ctx.tunnelHealthVerdict({ active: true, synced: false }).kind, 'sync');
     assert.equal(ctx.tunnelHealthVerdict({ active: true, synced: true }).bad, false);
     assert.equal(ctx.tunnelHealthVerdict({ active: true }).bad, false, 'sync state unknown is not an alarm');
