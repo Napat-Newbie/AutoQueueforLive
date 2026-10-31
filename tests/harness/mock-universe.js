@@ -19,6 +19,7 @@ class MockUniverse {
         this.discords = [];            // webhook payloads the app sent to Discord: { path, body }
         this.geminis = [];             // every Gemini API call: { path, url (as the app built it), headers, body }
         this.geminiReply = null;       // scripted response text (a JSON string); null -> 500 so accidental calls fail loudly
+        this.geminiQueue = [];         // optional one-shot answers used first, in order: { status, body } or { text } (e.g. a 429 then a success)
     }
 
     async start() {
@@ -114,6 +115,11 @@ class MockUniverse {
             // Gemini API (recorded; scripted reply via this.geminiReply, otherwise 500) — ใช้ทดสอบ AI เสริมความเห็นในสรุปหลังจบไลฟ์
             if (u.host === 'generativelanguage.googleapis.com') {
                 this.geminis.push({ path: u.pathname, url: orig, headers: { ...req.headers }, body: JSON.parse(body.toString('utf8') || '{}') });
+                if (this.geminiQueue.length) {
+                    const next = this.geminiQueue.shift();
+                    if (next.text !== undefined) return reply(200, { candidates: [{ content: { parts: [{ text: next.text }] } }] });
+                    return reply(next.status || 500, next.body || { error: { message: 'scripted gemini error' } });
+                }
                 if (this.geminiReply === null) return reply(500, { error: { message: 'no scripted gemini reply' } });
                 return reply(200, { candidates: [{ content: { parts: [{ text: this.geminiReply }] } }] });
             }
