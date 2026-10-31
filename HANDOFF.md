@@ -59,7 +59,7 @@
 - v1.0.16: publish เป็น Latest แล้ว (2026-10-29) tag `v1.0.16` อยู่บน `main` แล้วหลัง PR #7
 - v1.0.17: **publish เป็น Latest แล้ว** (2026-10-31 15:49 ICT, tag `v1.0.17` = `8efacbe`, zip sha256 `8e0a8a6a…9957` ตรง manifest, 26 รายการ, 240 เทสต์ = 238 ผ่าน + 2 todo) ตรวจแล้วว่า `releases/latest/download/version.json` ตอบ 1.0.17 — ห้ามแทนที่ asset/ย้าย tag ของเวอร์ชันที่ publish แล้ว งานถัดไปเป็น v1.0.18
 - อัปเดตแบบ one-click v1.0.16 → v1.0.17 ผ่านการทดสอบจริงบนเครื่อง Windows จริงแล้ว (field test ก่อน re-pack #3) สิ่งที่ยังไม่มีใครทำจริงบนเครื่องร้าน: LINE webhook/tunnel/SlipOK/Gemini/Discord จริง และการฟังเสียงเตือนจริงข้าง OBS — ให้เฝ้าไลฟ์แรกหลังร้านอัปเดต
-- แพ็กด้วย `core.autocrlf=false` เสมอ เพื่อให้ `updater.bat` เป็น 2,168 ไบต์ CR=0 เหมือนรุ่นก่อน
+- แพ็กด้วย `core.autocrlf=false` เสมอ เพื่อให้ `updater.bat` ใน zip ตรงกับซอร์สทุกไบต์และ CR=0 — ตั้งแต่ v1.0.19 ไฟล์เป็น ASCII ล้วน 4,824 ไบต์ รันจากสำเนาใน %TEMP% และมี "จุดรับช่วง" ของตัวอัปเดตรุ่นเก่า (v1.0.10–v1.0.18) ที่ไบต์ 1920 พอดี `tests/unit/updater-bat.test.js` คุมทั้งหมด (บน Windows รัน cmd จริง)
 - ต้องยืนยันด้วยว่าคีย์ Gemini แบบ header `x-goog-api-key` ใช้ได้กับ Gemini API จริง (ทดสอบกับ mock เท่านั้น) ก่อนออกรุ่นที่มีการแก้นี้
 
 ## 7. สถานะเทสต์
