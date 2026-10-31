@@ -3950,28 +3950,9 @@ let providerQuotaState = {
 // ===== v1.0.17: แปลรหัส Error ของ SlipOK ให้ตรงความหมายตามเอกสาร (https://slipok.com/api-documentation/error-status-code/) =====
 // เดิมทุกรหัสถูก log เป็น ERROR ว่า "สลิปอาจไม่ถูกต้อง หรือวงเงินเครดิตหมด" และรหัส 1009/1006/1008 ถูกนับเป็น "เครดิตหมด" ผิดๆ
 // level: WARN = เหตุการณ์ปกติของลูกค้า/ธนาคาร (ไม่ส่ง Dev Report) | ERROR = ตั้งค่าผิด/แพ็กเกจหมด/ไม่รู้จัก (ควรดู)
-function classifySlipOkError(httpStatus, body) {
-    const code = body ? Number(body.code) : NaN;
-    const d = (body && body.data) || {};
-    const T = (kind, level, message, extra) => Object.assign({ kind, level, message, code: Number.isFinite(code) ? code : null }, extra || {});
-    if (code === 1010) {
-        const bank = d.bankName ? 'ธนาคาร' + d.bankName : 'ธนาคารต้นทาง';
-        const delay = Number(d.delay) > 0 ? Number(d.delay) : null;
-        return T('bank_delay', 'WARN', 'สลิป' + bank + 'ยังตรวจไม่ได้ ต้องรอ' + (delay ? 'ประมาณ ' + delay + ' นาที' : 'สักครู่') + 'หลังโอน (SlipOK Code 1010) ไม่ใช่สลิปผิด ระบบเก็บรูปไว้ในคิวรอใส่ยอด ให้ลูกค้าส่งรูปเดิมซ้ำหลังเวลานั้น ระบบจะตรวจให้เอง', { bankName: d.bankName || '', delay });
-    }
-    if (code === 1009) return T('bank_outage', 'WARN', 'ระบบธนาคารขัดข้องชั่วคราว SlipOK ขอให้ตรวจใหม่ในอีก 15 นาที (Code 1009 เอกสาร SlipOK ระบุว่าไม่เสียโควต้า) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1003) return T('quota', 'ERROR', 'แพ็กเกจ SlipOK หมดอายุ (Code 1003) ต้องต่ออายุแพ็กเกจ');
-    if (code === 1004) return T('quota', 'ERROR', 'ใช้เกินโควต้า SlipOK ถึงวงเงินที่กำหนด (Code 1004) ต้องต่อแพ็กเกจ');
-    if (Number(httpStatus) === 402) return T('quota', 'ERROR', 'SlipOK แจ้งว่าเครดิตไม่พอ (HTTP 402)');
-    if (code === 1005 || code === 1006) return T('bad_image', 'WARN', 'รูปที่ลูกค้าส่งมาเปิดอ่านไม่ได้หรือไม่ใช่รูปภาพ (Code ' + code + ') รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1007) return T('no_qr', 'WARN', 'ไม่พบ QR Code ในรูปที่ลูกค้าส่งมา อาจไม่ใช่สลิปหรือถูกครอบตัด (Code 1007) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1008) return T('not_payment_qr', 'WARN', 'QR ในรูปไม่ใช่ QR ตรวจสอบการชำระเงิน (Code 1008) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1011) return T('qr_expired', 'WARN', 'QR หมดอายุ หรือไม่พบรายการโอนจริง (Code 1011) รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1013 || code === 1014) return T('mismatch', 'WARN', 'SlipOK แจ้งว่ายอดหรือบัญชีผู้รับไม่ตรง (Code ' + code + ') รูปถูกเก็บไว้ในคิวรอใส่ยอด');
-    if (code === 1000 || code === 1001 || code === 1002) return T('config', 'ERROR', 'ตั้งค่า SlipOK ไม่ถูกต้อง (Code ' + code + ' ตรวจ API Key และ Branch ID ในหน้าตั้งค่า)');
-    if (!body) return T('other', 'ERROR', 'เชื่อมต่อ SlipOK ไม่ได้ (เน็ตสะดุดหรือบริการล่ม) สลิปถูกเก็บไว้ในคิวรอใส่ยอด');
-    return T('other', 'ERROR', 'SlipOK ตอบกลับข้อผิดพลาดที่ไม่รู้จัก' + (Number.isFinite(code) ? ' (Code ' + code + ')' : '') + (httpStatus ? ' HTTP ' + httpStatus : ''));
-}
+// v1.0.19: ตัวแปลผลรหัส SlipOK + ตัวถอดรหัส QR ย้ายไป lib/slipVerify.js แล้ว (ตรรกะล้วน — ตัวอักษรเดิมทุกตัว)
+// ห้ามตีความรหัส SlipOK ที่อื่นนอกจากตัวนี้ (กฎ AGENTS) / เทสต์ตรง: tests/unit/slipok-codes.test.js + tests/unit/qr-ref.test.js
+const { classifySlipOkError, extractQrRef } = require('./lib/slipVerify');
 // ป้ายบนการ์ดรอใส่ยอด: สลิปธนาคารที่ต้องรอ (เก็บในหน่วยความจำ หายตอนปิดโปรแกรม = การ์ดกลับไปใช้ข้อความทั่วไป)
 const bankDelayHints = new Map();
 function rememberBankDelayHint(slipId, info) {
@@ -4109,34 +4090,7 @@ function stampToSec(dateStr, timeStr) {
 // ===== v1.0.18: ตัวตนของรายการจาก QR ของสลิป =====
 // พิสูจน์ด้วยคีย์ SlipOK จริง (2026-10-31): sub-tag 02 ใน QR ของสลิป == transRef ที่ SlipOK ตอบตอนตรวจผ่าน
 // (สลิปกรุงไทยตรงกันทุกตัวอักษร A0aa74ba726a04481) — จึงใช้เป็นบัตรประจำตัวรายการจับคู่แทนการเดาจากเวลาได้
-// โครงสร้าง QR: tag 00 (template) → sub 00 เวอร์ชัน / sub 01 รหัสธนาคารผู้โอน / sub 02 ข้อมูลรายการ
-function extractQrRef(qrText) {
-    const text = String(qrText || '').trim();
-    if (!text || text.length < 10) return null;
-    let i = 0;
-    while (i + 4 <= text.length) {
-        const id = text.slice(i, i + 2);
-        const len = parseInt(text.slice(i + 2, i + 4), 10);
-        if (!/^\d{2}$/.test(id) || !Number.isFinite(len) || i + 4 + len > text.length) return null;
-        if (id === '00') {
-            const inner = text.slice(i + 4, i + 4 + len);
-            let j = 0;
-            while (j + 4 <= inner.length) {
-                const sid = inner.slice(j, j + 2);
-                const slen = parseInt(inner.slice(j + 2, j + 4), 10);
-                if (!/^\d{2}$/.test(sid) || !Number.isFinite(slen) || j + 4 + slen > inner.length) return null;
-                if (sid === '02') {
-                    const v = inner.slice(j + 4, j + 4 + slen);
-                    return v.length >= 8 ? v : null;   // สั้นผิดปกติ = ไม่ใช่ข้อมูลรายการ
-                }
-                j += 4 + slen;
-            }
-            return null;
-        }
-        i += 4 + len;
-    }
-    return null;
-}
+// v1.0.19: ตัวถอด (extractQrRef) ย้ายไป lib/slipVerify.js แล้ว — ดึงมาไว้ตัวแปรชื่อเดิมด้านบน (จุดเรียกใช้ไม่เปลี่ยน)
 // ถอด QR จากรูปสลิปเอง (jsqr + jimp ติดตั้งอยู่แล้ว) — ใช้เมื่อ SlipOK ไม่ได้ส่ง qrcodeData มาให้ (เช่น รูปไม่มี QR ที่ตรวจไม่ผ่าน)
 // ถอดไม่ได้ = คืน null → ระบบกลับไปใช้วิธีเดิม (หน้าต่างเวลา + การ์ดยืนยัน) ไม่มีอะไรพัง
 async function decodeImageQrRef(imageBuffer) {

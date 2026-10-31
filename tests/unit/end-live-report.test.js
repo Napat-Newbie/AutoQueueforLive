@@ -10,12 +10,15 @@ const path = require('path');
 const { load } = require('../harness/extract');
 
 const INDEX = path.join(__dirname, '..', '..', 'index.js');
+const LIB_SLIP = path.join(__dirname, '..', '..', 'lib', 'slipVerify.js');   // v1.0.19: classifySlipOkError ย้ายบ้านแล้ว (assertion เดิมทุกตัว ไม่แก้)
 function env() {
-    return load(INDEX, {
+    const fromIndex = load(INDEX, {
         functions: ['buildEndOfLiveReportEmbed', 'buildEndOfLiveReportEmbeds', 'assessErrorForDevReport', 'analyzeLiveIssues', 'getLiveIssueRules', 'renderLiveIssueGroup',
-            'quotedNamesOf', 'summarizeLiveProducts', 'classifySlipOkError'],
+            'quotedNamesOf', 'summarizeLiveProducts'],
         consts: ['SEVERITY_STYLE']
     });
+    fromIndex.classifySlipOkError = load(LIB_SLIP, { functions: ['classifySlipOkError'] }).classifySlipOkError;
+    return fromIndex;
 }
 
 const SESSION = { id: 'LIVE_1', startTime: Date.now() - 65 * 60 * 1000, endTime: Date.now(), startTimeStr: '19:00:00', endTimeStr: '20:05:00' };

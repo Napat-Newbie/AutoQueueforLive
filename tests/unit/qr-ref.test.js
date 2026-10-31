@@ -10,8 +10,9 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { load } = require('../harness/extract');
 
-const INDEX = path.join(__dirname, '..', '..', 'index.js');
-const env = () => load(INDEX, { functions: ['extractQrRef'], globals: {} });
+// v1.0.19: extractQrRef ย้ายไป lib/slipVerify.js — เทสต์ตัดจากไฟล์จริงของโมดูลโดยตรง (assertion เดิมทุกตัว ไม่แก้)
+const LIB = path.join(__dirname, '..', '..', 'lib', 'slipVerify.js');
+const env = () => load(LIB, { functions: ['extractQrRef'], globals: {} });
 
 test('real Bangkok Bank slip QR: sub-tag 02 = date + time + digits', () => {
     assert.equal(env().extractQrRef('004600060000010103002022520261031140047230057235085102TH910468F0'), '2026103114004723005723508');
