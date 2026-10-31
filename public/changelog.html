@@ -21,7 +21,7 @@
                 <div>
                     <div class="flex items-center space-x-2.5">
                         <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">Version History & Changelog</h1>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.18 (CURRENT)</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.19 (CURRENT)</span>
                     </div>
                     <p class="text-xs text-zinc-400 mt-0.5">บันทึกประวัติการปรับปรุง แก้ไขบั๊ก และฟีเจอร์ใหม่ของ AutoQueue for Live ทั้งหมด</p>
                 </div>
@@ -34,12 +34,37 @@
         <!-- Timeline Container -->
         <div class="space-y-6">
 
+            <!-- v1.0.19 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.19</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">1 พฤศจิกายน 2026</span>
+                </div>
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">✨ ปรับปรุง:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>อ่านที่อยู่ลูกค้าด้วย AI (Gemini) ได้มากขึ้น: รอคำตอบนานขึ้น ลองใหม่อัตโนมัติเมื่อ AI ไม่ว่าง และใช้คำตอบของ AI แม้ข้อความขาดบางช่อง (ไลฟ์ล่าสุด AI อ่านได้ 27 จาก 36 ที่อยู่ รุ่นนี้แก้สาเหตุที่หลุดทั้งหมด)</li>
+                            <li>ระบบสำรองอ่านที่อยู่ได้ดีขึ้น: ได้จังหวัดกรุงเทพ/กทม เลือกเบอร์มือถือก่อนเบอร์บ้าน หาชื่อเจอแม้มีคำทักทายหรืออีโมจิ และไม่มีโน้ตภายในหลุดไปช่องหมายเหตุของไฟล์ Kerry อีก</li>
+                            <li>ลูกค้าโอนยอดเท่ากัน 2 ครั้งติดกัน (สลิปกรุงไทย กรุงเทพ ไทยพาณิชย์): ระบบรู้เองว่าเป็นการโอนใหม่และนับให้อัตโนมัติ ไม่ต้องกดการ์ด ธนาคารอื่นยังขึ้นการ์ดให้กดเหมือนเดิม</li>
+                            <li>เลิกเตือนหลอก "สลิปซ้ำ" ตอนระบบตรวจผ่านสลิปที่แม่ค้ากรอกยอดไปแล้ว และถ้ายอดที่กรอกไม่ตรงกับสลิปจริง จะเตือนสีส้ม "ยอดที่กรอกไม่ตรงกับสลิป"</li>
+                            <li>การ์ด "โอนครั้งที่ 2 จริง?" และคิวอ่านที่อยู่ที่ค้างอยู่ ไม่หายเมื่อปิดแล้วเปิดโปรแกรมใหม่</li>
+                            <li>ป้ายเงินนอกรอบบอกชัดว่าโอนมา "ก่อนเริ่มไลฟ์" หรือหลังจบไลฟ์ และหน้าต่าง Kerry เตือนเฉพาะกรณีที่ต้องระวัง</li>
+                            <li>แถบเตือนสีแดงเปลี่ยนเป็น "ระบบเชื่อมต่อ LINE หลุด" ให้อ่านเข้าใจง่าย และกดอัปเดตตอนหลุดล็อกอินจะบอกให้ล็อกอินใหม่ชัดเจน</li>
+                            <li>ตัวอัปเดตโปรแกรมแข็งแรงขึ้น ใช้ได้กับ Windows ทุกภาษา และไม่สะดุดระหว่างอัปเดต</li>
+                            <li>ชุดทดสอบอัตโนมัติ 308 ข้อ ผ่านทั้งหมด</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
             <!-- v1.0.18 -->
             <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
                     <div class="flex items-center space-x-3">
                         <span class="text-lg font-bold text-white">🚀 Version 1.0.18</span>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
                     </div>
                     <span class="text-xs text-zinc-400 font-mono">31 ตุลาคม 2026</span>
                 </div>
