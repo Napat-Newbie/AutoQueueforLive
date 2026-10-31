@@ -4489,6 +4489,45 @@ async function verifySlipWithProvider(imageBuffer) {
 }
 
 // 🇹🇭 ระบบวิเคราะห์ที่อยู่ภาษาไทยสำรองด้วย Regular Expression (ทำงานได้ 100% แม้ไม่มีเน็ตหรือ AI ไม่ว่าง)
+// v1.0.17 (Phase C, ร้านแจ้ง 2026-10-31: Kerry ใช้ชื่อ LINE แทนชื่อที่ลูกค้าพิมพ์ไว้ท้ายข้อความ)
+// หาชื่อผู้รับจากทุกบรรทัด ตามลำดับความน่าเชื่อ: (ก) บรรทัดที่ขึ้นต้นด้วย "ชื่อ"/"ผู้รับ" (ข) บรรทัดที่ขึ้นต้นด้วยคำนำหน้าชื่อคน
+// (ค) บรรทัดแรก (กติกาเดิม) (ง) ข้อความหน้าเบอร์โทรในบรรทัดเดียวกัน (จ) บรรทัดสุดท้าย
+// ข้อความที่มีตัวเลข / คำบอกที่อยู่ / คำทักทาย ไม่ใช่ชื่อ (กันเอาบรรทัดที่อยู่หรือ "ขอบคุณค่ะ" มาเป็นชื่อ) ไม่เจอ = คืนค่าว่าง ให้ผู้เรียกใช้ชื่อสำรอง
+function pickRecipientName(text, phoneText) {
+    const LABEL_RE = /^(ชื่อผู้รับ|ชื่อ-นามสกุล|ชื่อ|ผู้รับ)\s*[:.\-]?\s*/;
+    const TITLE_RE = /^(นางสาว|นาง|นาย|น\.ส\.|ด\.ช\.|ด\.ญ\.|คุณ)\s*[ก-๏a-zA-Z]/;
+    const NOT_NAME_RE = /(ต\.|อ\.|จ\.|ซ\.|ถ\.|ตำบล|อำเภอ|จังหวัด|ซอย|หมู่|ถนน|แขวง|เขต|รหัส|เลขที่|อาคาร|คอนโด|ไปรษณีย์|ที่อยู่|ส่งที่|กรุงเทพ|ขอบคุณ|ค่ะ|ครับ|ด่วน|ฝาก|สลิป|เปลี่ยน|เบอร์|โทร|tel|phone)/i;
+    const tidy = (s) => String(s || '').replace(/^คุณ\s*/, '').replace(/\s+/g, ' ').trim();
+    const looksLikeName = (s) => s.length >= 2 && s.length <= 40 && /[ก-๏a-zA-Z]/.test(s) && !/[0-9๐-๙]/.test(s) && !NOT_NAME_RE.test(s);
+    const raw = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+    const lines = raw.map(l => (phoneText ? l.replace(phoneText, '') : l).trim());
+    for (const l of lines) {
+        if (!LABEL_RE.test(l)) continue;
+        const s = tidy(l.replace(LABEL_RE, ''));
+        if (looksLikeName(s)) return s;
+    }
+    for (const l of lines) {
+        if (!TITLE_RE.test(l)) continue;
+        const s = tidy(l);
+        if (looksLikeName(s)) return s;
+    }
+    if (lines.length > 0) {
+        const s = tidy(lines[0].replace(/k\./gi, ''));
+        if (looksLikeName(s)) return s;
+    }
+    if (phoneText) {
+        const phoneLine = raw.find(l => l.includes(phoneText));
+        if (phoneLine) {
+            const s = tidy(phoneLine.slice(0, phoneLine.indexOf(phoneText)));
+            if (looksLikeName(s)) return s;
+        }
+    }
+    if (lines.length > 1) {
+        const s = tidy(lines[lines.length - 1]);
+        if (looksLikeName(s)) return s;
+    }
+    return '';
+}
 function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE') {
     if (!text || typeof text !== 'string') return null;
 
@@ -4525,15 +4564,8 @@ function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE')
     const subMatch = text.match(/(?:ต\.|ตำบล|แขวง)\s*([ก-๙a-zA-Z]+)/);
     if (subMatch) subdistrict = subMatch[1].trim();
 
-    // 6. สกัดชื่อผู้รับ (บรรทัดแรก หรือคำที่อยู่หน้าเบอร์โทร)
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    let recipient_name = '';
-    if (lines.length > 0) {
-        let firstLine = lines[0].replace(phoneMatch ? phoneMatch[0] : '', '').replace(/ชื่อ|ผู้รับ|คุณ|k\./gi, '').trim();
-        if (firstLine.length >= 2 && firstLine.length <= 40) {
-            recipient_name = firstLine;
-        }
-    }
+    // 6. สกัดชื่อผู้รับ — v1.0.17 (Phase C): หาจากทุกบรรทัด เพราะลูกค้ามักพิมพ์ชื่อไว้ท้ายข้อความ (ดู pickRecipientName)
+    let recipient_name = pickRecipientName(text, phoneMatch ? phoneMatch[0] : '');
 
     // 7. สกัดบ้านเลขที่/ซอย/ถนน (ข้อความที่เหลือ)
     let addressClean = text
@@ -4571,7 +4603,7 @@ async function parseThaiAddressWithAI(text, defaultName = 'ลูกค้า LI
         try {
             const prompt = `คุณคือผู้ช่วยสกัดที่อยู่จัดส่งพัสดุในประเทศไทย กรุณาวิเคราะห์ข้อความต่อไปนี้ และตอบกลับเป็น JSON เท่านั้น
 ข้อกำหนด:
-- recipient_name: ชื่อ-นามสกุลของผู้รับ (หากในข้อความไม่ได้ระบุชื่อคน ให้ตอบค่าว่าง "")
+- recipient_name: ชื่อ-นามสกุลของผู้รับ (หากในข้อความไม่ได้ระบุชื่อคน ให้ตอบค่าว่าง "") ชื่ออาจอยู่บรรทัดไหนก็ได้ รวมถึงท้ายข้อความ ไม่จำเป็นต้องอยู่บรรทัดแรก และห้ามเอาที่อยู่หรือคำทักทายมาเป็นชื่อ
 - phone: เบอร์โทรศัพท์ 10 หลัก (ตัดขีด ช่องว่าง หรือ +66 ให้เป็น 0XXXXXXXXX)
 - address: บ้านเลขที่ ซอย หมู่ ถนน อาคาร ชั้น
 - subdistrict: ตำบล หรือ แขวง (ตัดคำนำหน้า ต. หรือ แขวง ออกถ้ามี)
@@ -4719,10 +4751,13 @@ app.post('/webhook', async (req, res) => {
 
                 if (hasPhone || (hasPostcode && hasAddrKeyword)) {
                     const lineName = await getLineProfile(userId);
-                    const parsedAddress = await parseThaiAddressWithAI(text, lineName);
+                    // v1.0.17 (Phase C): ไม่ให้ตัวสกัดเติมชื่อ LINE เอง (ส่ง '') เพื่อรู้ว่าข้อความนี้มีชื่อผู้รับจริงหรือไม่
+                    const parsedAddress = await parseThaiAddressWithAI(text, '');
                     if (parsedAddress) {
                         const genericNames = ['ลูกค้า line', 'ลูกค้าline', 'ลูกค้า', 'คุณ', 'คุณลูกค้า', 'ลูกค้าทั่วไป'];
-                        if (!parsedAddress.recipient_name || genericNames.includes(parsedAddress.recipient_name.toLowerCase())) {
+                        const isGenericName = (n) => !n || genericNames.includes(String(n).trim().toLowerCase());
+                        const messageHasName = !isGenericName(parsedAddress.recipient_name);
+                        if (!messageHasName) {
                             parsedAddress.recipient_name = lineName || 'ลูกค้า LINE';
                         }
                         // บันทึกที่อยู่ลง configs ผูกกับ line_id ของลูกค้า
@@ -4735,6 +4770,10 @@ app.post('/webhook', async (req, res) => {
                                 for (const f of ['phone', 'address', 'subdistrict', 'district', 'province', 'postcode']) {
                                     const nv = parsedAddress[f];
                                     if ((nv === undefined || nv === null || String(nv).trim() === '') && prev[f]) parsedAddress[f] = prev[f];
+                                }
+                                // v1.0.17 (Phase C): ข้อความใหม่ไม่มีชื่อ (เช่น ส่งมาแค่เบอร์ใหม่) -> คงชื่อจริงที่ลูกค้าเคยพิมพ์ไว้ ไม่ทับด้วยชื่อ LINE
+                                if (!messageHasName && !isGenericName(prev.recipient_name) && String(prev.recipient_name).trim() !== String(lineName || '').trim()) {
+                                    parsedAddress.recipient_name = prev.recipient_name;
                                 }
                             }
                         } catch (mergeErr) { /* ไม่มีที่อยู่เดิม หรืออ่านไม่ได้ ใช้ข้อมูลใหม่ตามปกติ */ }
