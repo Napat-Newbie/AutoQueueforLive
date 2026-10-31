@@ -58,6 +58,8 @@ test('1010 repeated 6 times does not reach the dev-report channel at all (no fal
     assert.equal(sb.mock.discords.filter(d => /SlipOK|เครดิต|ขออัปเดต/.test(JSON.stringify(d))).length, 0);
 }, undefined, DEVREPORT));
 
+// v1.0.18 (owner decision 2026-10-31 "ปิดรูรั่ว"): this case moved from the generic red card (imageFails, kind 'duplicate')
+// to the actionable confirmation card (manualMatches, kind 'manual_match') — the money behaviour is unchanged: ONE payment counted.
 test('shop keys the amount, then the customer re-sends the same slip and it verifies: ONE payment is counted, the slip is linked', () => withSandbox(async sb => {
     const ev = await connectEvents(sb.base);
     try {
@@ -69,9 +71,10 @@ test('shop keys the amount, then the customer re-sends the same slip and it veri
         assert.equal(rows[0].trans_ref, 'BBL0001', 'the keyed slip now carries the bank reference');
         const st = await sb.stats();
         assert.equal(st.stats.totalAmount, 140); assert.equal(st.stats.totalDraws, 1);
-        assert.equal(st.imageFails.length, 1, 'the shop is told');
-        assert.match(st.imageFails[0].reason, /ไม่นับยอดซ้ำ/);
-        assert.equal(ev.named('slip_warning').filter(w => w.data.kind === 'duplicate').length, 1);
+        assert.equal(st.imageFails.length, 0, 'no generic red card anymore');
+        assert.equal(st.manualMatches.length, 1, 'the shop is told via the actionable confirmation card');
+        assert.equal(st.manualMatches[0].transRef, 'BBL0001');
+        assert.equal(ev.named('slip_warning').filter(w => w.data.kind === 'manual_match').length, 1);
         // a third send of the same slip is just the normal duplicate check now
         await sb.sendSlip('Ualice', 'm1c', 'kbbl'); await processed(sb, 'Ualice', 3);
         assert.equal(sb.slips().length, 1);

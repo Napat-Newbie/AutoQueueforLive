@@ -1019,6 +1019,8 @@ const ACTION_LOG_LABELS = {
     'POST /api/live_session/end': (b) => 'กดจบไลฟ์' + (b && b.holdMerge === true ? ' (รอรวมกับรอบหน้า)' : ''),
     'POST /api/live_session/hold': (b) => (b && b.hold === true) ? 'ตั้งรอบไลฟ์เป็นรอรวมบิลกับรอบหน้า' : 'ยกเลิกการรอรวมบิล',
     'POST /api/queue/manual_amount': (b) => `ใส่ยอดสลิปเอง${b && b.amount !== undefined ? ` ${Number(b.amount) || 0} บาท` : ''}`,
+    'POST /api/queue/manual_match_count_second': () => 'ยืนยันสลิปตรงกับยอดที่กรอกเอง = การโอนครั้งที่ 2 (บวกยอดให้ลูกค้า)',
+    'POST /api/queue/manual_match_dismiss': () => 'ยืนยันสลิปตรงกับยอดที่กรอกเอง = ใบเดียวกัน (ปิดการ์ดยืนยัน)',
     'POST /api/queue/verify_abnormal': () => 'ยืนยันสลิปผิดปกติ',
     'POST /api/queue/reject_slip': () => 'ปัดตกรูปที่ไม่ใช่สลิป',
     'POST /api/system/shutdown': () => 'กดปิดโปรแกรม',
@@ -2169,7 +2171,13 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
         const scopeIsCurrent = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
         if (scopeIsCurrent) imageFails = currentLineImageFailures();
     } catch (e) { imageFails = []; }
-    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.filter(q => !q.isPendingAmount).length }, queues, topups, recentSlips, imageFails };
+    // v1.0.18: การ์ดยืนยัน "สลิปตรงกับยอดที่กรอกเอง" (รอแม่ค้าตัดสินใจ อยู่จนกด — ค่าเริ่มต้นผูกเป็นใบเดียวกัน)
+    let manualMatches = [];
+    try {
+        const scopeIsCurrent2 = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
+        if (scopeIsCurrent2) manualMatches = currentManualMatchWarnings();
+    } catch (e) { manualMatches = []; }
+    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.filter(q => !q.isPendingAmount).length }, queues, topups, recentSlips, imageFails, manualMatches };
 }
 
 let broadcastTimer = null;
@@ -3801,6 +3809,7 @@ function carryOutOfRoundNotices(sessionId) {
     const earliest = bangkokDateString(-OUT_OF_ROUND_LOOKBACK_DAYS);
     let n = 0;
     lineImageFailures.forEach(f => { if (!f.sid && f.date >= earliest) { f.sid = sessionId; n++; } });
+    manualMatchWarnings.forEach(w => { if (!w.sid && w.date >= earliest) { w.sid = sessionId; } });   // v1.0.18: การ์ดยืนยันสลิปซ้ำก็ย้ายตามเข้ารอบเหมือนกัน
     return n;
 }
 // v1.0.16: สลิปที่ระบบ "ไม่บันทึก" โดยตั้งใจ (โอนผิดบัญชี / ซ้ำกับของลูกค้าอื่นหรือที่ปัดตกไปแล้ว) เดิมเงียบ เหลือแค่บรรทัดใน Logs
@@ -3813,6 +3822,105 @@ async function notifyUnrecordedSlip(customerName, messageId, reason, kind = 'oth
         await broadcastTodayStats();
     } catch (notifyErr) { /* การแจ้งเตือนหน้าจอล้มเหลวต้องไม่ทำให้ Webhook พัง */ }
 }
+
+// ❓ v1.0.18 (คำสั่งเจ้าของ 2026-10-31 "ปิดรูรั่ว"): สลิปตรวจผ่านที่ตรงกับยอดที่แม่ค้ากรอกเองไว้
+// ค่าเริ่มต้นปลอดภัยเหมือนเดิม = ผูกเป็นใบเดียวกัน ไม่นับซ้ำ (ระบบแยก "ส่งรูปเดิมซ้ำ" กับ "โอนครั้งที่ 2" ไม่ได้
+// ถ้าไม่ทดลองเทียบรหัส QR กับคีย์จริงตาม HANDOFF §4) — แต่เดิมเงินใบที่ 2 หายเงียบๆ เหลือแค่ toast 12 วินาที
+// ตอนนี้เป็นการ์ดยืนยันที่อยู่จนกด และแม่ค้ากด 1 ปุ่มกู้ยอดคืนได้ (บันทึกเป็นสลิปของตัวเอง คิดชิ้นตามสูตรเดิม)
+// ข้อจำกัด: เก็บในหน่วยความจำเหมือนการ์ดแดง — รีสตาร์ทโปรแกรมระหว่างที่การ์ดค้าง = โอกาสกู้ยอดหาย
+// (ยังเห็นเหตุการณ์ได้จากบรรทัด WARN "ผูกเป็นใบเดียวกัน" ใน system.log ให้แม่ค้าตรวจและแก้ด้วยมือ)
+let manualMatchWarnings = [];
+let manualMatchSeq = 0;
+function recordManualMatchWarning({ name, lineId, slipId, transRef, amount, transDate, transTime }) {
+    const item = { id: ++manualMatchSeq, name: name || 'ลูกค้า (ไม่ทราบชื่อ)', lineId: lineId || null, slipId, transRef, amount: Number(amount) || 0, transDate: transDate || null, transTime: transTime || null, time: new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Bangkok', hour12: false }), sid: activeLiveSession ? activeLiveSession.id : null, date: getTodayString() };
+    manualMatchWarnings.push(item);
+    if (manualMatchWarnings.length > 50) manualMatchWarnings.shift();
+    return item;
+}
+function currentManualMatchWarnings() {
+    const today = getTodayString();
+    return manualMatchWarnings
+        .filter(w => activeLiveSession ? w.sid === activeLiveSession.id : (!w.sid && w.date === today))
+        .map(w => ({ id: w.id, name: w.name, slipId: w.slipId, transRef: w.transRef, amount: Number(w.amount) || 0, time: w.time }));
+}
+function dropManualMatchWarning(id) {
+    const before = manualMatchWarnings.length;
+    manualMatchWarnings = manualMatchWarnings.filter(w => w.id !== id);
+    return manualMatchWarnings.length !== before;
+}
+
+// ➕ แม่ค้ายืนยัน "เป็นการโอนครั้งที่ 2 จริง": ย้ายรหัสออกจากใบที่กรอกยอดเอง แล้วเปิดสลิปใหม่ให้การโอนครั้งที่ 2
+// คิดยอด/ชิ้น/กระเป๋าด้วยสูตรเดียวกับ /api/queue/manual_amount ทุกบรรทัด ทำทั้งหมดใน transaction เดียว
+app.post('/api/queue/manual_match_count_second', async (req, res) => {
+    const matchId = Number(req.body && req.body.matchId);
+    if (!Number.isInteger(matchId) || matchId <= 0) return res.status(400).json({ success: false, message: 'รหัสการ์ดไม่ถูกต้อง' });
+    const warn = manualMatchWarnings.find(w => w.id === matchId);
+    if (!warn) return res.status(404).json({ success: false, message: 'ไม่พบการ์ดนี้ (อาจถูกจัดการไปแล้วหรือโปรแกรมเปิดใหม่)' });
+    const amount = Number(warn.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) return res.status(400).json({ success: false, message: 'ยอดเงินที่จดไว้ไม่ถูกต้อง' });
+    try {
+        const result = supabase.runTransaction(() => {
+            const keyed = supabase.db.prepare('SELECT id, amount, trans_ref, status FROM slips WHERE id = ?').get(warn.slipId);
+            if (!keyed || keyed.trans_ref !== warn.transRef) throw new Error('KEYED_SLIP_CHANGED');   // ใบที่กรอกยอดเองไม่ได้ถือรหัสนี้อยู่แล้ว (มีคนจัดการไปก่อน)
+            const dup = supabase.db.prepare("SELECT id FROM slips WHERE trans_ref = ? AND id != ? AND trans_ref IS NOT NULL AND trans_ref != '' LIMIT 1").get(warn.transRef, keyed.id);
+            if (dup) throw new Error('DUPLICATE_SLIP');
+            const customer = supabase.db.prepare('SELECT * FROM customers WHERE line_id = ?').get(warn.lineId);
+            const currentBalance = (customer ? customer.balance : 0) + amount;
+            const pastDrawsToday = countPastDraws(warn.lineId, { excludeRejected: true });
+            const hasPaidShippingToday = (pastDrawsToday > 0 && pastDrawsToday < freeShippingThreshold);
+            const virtualBalance = currentBalance + (hasPaidShippingToday ? shippingFee : 0);
+            const draws = calculateBestDraws(virtualBalance, pastDrawsToday, { holdExactPrice: true });
+            const status = draws.draws > 0 ? 'waiting' : 'accumulated';
+            const finalBalance = walletAfter(draws, currentBalance);
+            // ใบที่กรอกยอดเองคือการโอนครั้งที่ 1 (ไม่มีรหัสของตัวเอง) — คืนรหัสว่างให้ แล้วรหัสนี้เป็นของใบใหม่ (กันนับซ้ำถ้าลูกค้าส่งรูปเดิมซ้ำอีก)
+            supabase.db.prepare('UPDATE slips SET trans_ref = NULL WHERE id = ? AND trans_ref = ?').run(keyed.id, warn.transRef);
+            if (customer) {
+                supabase.db.prepare('UPDATE customers SET balance = ?, name = ? WHERE line_id = ?').run(finalBalance, warn.name, warn.lineId);
+            } else {
+                supabase.db.prepare('INSERT INTO customers (line_id, name, balance) VALUES (?, ?, ?)').run(warn.lineId, warn.name, finalBalance);
+            }
+            const info = supabase.db.prepare(`
+                INSERT INTO slips (amount, draws, line_id, sender_name, line_name, session_id, trans_date, trans_time, trans_ref, qr_payload, status, arrived_out_of_round)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                amount, draws.draws, warn.lineId, warn.name, warn.name,
+                activeLiveSession ? activeLiveSession.id : null,
+                warn.transDate || getTodayString(), warn.transTime || getLocalTimeString(),
+                warn.transRef, `manual_count_second|${warn.transRef}`, status,
+                activeLiveSession ? 0 : 1
+            );
+            return { id: info.lastInsertRowid, draws: draws.draws, balance: finalBalance };
+        });
+        dropManualMatchWarning(matchId);
+        const drawsTxt = result.draws > 0 ? `ได้ ${result.draws} ชิ้น` : 'ยอดยังไม่พอ (เข้าการ์ดส้มรอโอนเพิ่ม)';
+        addLog('WARN', `🖥️ แม่ค้ายืนยันว่าสลิปรหัส ${warn.transRef} (${fmtBaht(amount)} บาท) เป็นการโอนครั้งที่ 2 จริง — บันทึกเป็นสลิปใหม่ #${result.id} ${drawsTxt} (ย้ายรหัสออกจากสลิป #${warn.slipId} ที่กรอกยอดเองไว้ เงินคงเหลือในกระเป๋า ${result.balance} บาท)`);
+        if (result.draws > 0) io.emit('play_sound');   // การ์ดใหม่ได้สิทธิ์ = เสียงคิวใหม่เหมือนทางอื่น
+        await broadcastTodayStats();
+        res.json({ success: true, draws: result.draws, remainder: result.balance });
+    } catch (e) {
+        if (e.message === 'KEYED_SLIP_CHANGED' || e.message === 'DUPLICATE_SLIP') {
+            dropManualMatchWarning(matchId);
+            addLog('WARN', `การ์ดยืนยันสลิปรหัส ${warn.transRef} เลิกใช้ (สถานะสลิปเปลี่ยนไปจากที่ระบบจดไว้: ${e.message}) — ปิดการ์ดให้อัตโนมัติ โปรดตรวจยอดด้วยตัวเอง`);
+            await broadcastTodayStats();
+            return res.status(409).json({ success: false, message: 'สถานะสลิปเปลี่ยนไปจากที่ระบบจดไว้ ปิดการ์ดนี้แล้ว โปรดตรวจยอดกับสลิปจริงอีกครั้ง' });
+        }
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ✔ แม่ค้ายืนยัน "เป็นสลิปใบเดียวกัน (ลูกค้าส่งรูปเดิมซ้ำ)": ปิดการ์ด คงพฤติกรรมเดิมทุกอย่าง (นับ 140 ไม่นับซ้ำ)
+app.post('/api/queue/manual_match_dismiss', async (req, res) => {
+    try {
+        const matchId = Number(req.body && req.body.matchId);
+        if (!Number.isInteger(matchId) || matchId <= 0) return res.status(400).json({ success: false, message: 'รหัสการ์ดไม่ถูกต้อง' });
+        const warn = manualMatchWarnings.find(w => w.id === matchId);
+        if (!warn) return res.status(404).json({ success: false, message: 'ไม่พบการ์ดนี้' });
+        dropManualMatchWarning(matchId);
+        addLog('INFO', `🖥️ แม่ค้ายืนยันว่าสลิปรหัส ${warn.transRef} คือใบเดียวกับที่กรอกยอดเองไว้ (สลิป #${warn.slipId}) — ปิดการ์ดยืนยัน ไม่นับยอดซ้ำ`);
+        await broadcastTodayStats();
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
 
 // ⚡ ระบบติดตามและตรวจสอบโควตาเครดิต API ตรวจสลิป (ป้องกัน Risk 2)
 let providerQuotaState = {
@@ -4907,8 +5015,11 @@ app.post('/webhook', async (req, res) => {
                     const keyedMatch = pickManualMatch(manualRows.filter(r => Number(r.amount) > 0 && !r.trans_ref), amount, transferSec);
                     if (keyedMatch) {
                         supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(transRef, keyedMatch.id);
-                        await notifyUnrecordedSlip(lineName, messageId, `สลิปรหัส ${transRef} (ยอด ${fmtBaht(amount)} บาท) ตรงกับสลิปที่แม่ค้ากรอกยอดเองไว้ (สลิป #${keyedMatch.id}) ระบบถือเป็นใบเดียวกันและไม่นับยอดซ้ำ ถ้าลูกค้าโอนแยกกัน 2 ครั้งจริง ให้เช็กกับลูกค้า`, 'duplicate');
-                        addLog('WARN', `สลิปรหัส ${transRef} ของ "${lineName}" ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${keyedMatch.id}, ${fmtBaht(amount)} บาท) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ`);
+                        // v1.0.18: ขึ้นการ์ดยืนยันถาวรให้แม่ค้าตัดสิน (แทน toast 12 วิ ที่หายไปพร้อมเงิน) — กด 1 ปุ่มบวกยอดครั้งที่ 2 ได้
+                        recordManualMatchWarning({ name: lineName, lineId: userId, slipId: keyedMatch.id, transRef, amount, transDate: slipData.transDate, transTime: slipData.transTime });
+                        io.emit('slip_warning', { kind: 'manual_match', name: lineName || 'ลูกค้า (ไม่ทราบชื่อ)', reason: `สลิปรหัส ${transRef} (ยอด ${fmtBaht(amount)} บาท) ตรงกับสลิปที่แม่ค้ากรอกยอดเองไว้ (สลิป #${keyedMatch.id}) ระบบถือเป็นใบเดียวกันชั่วคราว ไม่นับซ้ำ — ถ้าลูกค้าโอนแยกกัน 2 ครั้งจริง กดปุ่มส้มบนการ์ดยืนยัน` });
+                        addLog('WARN', `สลิปรหัส ${transRef} ของ "${lineName}" ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${keyedMatch.id}, ${fmtBaht(amount)} บาท) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ — ขึ้นการ์ดยืนยันให้แม่ค้า (กด "บวกยอด" ได้ถ้าเป็นการโอนครั้งที่ 2 จริง)`);
+                        await broadcastTodayStats();
                         continue;
                     }
                     const stillOpen = manualRows.filter(r => Number(r.amount) === 0 && r.status === 'waiting' && (() => { const a = stampToSec(r.trans_date, r.trans_time); return a !== null && transferSec !== null && a + MANUAL_MATCH_TOLERANCE_SEC >= transferSec && a - MANUAL_MATCH_MAX_AGE_SEC <= transferSec; })());   // หน้าต่างเดียวกับ pickManualMatch

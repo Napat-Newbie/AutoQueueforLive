@@ -25,15 +25,54 @@ async function firstTransferKeyed(sb, amount = 140, arrival = '10:00:00') {
     return id;
 }
 
-// TODO(review finding 1): fails today by design -> marked `todo` so CI stays green until the owner decides the policy (see the note at the top).
-test('two same-amount transfers back to back: transfer #2 (verified, own bank reference, 09:59:00) arrives AFTER transfer #1 was keyed -> both must be counted', { todo: 'index.js pickManualMatch links transfer #2 to the keyed slip and drops it (only 140 of 280 counted); needs a policy decision' }, () => withSandbox(async sb => {
+// Owner decision 2026-10-31 ("ปิดรูรั่ว", after seeing this very todo): the DEFAULT stays safe — transfer #2 is still
+// linked to the keyed slip (140 counted, no auto double count, because without the real-key QR experiment the guard
+// cannot tell "same slip re-sent" from "a second transfer", HANDOFF §4). What changed: the dropped payment is no longer
+// a 12-second toast — the merchant gets a persistent confirmation card (full_sync `manualMatches`) and ONE-TAP recovery:
+//   POST /api/queue/manual_match_count_second  = "it really was a second transfer" (records it, 280 counted)
+//   POST /api/queue/manual_match_dismiss       = "it was the same slip re-sent" (keeps 140, card closes)
+test('back-to-back second transfer: default stays linked (140, no auto double count) and the merchant sees an actionable confirmation card', () => withSandbox(async sb => {
     await firstTransferKeyed(sb, 140);
     sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SEC0002', transDate: bkkDate(), transTime: '09:59:00' });
     await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
     const st = await sb.stats();
-    assert.equal(st.stats.totalAmount, 280, 'the customer paid 2 x 140 but only ' + st.stats.totalAmount + ' is counted');
+    assert.equal(st.stats.totalAmount, 140, 'safe default: linked as one slip, nothing counted twice');
+    assert.ok(Array.isArray(st.manualMatches) && st.manualMatches.length === 1, 'an actionable confirmation card exists');
+    const m = st.manualMatches[0];
+    assert.equal(m.transRef, 'SEC0002');
+    assert.equal(Number(m.amount), 140);
+}));
+
+test('back-to-back second transfer: one-tap "count the second transfer" records it (280 / 2 draws, own slip row) and cannot be pressed twice', () => withSandbox(async sb => {
+    await firstTransferKeyed(sb, 140);
+    sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SEC0002', transDate: bkkDate(), transTime: '09:59:00' });
+    await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
+    const matchId = (await sb.stats()).manualMatches[0].id;
+    const r = await sb.post('/api/queue/manual_match_count_second', { matchId });
+    assert.equal(r.json.success, true);
+    const st = await sb.stats();
+    assert.equal(st.stats.totalAmount, 280, 'the customer paid 2 x 140 and both are counted now');
     assert.equal(st.stats.totalDraws, 2);
     assert.ok(sb.slips().some(s => s.trans_ref === 'SEC0002' && s.status !== 'rejected'), 'the second transfer has its own recorded slip');
+    const keyed = sb.slips().find(s => (s.qr_payload || '').startsWith('manual_image'));
+    assert.ok(keyed && !keyed.trans_ref, 'the keyed slip (transfer #1) no longer carries the second transfer reference');
+    assert.equal(st.manualMatches.length, 0, 'the confirmation card is gone after the decision');
+    const again = await sb.post('/api/queue/manual_match_count_second', { matchId });
+    assert.equal(again.status, 404, 'pressing again finds no card — idempotent');
+    assert.equal((await sb.stats()).stats.totalAmount, 280, 'nothing extra was counted');
+}));
+
+test('back-to-back second transfer: dismissing as "same slip re-sent" keeps 140 and closes the card', () => withSandbox(async sb => {
+    await firstTransferKeyed(sb, 140);
+    sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SEC0002', transDate: bkkDate(), transTime: '09:59:00' });
+    await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
+    const matchId = (await sb.stats()).manualMatches[0].id;
+    const d = await sb.post('/api/queue/manual_match_dismiss', { matchId });
+    assert.equal(d.json.success, true);
+    const after = await sb.stats();
+    assert.equal(after.stats.totalAmount, 140, 'dismiss = the old behaviour stands (one slip, 140)');
+    assert.equal(after.stats.totalDraws, 1);
+    assert.equal(after.manualMatches.length, 0, 'card closed');
 }));
 
 test('same two transfers but the verified slip arrives BEFORE the shop keys transfer #1 -> both are counted (shows the result depends only on the order)', () => withSandbox(async sb => {
