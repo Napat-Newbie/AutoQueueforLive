@@ -161,17 +161,46 @@ test('same slip re-sent, shop clock 2.5 minutes behind the bank clock (arrival 1
     assert.equal((await sb.stats()).stats.totalAmount, 140);
 }));
 
-// v1.0.18: different QR reference = provably a DIFFERENT payment, even inside the time window where the old
-// guard would have linked and dropped it. Both transfers are counted automatically — no confirmation card.
-test('second same-amount transfer INSIDE the window but with a DIFFERENT qr_ref -> counted automatically, no confirmation card', () => withSandbox(async sb => {
+// Review 2026-10-31 19:17 (owner: "แก้ความเสี่ยงก่อน"): a DIFFERENT qr_ref is NOT proof of a different payment.
+// "QR sub-tag 02 == transRef" was proven on ONE KTB slip only; for BBL / SCB the two were never compared (those test
+// slips never returned 200), and the BBL QR sub-tag (date + time + digits) may never equal SlipOK's transRef for the
+// SAME slip. Treating "not equal" as "another payment" then double-counts exactly the case this guard exists for:
+// BBL 1010 -> the shop keys the amount -> the customer re-sends the same picture after the bank delay.
+// So only EQUALITY is used as proof; a differing / incomparable reference keeps the safe default (linked, one slip,
+// persistent confirmation card with one-tap "count the second transfer").
+test('REAL BBL flow: 1010 stores the QR ref, shop keys 140, the SAME picture is re-sent and SlipOK answers a differently-shaped transRef -> NOT counted twice, card shown', () => withSandbox(async sb => {
+    sb.mock.profile('Ualice', 'Alice');
+    // the real Bangkok Bank slip QR captured in the owner-key experiment (tests/unit/qr-ref.test.js)
+    sb.mock.slips.set('kbblreal', { status: 400, body: { code: 1010, message: 'wait', data: { qrcodeData: '004600060000010103002022520261031140047230057235085102TH910468F0', bankCode: '002', bankName: 'กรุงเทพ', delay: 7 } } });
+    await sb.sendSlip('Ualice', 'm1', 'kbblreal'); await sb.waitForSlips(1); await sleep(300);
+    const id = sb.slips()[0].id;
+    assert.equal(sb.slips()[0].qr_ref, '2026103114004723005723508', 'precondition: the pending card got its qr_ref from the 1010 answer');
+    sb.exec('UPDATE slips SET trans_date = ?, trans_time = ? WHERE id = ?', bkkDate(), '10:00:00', id);
+    assert.equal((await sb.post('/api/queue/manual_amount', { slipId: id, amount: 140 })).json.success, true);
+    // same picture after the delay: SlipOK now verifies it. Its transRef format for BBL is UNKNOWN (never captured);
+    // anything not byte-equal to the QR sub-tag must not be read as "another payment".
+    sb.mock.slipOk('kbblreal', { amount: 140, transRef: '016304100047BPM05123', transDate: bkkDate(), transTime: '09:59:30' });
+    await sb.sendSlip('Ualice', 'm2', 'kbblreal'); await processed(sb, 'Ualice', 2);
+    const st = await sb.stats();
+    assert.equal(st.stats.totalAmount, 140, 'one picture, one payment: 140 must not become 280');
+    assert.equal(st.stats.totalDraws, 1);
+    assert.equal(sb.slips().length, 1, 'linked to the keyed slip, no second row');
+    assert.equal(st.manualMatches.length, 1, 'the merchant still gets the confirmation card (one tap if it really was a second transfer)');
+}));
+
+test('second same-amount transfer INSIDE the window with a DIFFERENT qr_ref -> safe default (linked + card), one tap counts it', () => withSandbox(async sb => {
     await firstTransferKeyed(sb, 140, '10:00:00', 'FIRST01');
     sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SEC0002', transDate: bkkDate(), transTime: '09:59:00' });
     await sb.sendSlip('Ualice', 'm2', 'ksecond'); await processed(sb, 'Ualice', 2);
     const st = await sb.stats();
-    assert.equal(st.stats.totalAmount, 280, 'the customer paid 2 x 140 and BOTH are counted');
-    assert.equal(st.stats.totalDraws, 2);
+    assert.equal(st.stats.totalAmount, 140, 'a differing reference is not proof -> not counted automatically');
+    assert.equal(st.manualMatches.length, 1, 'confirmation card shown');
+    const r = await sb.post('/api/queue/manual_match_count_second', { matchId: st.manualMatches[0].id });
+    assert.equal(r.json.success, true);
+    const after = await sb.stats();
+    assert.equal(after.stats.totalAmount, 280, 'one tap: both transfers counted');
+    assert.equal(after.stats.totalDraws, 2);
     assert.ok(sb.slips().some(s => s.trans_ref === 'SEC0002' && s.status !== 'rejected'), 'the second transfer has its own slip row');
-    assert.equal(st.manualMatches.length, 0, 'no confirmation card — the references already prove these are different payments');
 }));
 
 // v1.0.18: the pending card stores its slip-QR reference at creation time. SlipOK hands the QR text back for
