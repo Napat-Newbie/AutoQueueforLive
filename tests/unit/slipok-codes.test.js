@@ -9,8 +9,9 @@ const path = require('path');
 const vm = require('vm');
 
 const src = fs.readFileSync(process.env.AQ_TEST_INDEX_JS || path.join(__dirname, '..', '..', 'index.js'), 'utf8').replace(/\r\n/g, '\n');
-// v1.0.19: classifySlipOkError ย้ายไป lib/slipVerify.js — ตัดจากไฟล์จริงของโมดูล (assertion เดิมทุกตัว ไม่แก้) / stampToSec + pickManualMatch ยังอยู่ใน index.js
+// v1.0.19: classifySlipOkError ย้ายไป lib/slipVerify.js, stampToSec ย้ายไป lib/dates.js — ตัดจากไฟล์จริงของโมดูล (assertion เดิมทุกตัว ไม่แก้) / pickManualMatch ยังอยู่ใน index.js
 const libSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'slipVerify.js'), 'utf8').replace(/\r\n/g, '\n');
+const libDatesSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'dates.js'), 'utf8').replace(/\r\n/g, '\n');
 function cutFrom(text, name, keyword = 'function') {
     const start = text.indexOf(`${keyword} ${name}`);
     if (start < 0) throw new Error(`${name} not found`);
@@ -21,7 +22,8 @@ const ctx = { Number, String, Object, Math, Date, Array };
 vm.createContext(ctx);
 vm.runInContext('const MANUAL_MATCH_TOLERANCE_SEC = 120;\nconst MANUAL_MATCH_MAX_AGE_SEC = 60 * 60;', ctx);
 vm.runInContext(cutFrom(libSrc, 'classifySlipOkError'), ctx);
-['stampToSec', 'pickManualMatch'].forEach(n => vm.runInContext(cut(n), ctx));
+vm.runInContext(cutFrom(libDatesSrc, 'stampToSec'), ctx);
+vm.runInContext(cut('pickManualMatch'), ctx);
 const BBL = { code: 1010, message: 'x', data: { bankCode: '002', bankName: 'กรุงเทพ', delay: 7, qrcodeData: 'Q' } };
 
 test('1010 (Bangkok Bank delay) is a calm WARN that names the bank and the minutes, not a credit problem', () => {

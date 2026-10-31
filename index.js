@@ -1712,21 +1712,8 @@ app.post('/api/admin/storage/cleanup_uploads', (req, res) => {
     }
 });
 
-function getTodayString() { 
-    const date = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Bangkok"}));
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, '0');
-    const dd = String(date.getDate()).padStart(2, '0');
-    return `${yyyy}${mm}${dd}`; 
-}
-
-function getLocalTimeString() {
-    const date = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Bangkok"}));
-    const hh = String(date.getHours()).padStart(2, '0');
-    const mm = String(date.getMinutes()).padStart(2, '0');
-    const ss = String(date.getSeconds()).padStart(2, '0');
-    return `${hh}:${mm}:${ss}`;
-}
+// v1.0.19: ตัวช่วยวันที่/เวลาไทย (ล้วนทั้ง 4) ย้ายไป lib/dates.js — ตัวอักษรเดิมทุกตัว / เทสต์ตรง: tests/unit/dates.test.js
+const { getTodayString, getLocalTimeString, bangkokDateString, stampToSec } = require('./lib/dates');
 
 // v1.0.15: รวมบิล 2 รอบไลฟ์ (รอบ A กด "รอรวมกับรอบหน้า" -> รอบ B ถัดไปรวมบิลกับ A)
 // เก็บสถานะไว้ในข้อมูลรอบไลฟ์เดิม (configs: session_hist_<id> / active_live_session) ไม่แตะตารางสลิปหรือลูกค้า
@@ -1786,11 +1773,7 @@ function canHoldSession(rec) {
 //  - วันที่โอนเป็นวันนี้หรือย้อนหลังไม่เกิน OUT_OF_ROUND_LOOKBACK_DAYS วัน (เวลาไทย)
 const OUT_OF_ROUND_LOOKBACK_DAYS = 1;
 const OUT_OF_ROUND_PENDING_STATUSES = ['waiting', 'called', 'skipped', 'abnormal_pending', 'accumulated'];
-function bangkokDateString(offsetDays = 0) {
-    const d = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Bangkok"}));
-    d.setDate(d.getDate() + offsetDays);
-    return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-}
+// (bangkokDateString ย้ายไป lib/dates.js แล้ว — ดึงมาชื่อเดิมด้านบน)
 // ===== v1.0.19: แยก "เงินมาก่อนเริ่มไลฟ์" ออกจาก "ยอดจุ่มหลังจบไลฟ์" =====
 // เจ้าของตรวจพบ (2026-10-31): ป้ายเดิมเขียน "เงินมาหลังจบไลฟ์" ทุกกรณี ทั้งที่เงินที่มาก่อนไลฟ์รอบแรกของช่วง
 // คือเงินเตรียมตัว (ไม่เสี่ยงส่งของซ้ำ) ส่วนเงินที่มาหลังมีรอบไลฟ์จบไปแล้วคือยอดจุ่ม (ระวังส่งซ้ำ)
@@ -4120,12 +4103,7 @@ async function runBankDelayRecheck(slipId, imageFile, delayMin, attempt) {
 // ราวบน (โอนไม่ช้ากว่ารูป + 120 วิ) เผื่อนาฬิการ้าน/ธนาคารเพี้ยนเล็กน้อย -- โอนใหม่ทีหลังรูปแรกคือเงินก้อนใหม่
 // ราวล่าง (โอนไม่เก่ากว่ารูปเกิน 60 นาที, เจ้าของร้านตกลง 2026-10-31) กันสลิปเก่าของเมื่อวานที่ไม่เคยบันทึก
 //   ถูกดูดรวมกับยอดที่แม่ค้ากรอกของวันนี้จนเงินหาย -- 60 นาที = รอธนาคารยืนยัน ~8 นาที + เผื่อลูกค้าส่งรูปซ้ำช้า
-function stampToSec(dateStr, timeStr) {
-    const d = String(dateStr || '').match(/^(\d{4})(\d{2})(\d{2})$/);
-    const t = String(timeStr || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-    if (!d || !t) return null;
-    return Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]), Number(t[3] || 0)) / 1000;
-}
+// (stampToSec ย้ายไป lib/dates.js แล้ว — ดึงมาชื่อเดิมด้านบน)
 // ===== v1.0.18: ตัวตนของรายการจาก QR ของสลิป =====
 // พิสูจน์ด้วยคีย์ SlipOK จริง (2026-10-31): sub-tag 02 ใน QR ของสลิป == transRef ที่ SlipOK ตอบตอนตรวจผ่าน
 // (สลิปกรุงไทยตรงกันทุกตัวอักษร A0aa74ba726a04481) — จึงใช้เป็นบัตรประจำตัวรายการจับคู่แทนการเดาจากเวลาได้
