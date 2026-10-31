@@ -536,6 +536,11 @@
                     <span id="lastSlipText">📨 สลิปล่าสุด: -</span>
                 </div>
 
+                <!-- v1.0.17: สถานะเสียงแจ้งเตือน (เบราว์เซอร์ไม่ให้เล่นเสียงจนกว่าจะแตะหน้าจอ 1 ครั้ง) คลิกเพื่อทดลองฟังเสียงคิวใหม่ -->
+                <div id="soundStatusPill" onclick="testNewSlipSound()" title="คลิกเพื่อเปิดเสียงและทดลองฟังเสียงคิวใหม่" style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 0.84em; cursor: pointer; background: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1;">
+                    <span id="soundStatusText">🔇 กดหน้าจอ 1 ครั้งเพื่อเปิดเสียง</span>
+                </div>
+
                 <div id="quotaStatusPill" onclick="checkQuotaManual()" title="คลิกเพื่อตรวจเช็กเครดิตคงเหลือของผู้ให้บริการตรวจสลิป" style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 0.84em; cursor: pointer; transition: all 0.2s; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; font-weight: 500;">
                     <span id="quotaIcon">⚡</span>
                     <span id="quotaStatusText">เช็คเครดิต API...</span>
@@ -1544,11 +1549,11 @@
         function getAudioCtx() {
             const Ctx = window.AudioContext || window.webkitAudioContext;
             if (!Ctx) return null;
-            if (!__audioCtx) __audioCtx = new Ctx();
+            if (!__audioCtx) { __audioCtx = new Ctx(); try { __audioCtx.onstatechange = () => updateSoundStatus(); } catch (e) {} }
             if (__audioCtx.state === 'suspended') { try { __audioCtx.resume(); } catch (e) {} }
             return __audioCtx;
         }
-        ['click', 'keydown', 'touchstart'].forEach(evt => document.addEventListener(evt, () => { try { getAudioCtx(); } catch (e) {} }, { passive: true }));
+        ['click', 'keydown', 'touchstart'].forEach(evt => document.addEventListener(evt, () => { try { getAudioCtx(); } catch (e) {} setTimeout(updateSoundStatus, 150); }, { passive: true }));
         function playToneSequence(frequencies, durations, type, volume) {
             try {
                 const ctx = getAudioCtx();
@@ -1573,13 +1578,67 @@
             } catch (e) { console.warn('Audio blocked or unsupported:', e); }
         }
         const SOUND_PRESETS = {
-            newSlip: { freqs: [523.25, 659.25], durs: [0.1, 0.1], type: 'sine' },                       // ปิ๊ง C5 -> E5
+            newSlip: { freqs: [523.25, 659.25, 783.99], durs: [0.16, 0.16, 0.34], type: 'sine', volume: 0.35 },   // v1.0.17: C5 -> E5 -> G5 ไล่ขึ้น ดังและยาวขึ้น (เดิม 2 โน้ต 0.1 วิ เบาจนไม่ได้ยิน)
             warnBeep: { freqs: [600, 0, 600], durs: [0.1, 0.06, 0.1], type: 'sine' },                          // สลิปซ้ำ/โอนผิดบัญชี: บี๊ปคู่สั้น 600Hz
             pendingChord: { freqs: [[523.25, 659.25, 783.99]], durs: [0.7], type: 'sine', volume: 0.2 },        // สลิปไม่มี QR: คอร์ด C-E-G
             quotaAlert: { freqs: [550, 0, 550], durs: [0.18, 0.1, 0.18], type: 'sine' },                // โควตาหมด 2 ครั้ง
             siren: { freqs: [440, 880, 440, 880, 440, 880], durs: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25], type: 'square', volume: 0.12 }   // ท่อหลุด
         };
         function playPreset(name) { const p = SOUND_PRESETS[name]; if (p) playToneSequence(p.freqs, p.durs, p.type, p.volume); }
+
+        // ===== v1.0.17: เสียงคิวใหม่ไม่หลุด + ตัวบอกสถานะเสียง =====
+        // event play_sound หายได้ถ้า socket หลุดช่วงนั้น -> ตอนหน้าจอวาดคิวใหม่ (full_sync / ต่อเน็ตกลับ) ถ้าเจอการ์ดคิวรอที่ไม่เคยเห็น ให้ดังเอง
+        // play_sound กับการวาดหน้าจอที่ตามมาของสลิปเดียวกันมาห่างกันไม่ถึง 2 วิ -> ดังครั้งเดียว
+        const NEW_SLIP_SOUND_DEDUP_MS = 2000;
+        let __lastNewSlipSoundAt = 0;
+        const __queueSeen = new Set();
+        let __queueSeenReady = false;
+        function playNewSlipSound() {
+            const now = Date.now();
+            if (now - __lastNewSlipSoundAt < NEW_SLIP_SOUND_DEDUP_MS) return false;
+            __lastNewSlipSoundAt = now;
+            playPreset('newSlip');
+            return true;
+        }
+        // คืนเลขสลิปของการ์ดคิวรอที่ยังไม่เคยเห็น ทุกกลุ่มคิวถูกจำไว้ (ย้ายการ์ดข้ามกลุ่มไม่นับเป็นของใหม่)
+        // การ์ดรอใส่ยอดยังไม่ใช่คิว จึงไม่จำ -> ตอนอัปเกรดเป็นคิว (แม่ค้าใส่ยอด / ตรวจซ้ำผ่าน) จะนับเป็นของใหม่
+        function newQueueSlipIds(data, seen) {
+            const fresh = [];
+            const queues = (data && data.queues) || {};
+            ['waiting', 'called', 'skipped', 'abnormal_pending'].forEach(group => {
+                (queues[group] || []).forEach(q => {
+                    if (!q || q.isPendingAmount) return;
+                    (Array.isArray(q.slipIds) && q.slipIds.length ? q.slipIds : [q.id]).forEach(id => {
+                        if (seen.has(id)) return;
+                        seen.add(id);
+                        if (group === 'waiting') fresh.push(id);
+                    });
+                });
+            });
+            return fresh;
+        }
+        function soundStatusView(state) {
+            if (state === 'running') return { text: '🔔 เสียงแจ้งเตือนเปิดอยู่', bg: '#dcfce7', fg: '#15803d', border: '#86efac' };
+            if (state === 'unsupported') return { text: '🔇 เบราว์เซอร์นี้เล่นเสียงไม่ได้', bg: '#fee2e2', fg: '#b91c1c', border: '#fca5a5' };
+            return { text: '🔇 กดหน้าจอ 1 ครั้งเพื่อเปิดเสียง', bg: '#f1f5f9', fg: '#64748b', border: '#cbd5e1' };
+        }
+        function updateSoundStatus() {
+            try {
+                const pill = document.getElementById('soundStatusPill'); const txt = document.getElementById('soundStatusText');
+                if (!pill || !txt) return;
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                const v = soundStatusView(!Ctx ? 'unsupported' : (__audioCtx ? __audioCtx.state : 'suspended'));
+                txt.textContent = v.text; pill.style.background = v.bg; pill.style.color = v.fg; pill.style.borderColor = v.border;
+            } catch (e) {}
+        }
+        function testNewSlipSound() { __lastNewSlipSoundAt = 0; playNewSlipSound(); setTimeout(updateSoundStatus, 150); }
+        // กลับมาที่แท็บ / หน้าต่างได้โฟกัส: ปลุกเสียงที่เบราว์เซอร์พักไว้ (ครั้งแรกสุดยังต้องแตะหน้าจอ 1 ครั้งตามนโยบายเบราว์เซอร์)
+        ['focus', 'visibilitychange'].forEach(evt => (evt === 'focus' ? window : document).addEventListener(evt, () => {
+            try { if (__audioCtx && __audioCtx.state !== 'running') __audioCtx.resume().then(updateSoundStatus, updateSoundStatus); } catch (e) {}
+            updateSoundStatus();
+        }));
+        setInterval(updateSoundStatus, 5000);
+        updateSoundStatus();
 
         // ===== v1.0.16: ประวัติแจ้งเตือน 20 รายการล่าสุด + Toast + การ์ดรอใส่ยอดกะพริบ =====
         const NOTIF_HISTORY_MAX = 20;
@@ -2122,6 +2181,10 @@
             });
             if(data.queues.skipped) data.queues.skipped.forEach(q => addQueueToScreen(q));
             if(data.queues.abnormal_pending) data.queues.abnormal_pending.forEach(q => addQueueToScreen(q));
+            // v1.0.17: การ์ดคิวรอใหม่ที่ไม่เคยเห็น = เสียงคิวใหม่ (กัน play_sound หาย) ครั้งแรกที่เปิดหน้าแค่จำไว้ ไม่ดัง
+            const freshQueueIds = newQueueSlipIds(data, __queueSeen);
+            if (__queueSeenReady && freshQueueIds.length > 0) playNewSlipSound();
+            __queueSeenReady = true;
             __pendingSeenReady = true;   // จากนี้ไปการ์ดรอใส่ยอดใหม่จะกะพริบ
             renumberQueues();
         }
@@ -2175,18 +2238,8 @@
         socket.on('topup_needed', (d) => {
             try { if (d && d.name) pushNotif('warn', 'ลูกค้า ' + d.name + ' โอนไม่ครบ ต้องโอนเพิ่มอีก ' + Number(d.need).toLocaleString('en-US') + ' บาท' + (d.held ? ' (ค่าส่ง)' : '')); } catch (e) {}
             try {
-                const Ctx = window.AudioContext || window.webkitAudioContext;
-                if (!Ctx) return;
-                const ctx = new Ctx();
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.type = 'sine'; osc.frequency.value = 660;
-                gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.03);
-                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
-                osc.connect(gain); gain.connect(ctx.destination);
-                osc.start(); osc.stop(ctx.currentTime + 0.55);
-                osc.onended = () => { try { ctx.close(); } catch (e) {} };
+                // v1.0.17: ใช้ AudioContext ตัวเดียวกับเสียงอื่น (ตัวที่ปลดล็อกแล้วตอนแม่ค้าแตะหน้าจอ) เดิมสร้างใหม่ทุกครั้งจึงอาจโดนบล็อก
+                playToneSequence([660], [0.5], 'sine', 0.15);
             } catch (e) { /* เสียงถูกบล็อกก็ไม่เป็นไร กล่องรายชื่อยังแสดงตามปกติ */ }
         });
 
@@ -2233,7 +2286,7 @@
         });
 
         socket.on('play_sound', () => {
-            playPreset('newSlip');
+            playNewSlipSound();
         });
 
         fetch('/api/config').then(res => res.json()).then(configData => {

@@ -3544,6 +3544,8 @@ app.post('/api/queue/manual_amount', async (req, res) => {
         const drawsTxt = result.draws > 0 ? `ได้ ${result.draws} ชิ้น` : 'ยอดยังไม่พอ (เข้าการ์ดส้มรอโอนเพิ่ม)';
         addLog('INFO', `🖥️ แม่ค้ากรอกยอดสลิปเอง ${amount} บาท — ${slip.line_name || 'ลูกค้า'} ${drawsTxt} (เงินคงเหลือในกระเป๋า ${finalBalance} บาท)`);
 
+        // v1.0.17: การ์ดรอใส่ยอดกลายเป็นคิวที่ได้สิทธิ์ = เสียงคิวใหม่เหมือนสลิปปกติ (เดิมเส้นทางนี้เงียบ)
+        if (result.draws > 0 && slip.status === 'waiting') io.emit('play_sound');
         broadcastTodayStats();
         res.json({ success: true, draws: result.draws, remainder: finalBalance });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
@@ -3945,6 +3947,7 @@ async function runBankDelayRecheck(slipId, imageFile, delayMin, attempt) {
     bankDelayHints.delete(slipId);
     const drawsTxt = result.draws > 0 ? `ได้ ${result.draws} ชิ้น` : 'ยอดยังไม่พอ (เข้าการ์ดส้มรอโอนเพิ่ม)';
     addLog('SUCCESS', `🔄 ระบบตรวจสลิปซ้ำเองหลังพ้นเวลารอสำเร็จ — ${slip.line_name || 'ลูกค้า'} ${fmtBaht(amt)} บาท ${drawsTxt} (สลิป #${slipId}, อ้างอิง ${ref}, เงินคงเหลือในกระเป๋า ${finalBalance} บาท)`);
+    if (result.draws > 0 && slip.status === 'waiting') io.emit('play_sound');   // v1.0.17: การ์ดอัปเกรดเป็นคิวเอง = เสียงคิวใหม่
     await broadcastTodayStats();
 }
 // ===== v1.0.17: กันนับยอดซ้ำระหว่าง "สลิปที่แม่ค้ากรอกยอดเอง" กับ "สลิปใบเดียวกันที่ตรวจผ่านทีหลัง" =====
