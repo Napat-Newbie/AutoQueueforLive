@@ -28,7 +28,7 @@
     "Kerry: รายชื่อและไฟล์ Excel มีเฉพาะลูกค้าที่ได้สินค้าอย่างน้อย 1 ชิ้น (คนที่ยอดยังไม่พอไม่ถูกใส่ในไฟล์ส่งของ)",
     "หน้าประวัติ: เพิ่มมุมมอง \"จัดกลุ่มตามลูกค้า (รายวัน)\" สรุปยอดรวม จำนวนชิ้น และจำนวนสลิปของแต่ละคนในแต่ละวัน พร้อมรายละเอียดสลิปครบเหมือนเดิม (ตารางรายสลิปยังเป็นค่าเริ่มต้น)"
   ],
-  "downloadUrl": "https://github.com/Napat-Newbie/AutoQueueforLive/releases/download/v1.0.17/update_v1.0.17.zip",
+  "downloadUrl": "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/bfebdaa76657eab91c3f3db4cdd2956493b350a0/releases/update_v1.0.17.zip",
   "fileSizeKB": 290.6,
   "sha256": "7a07667022ef3333e0154b1ee35bef559f58c63515adad7b9fcc0bd9b325515d"
 }
