@@ -39,6 +39,8 @@ test('server: each notifying event becomes one notification with the merchant te
     assert.equal(f('slip_warning', { kind: 'duplicate', name: 'Eve', reason: 'ซ้ำ' }).title, '⚠️ สลิปซ้ำ');
     assert.equal(f('slip_warning', { kind: 'wrong_account', name: 'X', reason: 'r' }).kind, 'bad');
     assert.equal(f('slip_warning', { kind: 'manual_match', name: 'X', reason: 'r' }).kind, 'warn');
+    // v1.0.19: same transfer but the keyed amount differs - money IS recorded, so orange (no red pop-up)
+    assert.deepEqual(f('slip_warning', { kind: 'amount_mismatch', name: 'X', reason: 'r' }), { kind: 'warn', title: '⚠️ ยอดที่กรอกไม่ตรงกับสลิป', text: 'X — r' });
     assert.equal(f('slip_warning', { kind: 'check_pending', name: 'X', reason: 'r' }).text, 'X — r');
     assert.deepEqual(f('address_updated', { name: 'สมหญิง' }), { kind: 'ok', title: '📍 ที่อยู่จัดส่ง', text: 'คุณสมหญิง อัปเดตที่อยู่จัดส่งแล้ว' });
     assert.equal(f('pending_amount_slip', { name: 'Bob' }).text, 'Bob ส่งสลิปที่ระบบอ่านยอดไม่ได้ — รอแม่ค้ากดเช็คสลิปและใส่ยอด');

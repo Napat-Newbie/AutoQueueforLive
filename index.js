@@ -2278,8 +2278,9 @@ function notificationFromEvent(event, d) {
     }
     if (event === 'image_failed') return { kind: 'bad', title: '🖼️ โหลดรูปสลิปไม่ได้', text: 'โหลดรูปสลิปจาก LINE ไม่สำเร็จ — เปิดดูรูปในแชท LINE OA แล้วใส่ยอดเอง' };
     if (event === 'slip_warning') {
-        const titles = { duplicate: '⚠️ สลิปซ้ำ', wrong_account: '⚠️ โอนเข้าผิดบัญชี', check_pending: '⚠️ ตรวจการ์ดรอใส่ยอด', manual_match: '❓ สลิปตรงกับยอดที่กรอกไว้' };
-        const notUrgent = d.kind === 'check_pending' || d.kind === 'manual_match';
+        const titles = { duplicate: '⚠️ สลิปซ้ำ', wrong_account: '⚠️ โอนเข้าผิดบัญชี', check_pending: '⚠️ ตรวจการ์ดรอใส่ยอด', manual_match: '❓ สลิปตรงกับยอดที่กรอกไว้', amount_mismatch: '⚠️ ยอดที่กรอกไม่ตรงกับสลิป' };
+        // v1.0.19: amount_mismatch = เงินบันทึกแล้ว แค่ยอดที่แม่ค้ากรอกอาจผิด -> สีส้ม ไม่ใช่เรื่องด่วนสีแดง
+        const notUrgent = d.kind === 'check_pending' || d.kind === 'manual_match' || d.kind === 'amount_mismatch';
         return { kind: notUrgent ? 'warn' : 'bad', title: titles[d.kind] || '⚠️ สลิปที่ระบบไม่บันทึก', text: (d.name ? d.name + ' — ' : '') + (d.reason || '') };
     }
     if (event === 'address_updated') return { kind: 'ok', title: '📍 ที่อยู่จัดส่ง', text: 'คุณ' + (d.name || 'ลูกค้า') + ' อัปเดตที่อยู่จัดส่งแล้ว' };
@@ -3852,6 +3853,18 @@ function carryOutOfRoundNotices(sessionId) {
 }
 // v1.0.16: สลิปที่ระบบ "ไม่บันทึก" โดยตั้งใจ (โอนผิดบัญชี / ซ้ำกับของลูกค้าอื่นหรือที่ปัดตกไปแล้ว) เดิมเงียบ เหลือแค่บรรทัดใน Logs
 // ตอนนี้แสดงการ์ดบนหน้าจอให้แม่ค้ารับทราบ (การ์ดเดียวกับกรณีโหลดรูปไม่สำเร็จ ไม่แตะยอด/สลิป/ฐานข้อมูล)
+// v1.0.19 (ไลฟ์จริงครั้งแรกบน v1.0.18): สลิปที่ระบบตรวจได้เป็นรายการเดียวกับสลิปที่แม่ค้ากรอกยอดเอง
+// ยอดตรงกัน = ระบบทำงานถูกต้อง -> INFO เงียบๆ (เดิมเป็น WARN + การ์ดแดง "สลิปที่ระบบไม่บันทึก" + แจ้งเตือน "สลิปซ้ำ" = สัญญาณเตือนหลอก)
+// ยอดไม่ตรง = แม่ค้าอาจกรอกผิด -> ผูกเป็นใบเดียวเหมือนเดิม (ไม่นับซ้ำ ไม่แก้ยอดเอง) + แจ้งเตือนสีส้มให้ตรวจยอด
+async function reportKeyedSlipLink({ name, ref, slipId, keyedAmount, realAmount, where }) {
+    if (Math.abs(Number(keyedAmount) - Number(realAmount)) < 0.005) {
+        addLog('INFO', `${where}: รหัส ${ref} ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${slipId}) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ (ยอดตรงกัน ${fmtBaht(realAmount)} บาท)`);
+        return;
+    }
+    const reason = `สลิปรหัส ${ref} เป็นรายการเดียวกับสลิปที่แม่ค้ากรอกยอดเอง (#${slipId}) แต่ยอดจริง ${fmtBaht(realAmount)} บาท ไม่ตรงกับที่กรอกไว้ ${fmtBaht(keyedAmount)} บาท -- ตรวจยอดแล้วแก้ที่การ์ดสลิป (ระบบไม่นับซ้ำและไม่แก้ยอดเอง)`;
+    addLog('WARN', `${where}: รหัส ${ref} ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${slipId}) แต่ยอดไม่ตรง (สลิปจริง ${fmtBaht(realAmount)} / กรอกไว้ ${fmtBaht(keyedAmount)} บาท) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ ให้แม่ค้าตรวจยอด`);
+    try { io.emit('slip_warning', { kind: 'amount_mismatch', name: name || 'ลูกค้า (ไม่ทราบชื่อ)', reason }); await broadcastTodayStats(); } catch (e) { /* หน้าจอล้มต้องไม่ทำให้การตรวจสลิปพัง */ }
+}
 async function notifyUnrecordedSlip(customerName, messageId, reason, kind = 'other') {
     try {
         recordLineImageFailure(customerName, messageId, reason);
@@ -4060,8 +4073,7 @@ async function runBankDelayRecheck(slipId, imageFile, delayMin, attempt) {
         // v1.0.18: ถ้ารูปที่เก็บไว้มีรหัส QR และตรงกับรหัสที่ตรวจได้ = รายการเดียวกันแน่นอน ผูกได้เลยไม่ต้องดูหน้าต่างเวลา (กันนาฬิกาเครื่องร้านเพี้ยน)
         if ((slip.qr_ref && slip.qr_ref === ref) || pickManualMatch([slip], amt, transferSec)) {
             supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(ref, slipId);
-            await notifyUnrecordedSlip(slip.line_name || 'ลูกค้า', null, `สลิปรหัส ${ref} (ยอด ${fmtBaht(amt)} บาท) ที่ระบบตรวจซ้ำหลังพ้นเวลารอ ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (สลิป #${slipId}) ระบบถือเป็นใบเดียวกันและไม่นับยอดซ้ำ`, 'duplicate');
-            addLog('WARN', `ระบบตรวจสลิปซ้ำเอง: รหัส ${ref} ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${slipId}) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ`);
+            await reportKeyedSlipLink({ name: slip.line_name || 'ลูกค้า', ref, slipId, keyedAmount: slip.amount, realAmount: amt, where: 'ระบบตรวจสลิปซ้ำเอง' });
             bankDelayHints.delete(slipId);
             await broadcastTodayStats();
         } else {
@@ -4665,6 +4677,9 @@ const { pickRecipientName, findThaiProvinceName, parseThaiAddressFallback, norma
 const AI_RETRY_SCALE = Number(process.env.AQ_AI_RETRY_SCALE) > 0 ? Number(process.env.AQ_AI_RETRY_SCALE) : 1;   // เทสต์ย่อเวลารอ
 let aiAddressPauseUntil = 0;   // โดน 429 แล้ว: ไม่ยิง Gemini จนถึงเวลานี้ (ทุกข้อความใช้ระบบสำรองไปก่อน + เข้าคิวลองใหม่)
 // (normalizeThaiPhone / isRetryableGeminiError / geminiRetryDelayMs ย้ายไป lib/address.js แล้ว — ดึงมาชื่อเดิมด้านบน)
+// v1.0.19 (ไลฟ์จริงครั้งแรกบน v1.0.18, 2026-10-31): Gemini ตอบที่อยู่ช้ากว่า 4 วินาที 5 จาก 36 ครั้ง (4 ครั้งใน 15 นาที) แล้วตกไปใช้ระบบสำรอง
+// ตอนสกัดที่อยู่ webhook ตอบ LINE ไปแล้ว รอนานขึ้นไม่กระทบลูกค้า จึงรอ 8 วินาที (ยังช้ากว่านั้น = คิวลองใหม่เบื้องหลังรับช่วงต่อ)
+const GEMINI_ADDRESS_TIMEOUT_MS = 8000;
 async function callGeminiAddress(text) {
     const prompt = `คุณคือผู้ช่วยสกัดที่อยู่จัดส่งพัสดุในประเทศไทย กรุณาวิเคราะห์ข้อความต่อไปนี้ และตอบกลับเป็น JSON เท่านั้น
 ข้อกำหนด:
@@ -4682,7 +4697,7 @@ async function callGeminiAddress(text) {
     const res = await axios.post(url, {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { responseMimeType: 'application/json' }
-    }, { timeout: 4000, headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY } });
+    }, { timeout: GEMINI_ADDRESS_TIMEOUT_MS, headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY } });
     const rawJson = res.data && res.data.candidates && res.data.candidates[0] && res.data.candidates[0].content && res.data.candidates[0].content.parts && res.data.candidates[0].content.parts[0] && res.data.candidates[0].content.parts[0].text;
     if (!rawJson) { const e = new Error('Gemini ตอบกลับว่างเปล่า'); e.retryable = true; throw e; }
     return JSON.parse(rawJson);
@@ -5022,7 +5037,7 @@ app.post('/webhook', async (req, res) => {
                     const refMatch = keyedCandidates.find(r => r.qr_ref && r.qr_ref === transRef);
                     if (refMatch) {
                         supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(transRef, refMatch.id);
-                        addLog('INFO', `สลิปรหัส ${transRef} ของ "${lineName}" ตรงกับรหัส QR ของสลิปที่แม่ค้ากรอกยอดเอง (#${refMatch.id}) — ผูกเป็นใบเดียวกันด้วยรหัสรายการ (แม่นยำ ไม่ใช่การเดาจากเวลา)`);
+                        await reportKeyedSlipLink({ name: lineName, ref: transRef, slipId: refMatch.id, keyedAmount: refMatch.amount, realAmount: amount, where: `ลูกค้า "${lineName}" ส่งสลิปซ้ำ (ผูกด้วยรหัส QR แม่นยำ ไม่ใช่การเดาจากเวลา)` });
                         continue;
                     }
                     const keyedMatch = pickManualMatch(keyedCandidates, amount, transferSec);

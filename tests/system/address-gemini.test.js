@@ -96,3 +96,18 @@ test('the Kerry Remark column never carries the internal "fallback" note', () =>
     const text = []; wb.eachSheet(ws => ws.eachRow(row => row.eachCell(c => text.push(String(c.value)))));
     assert.doesNotMatch(text.join('\n'), /Regex|ระบบสำรอง|Rate Limit/);
 }));
+
+// First real shop live on v1.0.18 (2026-10-31 21:57 - 03:27, system-log_LIVE_1793458669895): Gemini answered 27 of 36
+// address messages; 5 of the misses were "timeout of 4000ms exceeded" (4 of them within 15 minutes). The LINE webhook has
+// already been answered before the address is parsed, so waiting longer costs the customer nothing (owner: "แก้").
+test('a slow Gemini answer (5 s) is still used on the first try - the address timeout is 8 s, not 4 s', () => withSandbox(async sb => {
+    sb.mock.profile('Uslow', 'Slow LINE');
+    sb.mock.geminiQueue.push({ delayMs: 5000, text: EMOJI_AI });
+    await sendText(sb, 'Uslow', 't1', EMOJI_MSG);
+    const a = await sb.waitFor(() => { const x = addrOf(sb, 'Uslow'); return x && x.remark === 'วางไว้หน้าประตูได้เลย' ? x : null; }, 15000, 'the slow Gemini answer was never used');
+    assert.equal(a.recipient_name, 'พิมพ์ชนก แสนดี');
+    const log = readLog(sb);
+    assert.match(log, /Gemini AI สกัดที่อยู่สำเร็จ: /, 'used on the FIRST try');
+    assert.doesNotMatch(log, /timeout of 4000ms|ยังสกัดที่อยู่ไม่ได้ตอนนี้/, 'no 4-second timeout, no fallback-then-retry');
+    assert.equal(sb.mock.geminis.length, 1);
+}, null, ENV));
