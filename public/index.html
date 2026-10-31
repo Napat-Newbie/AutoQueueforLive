@@ -1990,9 +1990,12 @@
                 displayName = `${data.lineName} (LINE)`;
             }
 
-            // v1.0.16: ป้าย "โอนนอกรอบ" — เงินก้อนนี้เข้ามาตอนไม่มีไลฟ์ (มักเป็นยอดจุ่มที่โอนทีหลัง) ให้แม่ค้าตรวจสอบก่อนส่งของซ้ำ
+            // v1.0.16: ป้าย "โอนนอกรอบ" — เงินก้อนนี้เข้ามาตอนไม่มีไลฟ์ ให้แม่ค้าตรวจสอบก่อนส่งของซ้ำ
+            // v1.0.19: แยกคำ — เงินที่มา "ก่อนเริ่มไลฟ์" (เตรียมตัว ไม่ต้องกลัวซ้ำ) กับ "หลังจบไลฟ์" (ยอดจุ่ม ตรวจก่อนส่ง)
             const outOfRoundBadge = data.outOfRound
-                ? `<div style="display:inline-block; margin-top:6px; padding:3px 10px; border-radius:12px; background:#7b1fa2; color:#fff; font-size:0.82em; font-weight:700;">🕒 โอนนอกรอบ — เงินมาหลังจบไลฟ์ ตรวจก่อนส่งของ</div>`
+                ? (data.outOfRoundWhen === 'before'
+                    ? `<div style="display:inline-block; margin-top:6px; padding:3px 10px; border-radius:12px; background:#7b1fa2; color:#fff; font-size:0.82em; font-weight:700;">🕒 โอนนอกรอบ — เงินมาก่อนเริ่มไลฟ์</div>`
+                    : `<div style="display:inline-block; margin-top:6px; padding:3px 10px; border-radius:12px; background:#7b1fa2; color:#fff; font-size:0.82em; font-weight:700;">🕒 โอนนอกรอบ — เงินมาหลังจบไลฟ์ ตรวจก่อนส่งของ</div>`)
                 : '';
 
             // v1.0.16: เวลาโอน + เวลารอ + สถานะที่อยู่จัดส่ง บนการ์ดคิว
@@ -3351,11 +3354,17 @@
                             missingUl.innerHTML = data.missingCustomers.map(name => `<li>${escapeHtml(name)} (ยังไม่ส่งที่อยู่ในแชท LINE)</li>`).join('');
                             missingBox.style.display = 'block';
                         }
-                        // v1.0.16: เตือนรายชื่อลูกค้า "โอนนอกรอบ" (เงินมาตอนไม่มีไลฟ์ — มักเป็นยอดจุ่ม) ให้ตรวจสอบก่อนพิมพ์ใบส่งของ
+                        // v1.0.16: เตือนรายชื่อลูกค้า "โอนนอกรอบ" (เงินมาตอนไม่มีไลฟ์) ให้ตรวจสอบก่อนพิมพ์ใบส่งของ
+                        // v1.0.19: แยก "ก่อนเริ่มไลฟ์" (เตรียมตัว) กับ "หลังจบไลฟ์" (ยอดจุ่ม — เตือนส่งของซ้ำเฉพาะกลุ่มนี้)
                         if (data.outOfRoundCustomers && data.outOfRoundCustomers.length > 0) {
+                            const oorList = data.outOfRoundCustomers.map(o => {
+                                const nm = escapeHtml(o && o.name ? o.name : String(o));
+                                return (o && o.when === 'before') ? `${nm} (ก่อนเริ่มไลฟ์)` : nm;
+                            }).join(', ');
+                            const hasDip = data.outOfRoundCustomers.some(o => !(o && o.when === 'before'));
                             statusBox.innerHTML += `
                                 <div style="margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: #f3e5f5; color: #7b1fa2; font-weight: 600;">
-                                    🕒 โอนนอกรอบ (เงินมาหลังจบไลฟ์): ${data.outOfRoundCustomers.map(n => escapeHtml(n)).join(', ')} — ถ้าเป็นยอดจุ่มที่จ่ายของไปแล้ว อย่าส่งของซ้ำ
+                                    🕒 โอนนอกรอบ: ${oorList}${hasDip ? ' — รายชื่อที่ไม่มี "(ก่อนเริ่มไลฟ์)" คือเงินมาหลังจบไลฟ์ ถ้าเป็นยอดจุ่มที่จ่ายของไปแล้ว อย่าส่งของซ้ำ' : ''}
                                 </div>
                             `;
                         }
@@ -4108,8 +4117,19 @@
                     sha256: latestUpdateInfo.sha256
                 })
             })
-            .then(res => res.json())
+            .then(res => {
+                // v1.0.19: หมดเวลาเข้าสู่ระบบ (401) — เดิมไหลไป alert error กลางๆ ให้บอกชัดว่าต้องเข้าสู่ระบบก่อน (แบบเดียวกับจุดอื่นของหน้านี้)
+                if (res.status === 401) {
+                    progressSec.style.display = 'none';
+                    btn.disabled = false;
+                    btn.innerHTML = '<span>🚀 อัปเดตทันที (1-Click Update)</span>';
+                    alert('หมดเวลาเข้าสู่ระบบ กรุณารีเฟรชหน้า (F5) แล้วเข้าสู่ระบบใหม่ จึงกดอัปเดตอีกครั้ง');
+                    return null;
+                }
+                return res.json();
+            })
             .then(data => {
+                if (!data) return;
                 if (data.success) {
                     progressBar.style.width = '70%';
                     percentText.innerText = '70%';

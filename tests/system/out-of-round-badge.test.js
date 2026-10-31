@@ -27,10 +27,15 @@ function excelText(buffer, ExcelJS) {
     });
 }
 
+// v1.0.19 (owner audit 2026-10-31): out-of-round money must say WHERE it came from — money that arrived
+// BEFORE the first live of its window ("ก่อนเริ่มไลฟ์", prep money, low double-ship risk) vs money that
+// arrived AFTER a live had ended ("หลังจบไลฟ์", a late dip — beware double shipping). The old text said
+// "เงินมาหลังจบไลฟ์" for BOTH.
 test('queue card of an out-of-round payment carries the badge, and it survives being claimed into the new round', () => withSandbox(async sb => {
     await slipFor(sb, 'Ualice', 'Alice', 'm1', 'k1', 140, 'OOR1');   // paid while no live is running
     await sb.waitForSlips(1);
     assert.equal((await sb.stats()).queues.waiting[0].outOfRound, true, 'badge on the card before the live starts');
+    assert.equal((await sb.stats()).queues.waiting[0].outOfRoundWhen, 'before', 'no live has ENDED yet — this is pre-live money, not a dip');
 
     const live = await sb.startLive();                               // rule ก claims the slip into this round
     await slipFor(sb, 'Ubob', 'Bob', 'm2', 'k2', 140, 'LIVE1');      // paid DURING the live — no badge
@@ -38,6 +43,7 @@ test('queue card of an out-of-round payment carries the badge, and it survives b
 
     const st = await sb.stats();
     assert.equal(findCard(st, 'Alice').outOfRound, true, 'badge must survive the claim into the new round');
+    assert.equal(findCard(st, 'Alice').outOfRoundWhen, 'before', 'the when-label survives the claim too');
     assert.equal(findCard(st, 'Bob').outOfRound, false, 'a slip paid during the live has no badge');
     assert.equal(sb.slips()[0].session_id, live.session.id, 'precondition: Alice really was claimed');
 }));
@@ -49,9 +55,10 @@ test('Kerry summary window lists the out-of-round customer; the downloaded Excel
 
     const summary = (await sb.get(`/api/kerry/summary?sessionId=${live.session.id}`)).json;
     assert.equal(summary.success, true);
-    assert.deepEqual(summary.outOfRoundCustomers, ['Alice'], 'summary window lists the out-of-round customer');
+    assert.deepEqual(summary.outOfRoundCustomers, [{ name: 'Alice', when: 'before' }], 'summary lists the customer WITH the when-label (fresh sandbox: no live has ended yet)');
     const aliceOrder = summary.orders.find(o => o.lineName === 'Alice');
     assert.equal(aliceOrder.outOfRound, true);
+    assert.equal(aliceOrder.outOfRoundWhen, 'before');
 
     // the Excel the Kerry window downloads for that round — the Remark column must NOT carry an internal note (this file is uploaded to Kerry)
     const file = await sb.get(`/api/kerry/export_excel?sessionId=${live.session.id}`);
@@ -83,6 +90,7 @@ test('history page data says which round an out-of-round payment belongs to', ()
     let alice = h.history.find(x => x.name === 'Alice');
     assert.equal(alice.sessionId, null, 'not attached to a round yet');
     assert.equal(alice.outOfRound, true, 'flagged as out-of-round (so the page can say "waiting for the next round")');
+    assert.equal(alice.outOfRoundWhen, 'before', 'history row also carries the when-label');
     assert.ok(h.rounds.some(r => r.outside === true), 'the summary groups unattached money under "นอกรอบไลฟ์"');
 
     // 2) เริ่มไลฟ์ → ถูกผูกเข้ารอบนี้ — ประวัติต้องระบุชื่อรอบ + ยังติดธง outOfRound
@@ -102,6 +110,22 @@ test('history page data says which round an out-of-round payment belongs to', ()
     const roundRow = h.rounds.find(r => r.sessionId === live.session.id);
     assert.equal(roundRow.outOfRoundSlips, 1, 'the per-round summary counts the absorbed out-of-round slip');
     assert.equal(roundRow.slips, 2);
+}));
+
+// v1.0.19: เคสตรงข้าม — เงินที่เข้ามาหลังมีรอบไลฟ์จบไปแล้ว (ยอดจุ่ม) ต้องติดป้าย when='after'
+// เพื่อให้หน้าต่าง Kerry คงคำเตือน "อย่าส่งของซ้ำ" ไว้กับกลุ่มนี้ ไม่ปนกับเงินก่อนเริ่มไลฟ์
+test('money arriving AFTER a live has ended is labelled when=after (the dip case keeps the double-ship warning)', () => withSandbox(async sb => {
+    const live1 = await sb.startLive();
+    await sb.endLive();                                              // จบรอบแรกแล้ว (ไม่ต้องส่งอะไร)
+    await slipFor(sb, 'Ucarol', 'Carol', 'm9', 'k9', 140, 'DIP1');   // โอนตอนไม่มีไลฟ์ หลังมีรอบจบไปแล้ว
+    await sb.waitForSlips(1);
+    const st = await sb.stats();
+    assert.equal(st.queues.waiting[0].outOfRound, true);
+    assert.equal(st.queues.waiting[0].outOfRoundWhen, 'after', 'a live HAS ended before this money arrived — dip case');
+
+    const live2 = await sb.startLive();
+    const summary = (await sb.get(`/api/kerry/summary?sessionId=${live2.session.id}`)).json;
+    assert.deepEqual(summary.outOfRoundCustomers, [{ name: 'Carol', when: 'after' }]);
 }));
 
 test('system.log + Discord activity channel get the out-of-round warning line', () => withSandbox(async sb => {
