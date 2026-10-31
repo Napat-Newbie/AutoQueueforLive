@@ -50,6 +50,7 @@ test('when Gemini fails (HTTP 500) nothing the app logs or prints contains the k
     sb.mock.profile('Ualice', 'Alice');   // geminiReply stays null -> the mock answers 500
     await sb.webhook([{ type: 'message', replyToken: 'rt', source: { type: 'user', userId: 'Ualice' }, message: { type: 'text', id: 'txt2', text: 'สมชาย 0812345678 10500 ส่งที่ ซอย 5' } }]);
     await sb.waitFor(() => sb.mock.geminis.length >= 1, 8000, 'Gemini was not called');
-    await sb.waitFor(() => /Gemini AI สกัดที่อยู่ไม่สำเร็จ/.test(logText(sb)), 8000, 'failure not logged');
+    // v1.0.19: a 500 is temporary -> "ยังสกัดที่อยู่ไม่ได้ตอนนี้ ... จะลองใหม่อัตโนมัติ" (a hard failure still says "ไม่สำเร็จ")
+    await sb.waitFor(() => /Gemini AI (สกัดที่อยู่ไม่สำเร็จ|ยังสกัดที่อยู่ไม่ได้ตอนนี้)/.test(logText(sb)), 8000, 'failure not logged');
     assertKeyOnlyInHeader(sb, sb.mock.geminis[0]);
 }, null, ENV));

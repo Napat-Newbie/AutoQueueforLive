@@ -4813,10 +4813,12 @@ async function verifySlipWithProvider(imageBuffer) {
 function pickRecipientName(text, phoneText) {
     const LABEL_RE = /^(ชื่อผู้รับ|ชื่อ-นามสกุล|ชื่อ|ผู้รับ)\s*[:.\-]?\s*/;
     const TITLE_RE = /^(นางสาว|นาง|นาย|น\.ส\.|ด\.ช\.|ด\.ญ\.|คุณ)\s*[ก-๏a-zA-Z]/;
-    const NOT_NAME_RE = /(ต\.|อ\.|จ\.|ซ\.|ถ\.|ตำบล|อำเภอ|จังหวัด|ซอย|หมู่|ถนน|แขวง|เขต|รหัส|เลขที่|อาคาร|คอนโด|ไปรษณีย์|ที่อยู่|ส่งที่|กรุงเทพ|ขอบคุณ|ค่ะ|ครับ|ด่วน|ฝาก|สลิป|เปลี่ยน|เบอร์|โทร|tel|phone)/i;
-    const tidy = (s) => String(s || '').replace(/^คุณ\s*/, '').replace(/\s+/g, ' ').trim();
+    const NOT_NAME_RE = /(ต\.|อ\.|จ\.|ซ\.|ถ\.|ตำบล|อำเภอ|จังหวัด|ซอย|หมู่|ถนน|แขวง|เขต|รหัส|เลขที่|อาคาร|คอนโด|ไปรษณีย์|ที่อยู่|ส่งที่|กรุงเทพ|ขอบคุณ|ค่ะ|ครับ|ด่วน|ฝาก|สลิป|เปลี่ยน|เบอร์|โทร|สวัสดี|นะคะ|นะครับ|รบกวน|tel|phone)/i;
+    // v1.0.19: วงเล็บที่เป็นหมายเหตุ เช่น (ฝากแม่รับ) ตัดออก ส่วนวงเล็บที่เป็นชื่อ เช่น (คุณเอก) คงไว้
+    const tidy = (s) => String(s || '').replace(/\s*\(([^)]*)\)/g, (m, inner) => (NOT_NAME_RE.test(inner) ? '' : m)).replace(/^คุณ\s*/, '').replace(/\s+/g, ' ').trim();
     const looksLikeName = (s) => s.length >= 2 && s.length <= 40 && /[ก-๏a-zA-Z]/.test(s) && !/[0-9๐-๙]/.test(s) && !NOT_NAME_RE.test(s);
-    const raw = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+    // v1.0.19: ตัดอีโมจิ/สัญลักษณ์หน้าบรรทัด (📦 🙋 📞) ก่อนดู
+    const raw = String(text || '').split('\n').map(l => l.replace(/^[^ก-๏a-zA-Z0-9(+]+/, '').trim()).filter(Boolean);
     const lines = raw.map(l => (phoneText ? l.replace(phoneText, '') : l).trim());
     for (const l of lines) {
         if (!LABEL_RE.test(l)) continue;
@@ -4843,17 +4845,36 @@ function pickRecipientName(text, phoneText) {
         const s = tidy(lines[lines.length - 1]);
         if (looksLikeName(s)) return s;
     }
+    // (ฉ) v1.0.19: บรรทัดแรกที่ดูเป็นชื่อ (เช่น ชื่ออยู่บรรทัดที่ 2 หลังคำทักทาย หรือหลังบรรทัดเบอร์โทร)
+    for (const l of lines) {
+        const s = tidy(l);
+        if (looksLikeName(s)) return s;
+    }
     return '';
+}
+// v1.0.19: หาชื่อจังหวัดที่พิมพ์โดยไม่มี จ./จังหวัด นำหน้า (ทั้งคำเท่านั้น กันคำอย่าง "เลย" ในประโยคทั่วไป)
+function findThaiProvinceName(text) {
+    const PROVINCES = ['กรุงเทพมหานคร', 'กระบี่', 'กาญจนบุรี', 'กาฬสินธุ์', 'กำแพงเพชร', 'ขอนแก่น', 'จันทบุรี', 'ฉะเชิงเทรา', 'ชลบุรี', 'ชัยนาท', 'ชัยภูมิ', 'ชุมพร', 'เชียงราย', 'เชียงใหม่', 'ตรัง', 'ตราด', 'ตาก', 'นครนายก', 'นครปฐม', 'นครพนม', 'นครราชสีมา', 'นครศรีธรรมราช', 'นครสวรรค์', 'นนทบุรี', 'นราธิวาส', 'น่าน', 'บึงกาฬ', 'บุรีรัมย์', 'ปทุมธานี', 'ประจวบคีรีขันธ์', 'ปราจีนบุรี', 'ปัตตานี', 'พระนครศรีอยุธยา', 'พะเยา', 'พังงา', 'พัทลุง', 'พิจิตร', 'พิษณุโลก', 'เพชรบุรี', 'เพชรบูรณ์', 'แพร่', 'ภูเก็ต', 'มหาสารคาม', 'มุกดาหาร', 'แม่ฮ่องสอน', 'ยะลา', 'ยโสธร', 'ร้อยเอ็ด', 'ระนอง', 'ระยอง', 'ราชบุรี', 'ลพบุรี', 'ลำปาง', 'ลำพูน', 'เลย', 'ศรีสะเกษ', 'สกลนคร', 'สงขลา', 'สตูล', 'สมุทรปราการ', 'สมุทรสงคราม', 'สมุทรสาคร', 'สระแก้ว', 'สระบุรี', 'สิงห์บุรี', 'สุโขทัย', 'สุพรรณบุรี', 'สุราษฎร์ธานี', 'สุรินทร์', 'หนองคาย', 'หนองบัวลำภู', 'อ่างทอง', 'อำนาจเจริญ', 'อุดรธานี', 'อุตรดิตถ์', 'อุทัยธานี', 'อุบลราชธานี'];
+    const tokens = String(text || '').split(/[\s,]+/).map(t => t.replace(/\d+$/, ''));
+    return tokens.find(t => PROVINCES.includes(t)) || '';
 }
 function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE') {
     if (!text || typeof text !== 'string') return null;
 
-    // 1. สกัดเบอร์โทรศัพท์ (0XXXXXXXXX หรือ +66...)
+    // 1. สกัดเบอร์โทรศัพท์ -- v1.0.19: อ่านเบอร์ที่พิมพ์เว้นวรรค/ขีดทีละตัวได้ และถ้ามีหลายเบอร์ เลือกเบอร์มือถือก่อนเบอร์บ้าน (02...)
     let phone = '';
-    const phoneMatch = text.match(/(?:(?:\+66|0)[- ]?[689][0-9]{1}[- ]?[0-9]{3}[- ]?[0-9]{4})|(?:(?:\+66|0)[- ]?[2-5][0-9]{2}[- ]?[0-9]{4})/);
-    if (phoneMatch) {
-        phone = phoneMatch[0].replace(/[^0-9]/g, '');
-        if (phone.startsWith('66')) phone = '0' + phone.substring(2);
+    let phoneMatch = null;
+    {
+        const re = /(?<!\d)(?:\+?66|0)(?:[\s\-.]*\d){8,9}(?!\d)/g;
+        const found = [];
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            let d = m[0].replace(/\D/g, '');
+            if (d.startsWith('66')) d = '0' + d.slice(2);
+            if (/^0\d{8,9}$/.test(d)) found.push({ raw: m[0], digits: d });
+        }
+        const pick = found.find(f => /^0[689]\d{8}$/.test(f.digits)) || found[0];
+        if (pick) { phone = pick.digits; phoneMatch = [pick.raw]; }
     }
 
     // 2. สกัดรหัสไปรษณีย์ 5 หลัก
@@ -4870,6 +4891,9 @@ function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE')
     let province = '';
     const provMatch = text.match(/(?:จ\.|จังหวัด)\s*([ก-๙a-zA-Z]+)/);
     if (provMatch) province = provMatch[1].trim();
+    // v1.0.19: กรุงเทพ/กทม ไม่มี จ. นำหน้า เดิมจึงไม่เคยได้จังหวัด และจังหวัดที่พิมพ์โดยไม่มี จ. นำหน้า
+    if (/^(กรุงเทพ|กรุงเทพฯ|กทม)$/.test(province) || (!province && /กรุงเทพ|กทม/.test(text))) province = 'กรุงเทพมหานคร';
+    if (!province) province = findThaiProvinceName(text);
 
     // 4. สกัดอำเภอ / เขต
     let district = '';
@@ -4914,15 +4938,42 @@ function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE')
         district: district || '',
         province: province || '',
         postcode: postcode || '',
-        remark: 'สกัดด้วยระบบสำรอง Regex (ป้องกัน AI Rate Limit)'
+        remark: ''   // v1.0.19: ช่องนี้ลงไฟล์ Kerry (พิมพ์บนใบปะหน้า) ห้ามใส่โน้ตภายใน เดิมใส่ "สกัดด้วยระบบสำรอง Regex" ทุกครั้งที่ใช้ระบบสำรอง
     };
 }
 
 // 🧠 ฟังก์ชันสกัดที่อยู่จัดส่งด้วย Gemini AI สำหรับ Kerry Express (พร้อม Auto-Fallback)
-async function parseThaiAddressWithAI(text, defaultName = 'ลูกค้า LINE') {
-    if (process.env.GEMINI_API_KEY) {
-        try {
-            const prompt = `คุณคือผู้ช่วยสกัดที่อยู่จัดส่งพัสดุในประเทศไทย กรุณาวิเคราะห์ข้อความต่อไปนี้ และตอบกลับเป็น JSON เท่านั้น
+// v1.0.19 (เจ้าของสั่ง 2026-10-31 "ทำให้ Gemini สกัดสำเร็จได้เยอะที่สุด เพราะเชื่อได้มากกว่า" หลังวัดผลด้วยคีย์จริง: Gemini ถูกครบ 25/30
+// ข้อความ ระบบสำรอง 15/30): (1) ใช้คำตอบ Gemini เสมอเมื่อมีเบอร์หรือรหัสไปรษณีย์ ช่องที่ Gemini เว้นว่างค่อยเติมจากระบบสำรอง
+// (เดิมทิ้งทั้งก้อนถ้าขาดรหัสไปรษณีย์) (2) Gemini ตอบไม่ได้ชั่วคราว (429 โควตาเต็ม / 5xx / หมดเวลา / เน็ต) -> บันทึกผลระบบสำรองไปก่อน
+// แล้วลองใหม่เบื้องหลังตามเวลาที่ Google บอกให้รอ (scheduleAiAddressRetry) สำเร็จเมื่อไรอัปเดตแทน (3) คีย์ผิด/ถูกปฏิเสธ = ไม่ลองซ้ำ
+const AI_RETRY_SCALE = Number(process.env.AQ_AI_RETRY_SCALE) > 0 ? Number(process.env.AQ_AI_RETRY_SCALE) : 1;   // เทสต์ย่อเวลารอ
+let aiAddressPauseUntil = 0;   // โดน 429 แล้ว: ไม่ยิง Gemini จนถึงเวลานี้ (ทุกข้อความใช้ระบบสำรองไปก่อน + เข้าคิวลองใหม่)
+function normalizeThaiPhone(p) {
+    let d = String(p || '').replace(/\D/g, '');
+    if (d.startsWith('66')) d = '0' + d.slice(2);
+    return /^0\d{8,9}$/.test(d) ? d : '';
+}
+function isRetryableGeminiError(err) {
+    const st = err && err.response && err.response.status;
+    if (!st) return true;   // หมดเวลา / เน็ตหลุด / DNS
+    return st === 429 || st >= 500;
+}
+function geminiRetryDelayMs(err) {
+    try {
+        const details = (err.response.data.error.details) || [];
+        const info = details.find(x => String(x['@type'] || '').includes('RetryInfo'));
+        const sec = info ? parseFloat(String(info.retryDelay)) : NaN;
+        if (sec > 0) return Math.min(sec * 1000, 120000);
+    } catch (e) { /* ไม่มีข้อมูลเวลารอ */ }
+    try {
+        const h = Number(err.response.headers['retry-after']);
+        if (h > 0) return Math.min(h * 1000, 120000);
+    } catch (e) { /* ไม่มีหัว retry-after */ }
+    return 0;
+}
+async function callGeminiAddress(text) {
+    const prompt = `คุณคือผู้ช่วยสกัดที่อยู่จัดส่งพัสดุในประเทศไทย กรุณาวิเคราะห์ข้อความต่อไปนี้ และตอบกลับเป็น JSON เท่านั้น
 ข้อกำหนด:
 - recipient_name: ชื่อ-นามสกุลของผู้รับ (หากในข้อความไม่ได้ระบุชื่อคน ให้ตอบค่าว่าง "") ชื่ออาจอยู่บรรทัดไหนก็ได้ รวมถึงท้ายข้อความ ไม่จำเป็นต้องอยู่บรรทัดแรก และห้ามเอาที่อยู่หรือคำทักทายมาเป็นชื่อ
 - phone: เบอร์โทรศัพท์ 10 หลัก (ตัดขีด ช่องว่าง หรือ +66 ให้เป็น 0XXXXXXXXX)
@@ -4934,42 +4985,155 @@ async function parseThaiAddressWithAI(text, defaultName = 'ลูกค้า LI
 - remark: หมายเหตุหรือคำสั่งพิเศษ (เช่น ฝากไว้ที่ป้อมยาม, โทรแจ้งก่อนส่ง) ถ้าไม่มีให้เป็นค่าว่าง ""
 
 ข้อความ: "${text}"`;
-
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent`;
-            const res = await axios.post(url, {
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { responseMimeType: 'application/json' }
-            }, { timeout: 4000, headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY } });
-
-            const rawJson = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (rawJson) {
-                const parsed = JSON.parse(rawJson);
-                if (parsed.phone && parsed.postcode) {
-                    const genericNames = ['ลูกค้า line', 'ลูกค้าline', 'ลูกค้า', 'คุณ', 'คุณลูกค้า', 'ลูกค้าทั่วไป'];
-                    let finalName = parsed.recipient_name ? String(parsed.recipient_name).trim() : '';
-                    if (!finalName || genericNames.includes(finalName.toLowerCase())) {
-                        finalName = defaultName || 'ลูกค้า LINE';
-                    }
-                    parsed.recipient_name = finalName;
-
-                    addLog('SUCCESS', `Gemini AI สกัดที่อยู่สำเร็จ: คุณ${parsed.recipient_name} (${parsed.phone}) จ.${parsed.province}`);
-                    return parsed;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent`;
+    const res = await axios.post(url, {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json' }
+    }, { timeout: 4000, headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY } });
+    const rawJson = res.data && res.data.candidates && res.data.candidates[0] && res.data.candidates[0].content && res.data.candidates[0].content.parts && res.data.candidates[0].content.parts[0] && res.data.candidates[0].content.parts[0].text;
+    if (!rawJson) { const e = new Error('Gemini ตอบกลับว่างเปล่า'); e.retryable = true; throw e; }
+    return JSON.parse(rawJson);
+}
+// คำตอบ Gemini เป็นหลัก ช่องที่ว่าง/รูปแบบผิดค่อยเติมจากระบบสำรองของข้อความเดียวกัน ไม่มีทั้งเบอร์และรหัสไปรษณีย์ = ไม่ใช่ที่อยู่ (null)
+function finishAiAddress(ai, fb, defaultName) {
+    if (!ai || typeof ai !== 'object') return null;
+    const out = Object.assign({}, ai);
+    out.phone = normalizeThaiPhone(ai.phone) || (fb && fb.phone) || '';
+    const pc = String(ai.postcode || '').trim();
+    out.postcode = /^\d{5}$/.test(pc) ? pc : ((fb && fb.postcode) || '');
+    for (const f of ['address', 'subdistrict', 'district', 'province']) {
+        out[f] = String(out[f] || '').trim();
+        if (!out[f] && fb && fb[f]) out[f] = fb[f];
+    }
+    out.remark = String(ai.remark || '').trim();
+    if (!out.phone && !out.postcode) return null;
+    const genericNames = ['ลูกค้า line', 'ลูกค้าline', 'ลูกค้า', 'คุณ', 'คุณลูกค้า', 'ลูกค้าทั่วไป'];
+    let finalName = out.recipient_name ? String(out.recipient_name).trim() : '';
+    if (!finalName || genericNames.includes(finalName.toLowerCase())) finalName = defaultName || 'ลูกค้า LINE';
+    out.recipient_name = finalName;
+    return out;
+}
+async function parseThaiAddressWithAI(text, defaultName = 'ลูกค้า LINE') {
+    const fallbackParsed = parseThaiAddressFallback(text, defaultName);
+    let aiRetry = null;
+    if (process.env.GEMINI_API_KEY) {
+        if (Date.now() < aiAddressPauseUntil) {
+            aiRetry = { delayMs: aiAddressPauseUntil - Date.now() };
+            addLog('INFO', 'Gemini AI โควตาเต็มชั่วคราว ใช้ระบบสำรองไปก่อน แล้วจะลองสกัดด้วย Gemini ใหม่อัตโนมัติ');
+        } else {
+            try {
+                const merged = finishAiAddress(await callGeminiAddress(text), fallbackParsed, defaultName);
+                if (merged) {
+                    addLog('SUCCESS', `Gemini AI สกัดที่อยู่สำเร็จ: คุณ${merged.recipient_name} (${merged.phone}) จ.${merged.province}`);
+                    return merged;
+                }
+                addLog('INFO', 'Gemini AI อ่านข้อความแล้วไม่พบเบอร์โทรหรือรหัสไปรษณีย์ ตรวจด้วยระบบสำรองอีกชั้น');
+            } catch (e) {
+                const st = e && e.response ? e.response.status : null;
+                if (isRetryableGeminiError(e) || e.retryable) {
+                    const d = geminiRetryDelayMs(e);
+                    if (st === 429) aiAddressPauseUntil = Date.now() + Math.max(d, 5000) * AI_RETRY_SCALE;
+                    aiRetry = { delayMs: d };
+                    addLog('INFO', `Gemini AI ยังสกัดที่อยู่ไม่ได้ตอนนี้ (${st ? 'HTTP ' + st : e.message}) ใช้ระบบสำรองไปก่อน แล้วจะลองสกัดด้วย Gemini ใหม่อัตโนมัติ`);
+                } else {
+                    addLog('WARN', `Gemini AI สกัดที่อยู่ไม่สำเร็จ (HTTP ${st} -- ลองใหม่ไม่ช่วย เช่น คีย์ไม่ถูกต้อง) ใช้ระบบสำรอง Regex`, e.message);
                 }
             }
-        } catch (e) {
-            addLog('WARN', 'Gemini AI สกัดที่อยู่ไม่สำเร็จหรือเกินโควตา สลับใช้ระบบสำรอง Regex ทันที', e.message);
         }
     }
-
     // 🛡️ ระบบสำรอง Deterministic Regex: ทำงานทันทีเมื่อไม่มี Gemini หรือ AI เกิดข้อผิดพลาด
-    const fallbackParsed = parseThaiAddressFallback(text, defaultName);
     if (fallbackParsed && (fallbackParsed.phone || fallbackParsed.postcode)) {
         addLog('SUCCESS', `ระบบสำรอง Regex สกัดที่อยู่สำเร็จ: คุณ${fallbackParsed.recipient_name} (${fallbackParsed.phone}) ${fallbackParsed.postcode}`);
+        // ไม่ลงฐานข้อมูล (enumerable: false) -- บอก webhook ให้เข้าคิวลองสกัดด้วย Gemini ใหม่
+        if (aiRetry) Object.defineProperty(fallbackParsed, 'aiRetry', { value: aiRetry, enumerable: false });
         return fallbackParsed;
     }
 
     addLog('INFO', 'วิเคราะห์ข้อความแล้วแต่ไม่ใช่รูปแบบที่อยู่จัดส่งที่ระบุเบอร์หรือรหัสไปรษณีย์');
     return null;
+}
+
+// บันทึกที่อยู่ของลูกค้า (ใช้ทั้งตอนข้อความเข้า และตอน Gemini ลองใหม่สำเร็จ) -- กติกาเดิมของ webhook ทุกข้อ:
+// ชื่อว่าง/ทั่วไป = ชื่อ LINE, ช่องที่ข้อความใหม่ไม่มี = คงของเดิม, ข้อความใหม่ไม่มีชื่อ = คงชื่อจริงที่เคยส่งไว้
+async function saveCustomerAddress(userId, lineName, parsedAddress) {
+    const genericNames = ['ลูกค้า line', 'ลูกค้าline', 'ลูกค้า', 'คุณ', 'คุณลูกค้า', 'ลูกค้าทั่วไป'];
+    const isGenericName = (n) => !n || genericNames.includes(String(n).trim().toLowerCase());
+    const messageHasName = !isGenericName(parsedAddress.recipient_name);
+    if (!messageHasName) parsedAddress.recipient_name = lineName || 'ลูกค้า LINE';
+    const addrConfigKey = `cust_addr_${userId}`;
+    try {
+        const { data: prevRow } = await supabase.from('configs').select('value').eq('key', addrConfigKey).single();
+        if (prevRow && prevRow.value) {
+            const prev = JSON.parse(prevRow.value);
+            for (const f of ['phone', 'address', 'subdistrict', 'district', 'province', 'postcode']) {
+                const nv = parsedAddress[f];
+                if ((nv === undefined || nv === null || String(nv).trim() === '') && prev[f]) parsedAddress[f] = prev[f];
+            }
+            if (!messageHasName && !isGenericName(prev.recipient_name) && String(prev.recipient_name).trim() !== String(lineName || '').trim()) {
+                parsedAddress.recipient_name = prev.recipient_name;
+            }
+        }
+    } catch (mergeErr) { /* ไม่มีที่อยู่เดิม หรืออ่านไม่ได้ ใช้ข้อมูลใหม่ตามปกติ */ }
+    await supabase.from('configs').upsert([{ key: addrConfigKey, value: JSON.stringify(parsedAddress) }]);
+    try { io.emit('address_updated', { name: parsedAddress.recipient_name || lineName }); broadcastTodayStats(); } catch (e) { /* หน้าจอล้มเหลวต้องไม่ทำให้การบันทึกพัง */ }
+    return parsedAddress;
+}
+
+// ===== v1.0.19: คิวลองสกัดที่อยู่ด้วย Gemini ใหม่เบื้องหลัง (อยู่ในหน่วยความจำ ปิดโปรแกรมแล้วคิวหาย ผลระบบสำรองยังอยู่) =====
+const AI_ADDRESS_RETRY_BACKOFF_MS = [5000, 15000, 30000, 60000, 120000, 300000];   // ลองได้ 6 ครั้ง รวมราว 9 นาที
+const aiAddressSeq = new Map();      // userId -> ลำดับข้อความที่อยู่ล่าสุด (ผลลองใหม่ของข้อความเก่าห้ามทับข้อความใหม่)
+const aiAddressRetryJobs = [];
+let aiAddressTimer = null;
+function nextAddressSeq(userId) {
+    const n = (aiAddressSeq.get(userId) || 0) + 1;
+    aiAddressSeq.set(userId, n);
+    return n;
+}
+function scheduleAiAddressRetry(job, delayMs) {
+    const backoff = AI_ADDRESS_RETRY_BACKOFF_MS[Math.min(job.attempt, AI_ADDRESS_RETRY_BACKOFF_MS.length - 1)];
+    job.notBefore = Date.now() + Math.max(Number(delayMs) || 0, backoff) * AI_RETRY_SCALE;
+    aiAddressRetryJobs.push(job);
+    kickAiAddressRetry();
+}
+function kickAiAddressRetry() {
+    if (aiAddressTimer || !aiAddressRetryJobs.length) return;
+    const due = Math.max(Math.min(...aiAddressRetryJobs.map(j => j.notBefore)), aiAddressPauseUntil);
+    aiAddressTimer = setTimeout(runAiAddressRetry, Math.max(0, due - Date.now()));
+}
+async function runAiAddressRetry() {
+    aiAddressTimer = null;
+    const now = Date.now();
+    aiAddressRetryJobs.sort((a, b) => a.notBefore - b.notBefore);
+    const idx = now < aiAddressPauseUntil ? -1 : aiAddressRetryJobs.findIndex(j => j.notBefore <= now);
+    if (idx < 0) { kickAiAddressRetry(); return; }
+    const job = aiAddressRetryJobs.splice(idx, 1)[0];
+    try {
+        if (aiAddressSeq.get(job.userId) !== job.seq) {
+            addLog('INFO', `ข้ามการลองสกัดที่อยู่ของ "${job.lineName || 'ลูกค้า'}" ด้วย Gemini ใหม่ เพราะลูกค้าส่งข้อความที่อยู่ใหม่กว่ามาแล้ว`);
+            return;
+        }
+        job.attempt++;
+        try {
+            const merged = finishAiAddress(await callGeminiAddress(job.text), parseThaiAddressFallback(job.text, ''), '');
+            if (!merged) { addLog('INFO', `Gemini AI ลองใหม่แล้วไม่พบเบอร์โทรหรือรหัสไปรษณีย์ในข้อความของ "${job.lineName || 'ลูกค้า'}" คงผลจากระบบสำรองไว้`); return; }
+            if (aiAddressSeq.get(job.userId) !== job.seq) return;   // มีข้อความใหม่เข้ามาระหว่างรอคำตอบ
+            const saved = await saveCustomerAddress(job.userId, job.lineName, merged);
+            addLog('SUCCESS', `Gemini AI สกัดที่อยู่สำเร็จ (ลองใหม่ครั้งที่ ${job.attempt}): คุณ${saved.recipient_name} (${saved.phone}) จ.${saved.province} -- อัปเดตแทนผลจากระบบสำรองแล้ว`);
+        } catch (e) {
+            const st = e && e.response ? e.response.status : null;
+            if ((isRetryableGeminiError(e) || e.retryable) && job.attempt < AI_ADDRESS_RETRY_BACKOFF_MS.length) {
+                const d = geminiRetryDelayMs(e);
+                if (st === 429) aiAddressPauseUntil = Date.now() + Math.max(d, 5000) * AI_RETRY_SCALE;
+                scheduleAiAddressRetry(job, d);
+            } else {
+                addLog('WARN', `Gemini AI สกัดที่อยู่ของ "${job.lineName || 'ลูกค้า'}" ไม่สำเร็จหลังลองใหม่ ${job.attempt} ครั้ง (${st ? 'HTTP ' + st : e.message}) ใช้ผลจากระบบสำรองต่อ -- ตรวจที่อยู่ก่อนส่งออก Kerry`);
+            }
+        }
+    } catch (e) {
+        console.error('Gemini address retry failed:', e.message);
+    } finally {
+        kickAiAddressRetry();
+    }
 }
 
 // 🛡️ Cache ป้องกัน Webhook ซ้ำซ้อน / ลูกค้ากดส่งรัวๆ (Deduplication Cache, TTL 5 นาที)
@@ -5073,37 +5237,13 @@ app.post('/webhook', async (req, res) => {
                 if (hasPhone || (hasPostcode && hasAddrKeyword)) {
                     const lineName = await getLineProfile(userId);
                     // v1.0.17 (Phase C): ไม่ให้ตัวสกัดเติมชื่อ LINE เอง (ส่ง '') เพื่อรู้ว่าข้อความนี้มีชื่อผู้รับจริงหรือไม่
+                    const addrSeq = nextAddressSeq(userId);   // v1.0.19: ลำดับข้อความที่อยู่ของลูกค้า กันผลลองใหม่ของข้อความเก่าทับข้อความใหม่
                     const parsedAddress = await parseThaiAddressWithAI(text, '');
                     if (parsedAddress) {
-                        const genericNames = ['ลูกค้า line', 'ลูกค้าline', 'ลูกค้า', 'คุณ', 'คุณลูกค้า', 'ลูกค้าทั่วไป'];
-                        const isGenericName = (n) => !n || genericNames.includes(String(n).trim().toLowerCase());
-                        const messageHasName = !isGenericName(parsedAddress.recipient_name);
-                        if (!messageHasName) {
-                            parsedAddress.recipient_name = lineName || 'ลูกค้า LINE';
-                        }
-                        // บันทึกที่อยู่ลง configs ผูกกับ line_id ของลูกค้า
-                        const addrConfigKey = `cust_addr_${userId}`;
-                        // 🛡️ ถ้าข้อความใหม่ให้ข้อมูลไม่ครบ (เช่น ส่งมาแค่เบอร์โทร) ให้คงช่องเดิมที่เคยบันทึกไว้ ไม่ลบที่อยู่ดีๆ ทิ้ง
-                        try {
-                            const { data: prevRow } = await supabase.from('configs').select('value').eq('key', addrConfigKey).single();
-                            if (prevRow && prevRow.value) {
-                                const prev = JSON.parse(prevRow.value);
-                                for (const f of ['phone', 'address', 'subdistrict', 'district', 'province', 'postcode']) {
-                                    const nv = parsedAddress[f];
-                                    if ((nv === undefined || nv === null || String(nv).trim() === '') && prev[f]) parsedAddress[f] = prev[f];
-                                }
-                                // v1.0.17 (Phase C): ข้อความใหม่ไม่มีชื่อ (เช่น ส่งมาแค่เบอร์ใหม่) -> คงชื่อจริงที่ลูกค้าเคยพิมพ์ไว้ ไม่ทับด้วยชื่อ LINE
-                                if (!messageHasName && !isGenericName(prev.recipient_name) && String(prev.recipient_name).trim() !== String(lineName || '').trim()) {
-                                    parsedAddress.recipient_name = prev.recipient_name;
-                                }
-                            }
-                        } catch (mergeErr) { /* ไม่มีที่อยู่เดิม หรืออ่านไม่ได้ ใช้ข้อมูลใหม่ตามปกติ */ }
-                        await supabase.from('configs').upsert([{
-                            key: addrConfigKey,
-                            value: JSON.stringify(parsedAddress)
-                        }]);
-                        // v1.0.16: บอกหน้าจอแม่ค้าทันที (Toast เขียว + ไอคอน 📍 บนการ์ดคิวเปลี่ยนเป็นมีที่อยู่) ไม่ต้องรอสลิปใบถัดไป
-                        try { io.emit('address_updated', { name: parsedAddress.recipient_name || lineName }); broadcastTodayStats(); } catch (e) { /* หน้าจอล้มเหลวต้องไม่ทำให้ Webhook พัง */ }
+                        // บันทึกที่อยู่ลง configs ผูกกับ line_id ของลูกค้า (กติกาชื่อ/การคงช่องเดิม อยู่ใน saveCustomerAddress)
+                        await saveCustomerAddress(userId, lineName, parsedAddress);
+                        // v1.0.19: Gemini ตอบไม่ได้ชั่วคราว -> ลองใหม่เบื้องหลัง สำเร็จเมื่อไรอัปเดตแทนผลจากระบบสำรอง
+                        if (parsedAddress.aiRetry) scheduleAiAddressRetry({ userId, lineName, text, seq: addrSeq, attempt: 0 }, parsedAddress.aiRetry.delayMs);
 
                         let confirmMsg = `📦 ผักกาดบันทึกที่อยู่จัดส่งให้เรียบร้อยแล้วค่า!\n` +
                                          `👤 ผู้รับ: ${parsedAddress.recipient_name}\n` +
