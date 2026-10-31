@@ -1767,6 +1767,11 @@ function outOfRoundSlipFilter() {
         params: [Number(last && last.m) || 0, bangkokDateString(-OUT_OF_ROUND_LOOKBACK_DAYS), ...OUT_OF_ROUND_PENDING_STATUSES]
     };
 }
+// v1.0.17: ผลรวมยอดสลิป accumulated นอกรอบรายลูกค้า -- ใช้ทั้งตอนเริ่มไลฟ์จริง (claimOutOfRoundSlips) และตอนแสดงในหน้าต่างเช็กความพร้อม
+// (/api/queue/pending_balances) เพื่อให้ยอด "ระบบเก็บไว้ให้" ที่แม่ค้าเห็นก่อนกดเริ่ม ตรงกับที่ระบบทำจริงเสมอ
+function outOfRoundAccumulatedTotals(f = outOfRoundSlipFilter()) {
+    return supabase.db.prepare(`SELECT line_id, MAX(line_name) AS name, SUM(amount) AS total FROM slips WHERE ${f.where} AND status = 'accumulated' AND line_id IS NOT NULL GROUP BY line_id`).all(...f.params);
+}
 // v1.0.17: คืนเงินของสลิปยอดไม่พอ (accumulated) ที่ผูกเข้ารอบ กลับเข้ากระเป๋าหลังรีเซ็ต
 //  - คืนไม่เกินยอดที่อยู่ในกระเป๋าก่อนรีเซ็ต (preResetBalances) = เงินที่ใช้ซื้อชิ้นไปแล้วไม่ถูกคืนซ้ำ
 //  - คืนไม่เกินผลรวมยอดของสลิป accumulated นอกรอบของคนนั้น = เศษเงินของรอบก่อนยังถูกรีเซ็ตตามกติกา v1.0.13
@@ -1775,7 +1780,7 @@ function claimOutOfRoundSlips(sessionId, preResetBalances = new Map()) {
     if (!LIVE_ID_RE.test(String(sessionId))) return { claimed: 0, restored: [] };
     const f = outOfRoundSlipFilter();
     return supabase.db.transaction(() => {
-        const owedBySlips = supabase.db.prepare(`SELECT line_id, MAX(line_name) AS name, SUM(amount) AS total FROM slips WHERE ${f.where} AND status = 'accumulated' AND line_id IS NOT NULL GROUP BY line_id`).all(...f.params);
+        const owedBySlips = outOfRoundAccumulatedTotals(f);
         const claimed = supabase.db.prepare(`UPDATE slips SET session_id = ? WHERE ${f.where}`).run(sessionId, ...f.params).changes;
         const restored = [];
         for (const r of owedBySlips) {
@@ -2339,11 +2344,25 @@ app.get('/api/queue/pending_balances', (req, res) => {
     try {
         const rows = supabase.db.prepare('SELECT name, line_id, balance FROM customers WHERE balance > 0 ORDER BY balance DESC, name ASC').all();
         const total = rows.reduce((sum, c) => sum + (Number(c.balance) || 0), 0);
+        // v1.0.17 (พบตอนทดสอบหน้างาน 2026-10-31): บอกแยกว่าแต่ละคน "ระบบเก็บไว้ให้" เท่าไร (ยอดไม่พอที่โอนนอกรอบ สูตรเดียวกับ claimOutOfRoundSlips)
+        // และ "จะรีเซ็ตเป็น 0" เท่าไร (เศษของรอบก่อน) -- เดิมหน้าต่างบอกให้โอนคืนทุกยอด แม่ค้าอาจคืนเงินที่ระบบเก็บไว้ให้แล้ว
+        const keptBy = new Map();
+        try { outOfRoundAccumulatedTotals().forEach(r => keptBy.set(r.line_id, Number(r.total) || 0)); } catch (e) { keptBy.clear(); }
+        const r2 = (n) => Math.round(n * 100) / 100;
+        const split = rows.map(c => {
+            const balance = Number(c.balance) || 0;
+            const keep = r2(Math.min(balance, keptBy.get(c.line_id) || 0));
+            return { name: c.name || c.line_id || 'ลูกค้า', balance, keep, reset: r2(balance - keep) };
+        });
         res.json({
             success: true,
             count: rows.length,
             total,
-            list: rows.slice(0, 8).map(c => ({ name: c.name || c.line_id || 'ลูกค้า', balance: Number(c.balance) || 0 }))
+            keepTotal: r2(split.reduce((s, c) => s + c.keep, 0)),
+            resetTotal: r2(split.reduce((s, c) => s + c.reset, 0)),
+            keepCount: split.filter(c => c.keep > 0).length,
+            resetCount: split.filter(c => c.reset > 0).length,
+            list: split.slice(0, 8)
         });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
@@ -3098,7 +3117,8 @@ async function getOrdersForKerry(options = {}) {
         if (bd) customerOrders[custKey].breakdowns.push(bd);
     });
 
-    const orders = Object.values(customerOrders).map(cust => {
+    // v1.0.17 (เจ้าของสั่ง 2026-10-31): ส่งของเฉพาะลูกค้าที่ได้สินค้าอย่างน้อย 1 ชิ้น -- คนที่ยอดยังไม่พอ (0 ชิ้น) ไม่อยู่ในรายชื่อ Kerry และไฟล์ Excel
+    const orders = Object.values(customerOrders).filter(cust => cust.totalDraws > 0).map(cust => {
         const addr = cust.lineId ? addressMap[cust.lineId] : null;
         const itemSummary = mergeBreakdowns(cust.breakdowns) || `สินค้า ${cust.totalDraws} ชิ้น`;
         
@@ -5594,6 +5614,15 @@ function isUpdateUrlAllowed(url) {
 }
 
 // 3. เริ่มกระบวนการดาวน์โหลดและติดตั้งอัปเดต (1-Click Apply)
+// v1.0.17 (พบตอนทดสอบอัปเดตจริง 2026-10-31): env ที่ส่งให้ updater.bat ต้องไม่มีค่าของตัวเฝ้า -- ตัวงานรันด้วย AQ_SUPERVISED=1
+// ถ้าส่งต่อไป โปรแกรมที่ updater เปิดใหม่ (vbs -> run_background.bat -> index.js) จะคิดว่ามีตัวเฝ้าอยู่แล้วและรันโดยไม่มีตัวเฝ้า
+// (พังแล้วไม่เปิดตัวเองใหม่จนกว่าแม่ค้าจะปิด-เปิดโปรแกรม) มีผลกับการอัปเดตที่สั่งจากโค้ดรุ่นนี้ขึ้นไป
+function updaterEnv(env) {
+    const out = Object.assign({}, env || {});
+    delete out.AQ_SUPERVISED;
+    delete out.AQ_RESTART_COUNT;
+    return out;
+}
 app.post('/api/system/apply_update', async (req, res) => {
     try {
         const { downloadUrl, latestVersion, changelog, sha256 } = req.body;
@@ -5714,6 +5743,7 @@ app.post('/api/system/apply_update', async (req, res) => {
 
         const child = spawn('cmd.exe', ['/c', updaterBat, process.pid.toString()], {
             cwd: __dirname,
+            env: updaterEnv(process.env),
             detached: true,
             stdio: 'ignore',
             windowsHide: true

@@ -88,3 +88,31 @@ test('out-of-round money already spent on an item is not given back a second tim
     assert.equal(st.topups.length, 0, 'no orange card: she already has her item');
     assert.equal(st.stats.totalAmount, 140);
 }));
+
+// Found in the field test 2026-10-31: the pre-live readiness window still said every wallet "will be reset to 0 --
+// refund or tell the customer", even for out-of-round money that Phase A keeps. /api/queue/pending_balances now says,
+// per customer, how much will be KEPT and how much RESET, with the same rule the live start applies.
+test('pending_balances (readiness window): out-of-round not-enough money is reported as KEPT, not reset', () => withSandbox(async sb => {
+    await slipFor(sb, 'Ucarol', 'Carol', 'mc1', 'kc1', 60, 'PBAL0001'); await sb.waitForSlips(1);
+    const b = (await sb.get('/api/queue/pending_balances')).json;
+    assert.equal(b.success, true);
+    assert.equal(b.total, 60);
+    assert.equal(b.keepTotal, 60);
+    assert.equal(b.resetTotal, 0);
+    assert.equal(b.keepCount, 1);
+    assert.equal(b.resetCount, 0);
+    assert.deepEqual(b.list.map(c => [c.name, c.balance, c.keep, c.reset]), [['Carol', 60, 60, 0]]);
+}));
+
+test('pending_balances: an earlier-round leftover is reported as RESET and matches what the live start really does', () => withSandbox(async sb => {
+    await sb.startLive();
+    await slipFor(sb, 'Udan', 'Dan', 'md1', 'kd1', 60, 'PBAL0101'); await sb.waitForSlips(1);   // inside round A
+    await sb.endLive();
+    await slipFor(sb, 'Udan', 'Dan', 'md2', 'kd2', 30, 'PBAL0102'); await sb.waitForSlips(2);   // between rounds
+    const b = (await sb.get('/api/queue/pending_balances')).json;
+    assert.deepEqual(b.list.map(c => [c.name, c.balance, c.keep, c.reset]), [['Dan', 90, 30, 60]]);
+    assert.equal(b.keepTotal, 30);
+    assert.equal(b.resetTotal, 60);
+    await sb.startLive();
+    assert.equal(balanceOf(sb, 'Udan'), 30, 'the preview said 30 kept -- the live start must keep exactly that');
+}));

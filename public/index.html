@@ -2972,9 +2972,22 @@
             if (inp.merge && inp.merge.success && inp.merge.pending) rows.push({ key: 'merge', level: 'info', title: 'รวมบิลกับรอบก่อน', detail: 'รอบก่อนตั้ง "รอรวมกับรอบหน้า" ไว้ (ลูกค้า ' + inp.merge.customers + ' คน) รอบนี้จะรวมบิลให้อัตโนมัติ: ไม่เก็บค่าส่งซ้ำ นับชิ้นรวมกันเพื่อส่งฟรี และ Export Kerry เป็นไฟล์เดียว' });
             else if (inp.merge && inp.merge.success) rows.push({ key: 'merge', level: 'ok', title: 'รวมบิลกับรอบก่อน', detail: 'ไม่มีรอบที่รอรวมบิล' });
             else rows.push({ key: 'merge', level: 'warn', title: 'รวมบิลกับรอบก่อน', detail: 'ตรวจสถานะรอรวมบิลไม่ได้' });
-            // 4) เงินค้างของลูกค้า (จะถูกรีเซ็ตเป็น 0 ตอนเริ่มไลฟ์)
+            // 4) เงินค้างของลูกค้า -- v1.0.17: แยก "ระบบเก็บไว้ให้" (ยอดไม่พอที่โอนนอกรอบ) ออกจาก "จะรีเซ็ตเป็น 0" (เศษของรอบก่อน)
             const b = inp.balances;
-            if (b && b.success && b.count > 0) {
+            const hasSplit = !!(b && typeof b.keepTotal === 'number' && typeof b.resetTotal === 'number');
+            if (b && b.success && b.count > 0 && hasSplit) {
+                const list = b.list || [];
+                const keepLines = list.filter(c => c.keep > 0).map(c => c.name + ': ' + fmt(c.keep) + ' บาท');
+                const resetLines = list.filter(c => c.reset > 0).map(c => c.name + ': ' + fmt(c.reset) + ' บาท');
+                if ((b.keepCount || 0) > keepLines.length) keepLines.push('และอีก ' + (b.keepCount - keepLines.length) + ' คน');
+                if ((b.resetCount || 0) > resetLines.length) resetLines.push('และอีก ' + (b.resetCount - resetLines.length) + ' คน');
+                const keepText = b.keepTotal > 0 ? 'ยอดที่ลูกค้าโอนนอกรอบแต่ยังไม่พอซื้อ ' + b.keepCount + ' คน รวม ' + fmt(b.keepTotal) + ' บาท\n' + keepLines.join('\n') + '\nเริ่มไลฟ์แล้วระบบเก็บยอดนี้ไว้ให้ ลูกค้าขึ้นการ์ด "รอโอนเพิ่ม" ในรอบนี้ ไม่ต้องโอนคืน' : '';
+                if (b.resetTotal > 0) {
+                    rows.push({ key: 'balances', level: 'warn', title: 'เงินค้างของลูกค้า', detail: 'มีเศษเงินค้างจากรอบก่อน ' + b.resetCount + ' คน รวม ' + fmt(b.resetTotal) + ' บาท\n' + resetLines.join('\n') + '\nเริ่มไลฟ์แล้วยอดเหล่านี้จะถูกรีเซ็ตเป็น 0 — โอนคืนหรือแจ้งลูกค้าก่อน' + (keepText ? '\n\n' + keepText : '') });
+                } else {
+                    rows.push({ key: 'balances', level: 'info', title: 'เงินค้างของลูกค้า', detail: keepText });
+                }
+            } else if (b && b.success && b.count > 0) {
                 const lines = (b.list || []).map(c => c.name + ': ' + fmt(c.balance) + ' บาท');
                 if (b.count > lines.length) lines.push('และอีก ' + (b.count - lines.length) + ' คน');
                 rows.push({ key: 'balances', level: 'warn', title: 'เงินค้างของลูกค้า', detail: 'มีลูกค้าที่โอนมาแล้วยังไม่ได้สิทธิ์ ' + b.count + ' คน รวม ' + fmt(b.total) + ' บาท\n' + lines.join('\n') + '\nเริ่มไลฟ์แล้วยอดเหล่านี้จะถูกรีเซ็ตเป็น 0 — โอนคืนหรือแจ้งลูกค้าก่อน' });
