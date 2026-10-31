@@ -114,7 +114,7 @@ test('system.log + Discord activity channel get the out-of-round warning line', 
     );
 
     await sb.waitFor(() => sb.mock.discords.some(d => d.path.includes('aqactivitychanneltest000001')
-        && (d.body.embeds || []).some(e => /"Alice" โอนนอกรอบ/.test(String(e.description || '')))
+        && ((d.body && d.body.embeds) || []).some(e => /"Alice" โอนนอกรอบ/.test(String(e.description || '')))
     ), 12000, 'the out-of-round warning never reached the Discord activity channel');
 
     assert.deepEqual(sb.unexpectedCalls(), []);

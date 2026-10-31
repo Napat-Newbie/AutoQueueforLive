@@ -104,11 +104,11 @@ test('when a dedicated end-live webhook is set, the summary goes ONLY to that ch
     await pay(sb, 'Ualice', 'Alice', 'm1', 'k1', 140, 'D1'); await sb.waitForSlips(1);
     await sb.endLive();
 
-    await sb.waitFor(() => sb.mock.discords.some(d => (d.body.embeds || []).some(e => /🏁 สรุปหลังจบไลฟ์/.test(String(e.title)))), 8000, 'summary embed was not sent');
+    await sb.waitFor(() => sb.mock.discords.some(d => ((d.body && d.body.embeds) || []).some(e => /🏁 สรุปหลังจบไลฟ์/.test(String(e.title)))), 8000, 'summary embed was not sent');
     const onEndLive = sb.mock.discords.filter(d => d.path.includes('99999/end-live-summary-hook-abcdefghij'));
     const onMain = sb.mock.discords.filter(d => d.path.includes('12345/main-alert-hook'));
-    assert.ok(onEndLive.some(d => (d.body.embeds || []).some(e => /🏁 สรุปหลังจบไลฟ์/.test(String(e.title)))), 'summary arrived on the dedicated channel');
-    assert.ok(!onMain.some(d => (d.body.embeds || []).some(e => /🏁 สรุปหลังจบไลฟ์/.test(String(e.title)))), 'main alert channel must NOT receive the summary');
+    assert.ok(onEndLive.some(d => ((d.body && d.body.embeds) || []).some(e => /🏁 สรุปหลังจบไลฟ์/.test(String(e.title)))), 'summary arrived on the dedicated channel');
+    assert.ok(!onMain.some(d => ((d.body && d.body.embeds) || []).some(e => /🏁 สรุปหลังจบไลฟ์/.test(String(e.title)))), 'main alert channel must NOT receive the summary');
 }, null, ENDLIVE));
 
 test('dedicated channel also receives the second message when the round is busy (WARN detail split)', () => withSandbox(async sb => {
@@ -129,7 +129,7 @@ test('dedicated channel also receives the second message when the round is busy 
     await sb.endLive();
     await sb.waitFor(() => summaryEmbeds(sb).length >= 1, 8000, 'summary missing');
     const onEndLive = sb.mock.discords.filter(d => d.path.includes('99999/end-live-summary-hook-abcdefghij'));
-    const summaries = onEndLive.flatMap(d => (d.body.embeds || []).filter(e => /🏁 สรุปหลังจบไลฟ์/.test(String(e.title))));
+    const summaries = onEndLive.flatMap(d => ((d.body && d.body.embeds) || []).filter(e => /🏁 สรุปหลังจบไลฟ์/.test(String(e.title))));
     assert.ok(summaries.length >= 1);
     const warnText = summaries.flatMap(e => e.fields.filter(f => /คำเตือน|WARN/.test(f.name)).map(f => f.value)).join('\n');
     assert.match(warnText, /สลิปซ้ำ|ซ้ำกับลูกค้า/, 'duplicate warn has analysis text');

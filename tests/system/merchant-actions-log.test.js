@@ -48,12 +48,14 @@ test('queue buttons during a live land in system.log AND the Discord activity ch
     await sb.waitFor(() => {
         const feed = sb.mock.discords
             .filter(d => d.path.includes('aqactivitychanneltest000001'))
-            .map(d => (d.body.embeds || []).map(e => String(e.description || '')).join('\n')).join('\n');
+            .map(d => ((d.body && d.body.embeds) || []).map(e => String(e.description || '')).join('\n')).join('\n');
         return /แม่ค้ากด "เรียกคิว" — Alice/.test(feed) && /แม่ค้ากด "เสร็จสิ้น" — Alice/.test(feed);
     }, 12000, 'merchant queue actions never reached the Discord activity channel');
 
     // พฤติกรรมเดิมของ v1.0.16 ต้องไม่พัง: สรุปหลังจบไลฟ์ยังส่งทุกครั้ง
-    await sb.waitFor(() => sb.mock.discords.some(d => (d.body.embeds || []).some(e => /สรุปหลังจบไลฟ์/.test(String(e.title || '')))), 12000, 'end-of-live summary missing');
+    // v1.0.18: Discord now also receives a multipart file upload (the round's log -> Dev Report); the mock records it as
+    // `raw` with no `body`, so read embeds defensively
+    await sb.waitFor(() => sb.mock.discords.some(d => ((d.body && d.body.embeds) || []).some(e => /สรุปหลังจบไลฟ์/.test(String(e.title || '')))), 12000, 'end-of-live summary missing');
 
     assert.deepEqual(sb.unexpectedCalls(), []);
 }, {}, ENV));
