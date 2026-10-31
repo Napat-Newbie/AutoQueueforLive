@@ -5068,11 +5068,11 @@ app.post('/webhook', async (req, res) => {
                         continue;
                     }
                     const keyedMatch = pickManualMatch(keyedCandidates, amount, transferSec);
-                    if (keyedMatch && keyedMatch.qr_ref) {
-                        // v1.0.18: ใบที่กรอกเองมีรหัส QR ของตัวเอง และรหัสไม่ตรงกับสลิปใหม่ = คนละรายการแน่นอน
-                        // นับเป็นยอดใหม่เลย ไม่ต้องผูก ไม่ต้องถามแม่ค้า (แก้เคสโอนยอดเท่ากันติดกัน 2 ครั้งที่เคยหายเงิน)
-                        addLog('INFO', `สลิปรหัส ${transRef} ของ "${lineName}" ไม่ตรงกับรหัส QR ของสลิปที่แม่ค้ากรอกยอดเอง (#${keyedMatch.id}, รหัส ${keyedMatch.qr_ref}) — คนละรายการแน่นอน นับเป็นยอดใหม่`);
-                    } else if (keyedMatch) {
+                    // แก้ 2026-10-31 (เจ้าของสั่ง "แก้ความเสี่ยงก่อน"): รหัส QR "ไม่ตรง" ไม่ใช่หลักฐานว่าเป็นคนละรายการ -- QR sub-tag 02 == transRef
+                    // พิสูจน์แล้วกับสลิป KTB ใบเดียว ส่วน BBL/SCB ยังเทียบไม่ได้ และรูปแบบรหัสอาจต่างกันเสมอแม้เป็นสลิปใบเดิม ถ้าถือว่า "ไม่ตรง = คนละรายการ"
+                    // จะนับเงินซ้ำในเคสที่ตัวกันนี้มีไว้พอดี (BBL 1010 -> แม่ค้ากรอกยอด -> ลูกค้าส่งรูปเดิมซ้ำ) จึงใช้เฉพาะ "ตรงกัน" (refMatch ด้านบน)
+                    // ที่เหลือใช้ทางปลอดภัย: ผูกเป็นใบเดียว + การ์ดยืนยันให้แม่ค้ากด "บวกยอด" ได้ถ้าเป็นการโอนครั้งที่ 2 จริง
+                    if (keyedMatch) {
                         supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(transRef, keyedMatch.id);
                         // v1.0.18: ขึ้นการ์ดยืนยันถาวรให้แม่ค้าตัดสิน (แทน toast 12 วิ ที่หายไปพร้อมเงิน) — กด 1 ปุ่มบวกยอดครั้งที่ 2 ได้
                         recordManualMatchWarning({ name: lineName, lineId: userId, slipId: keyedMatch.id, transRef, amount, transDate: slipData.transDate, transTime: slipData.transTime });
