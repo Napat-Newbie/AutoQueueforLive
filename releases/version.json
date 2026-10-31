@@ -13,7 +13,7 @@
     "ตัวอัปเดตโปรแกรมแข็งแรงขึ้น ใช้ได้กับ Windows ทุกภาษา และไม่สะดุดระหว่างอัปเดต",
     "ชุดทดสอบอัตโนมัติ 308 ข้อ ผ่านทั้งหมด"
   ],
-  "downloadUrl": "https://github.com/Napat-Newbie/AutoQueueforLive/releases/download/v1.0.19/update_v1.0.19.zip",
+  "downloadUrl": "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/8b7fdc6a779914876de3f7152bb0576daf05a8de/releases/update_v1.0.19.zip",
   "fileSizeKB": 317.6,
   "sha256": "7fad68a5bcfd09687e7818e6b3011add84e80c0b0806d8aaeae29c18799678d9"
 }
