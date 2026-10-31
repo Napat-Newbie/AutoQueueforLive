@@ -74,6 +74,14 @@ try {
     console.log('✅ Migration: เพิ่มคอลัมน์ arrived_out_of_round ในตาราง slips สำเร็จ');
   }
 
+  // v1.0.18: รหัสประจำรายการที่ถอดจาก QR ของรูปสลิป (sub-tag 02) — เก็บตั้งแต่รูปเข้าระบบแม้ยังตรวจไม่ผ่าน
+  // พิสูจน์ด้วยคีย์จริง 2026-10-31 ว่ารหัสนี้ตรงกับ transRef ที่ SlipOK ตอบตอนตรวจผ่าน (สลิปกรุงไทยตรงเป๊ะทุกตัว)
+  // ใช้จับคู่ "สลิปที่ตรวจผ่าน" กับ "การ์ดที่แม่ค้ากรอกยอดเอง" แบบชัวร์ แทนการเดาจากช่วงเวลา
+  if (!slipCols.includes('qr_ref')) {
+    db.exec(`ALTER TABLE slips ADD COLUMN qr_ref TEXT;`);
+    console.log('✅ Migration: เพิ่มคอลัมน์ qr_ref ในตาราง slips สำเร็จ');
+  }
+
   // 1. Backfill trans_ref สำหรับสลิปปกติที่ไม่ใช่ manual_image
   db.exec(`
     UPDATE slips 

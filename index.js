@@ -4038,7 +4038,8 @@ async function runBankDelayRecheck(slipId, imageFile, delayMin, attempt) {
     if (Number(slip.amount) > 0) {
         if (slip.trans_ref) return;   // มีรหัสแล้ว (เช่น ตรวจซ้ำชนกัน) ไม่ทำซ้ำ
         const transferSec = stampToSec(d.transDate, d.transTime);
-        if (pickManualMatch([slip], amt, transferSec)) {
+        // v1.0.18: ถ้ารูปที่เก็บไว้มีรหัส QR และตรงกับรหัสที่ตรวจได้ = รายการเดียวกันแน่นอน ผูกได้เลยไม่ต้องดูหน้าต่างเวลา (กันนาฬิกาเครื่องร้านเพี้ยน)
+        if ((slip.qr_ref && slip.qr_ref === ref) || pickManualMatch([slip], amt, transferSec)) {
             supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(ref, slipId);
             await notifyUnrecordedSlip(slip.line_name || 'ลูกค้า', null, `สลิปรหัส ${ref} (ยอด ${fmtBaht(amt)} บาท) ที่ระบบตรวจซ้ำหลังพ้นเวลารอ ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (สลิป #${slipId}) ระบบถือเป็นใบเดียวกันและไม่นับยอดซ้ำ`, 'duplicate');
             addLog('WARN', `ระบบตรวจสลิปซ้ำเอง: รหัส ${ref} ตรงกับสลิปที่แม่ค้ากรอกยอดเอง (#${slipId}) ผูกเป็นใบเดียวกัน ไม่นับยอดซ้ำ`);
@@ -4089,6 +4090,51 @@ function stampToSec(dateStr, timeStr) {
     if (!d || !t) return null;
     return Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]), Number(t[3] || 0)) / 1000;
 }
+// ===== v1.0.18: ตัวตนของรายการจาก QR ของสลิป =====
+// พิสูจน์ด้วยคีย์ SlipOK จริง (2026-10-31): sub-tag 02 ใน QR ของสลิป == transRef ที่ SlipOK ตอบตอนตรวจผ่าน
+// (สลิปกรุงไทยตรงกันทุกตัวอักษร A0aa74ba726a04481) — จึงใช้เป็นบัตรประจำตัวรายการจับคู่แทนการเดาจากเวลาได้
+// โครงสร้าง QR: tag 00 (template) → sub 00 เวอร์ชัน / sub 01 รหัสธนาคารผู้โอน / sub 02 ข้อมูลรายการ
+function extractQrRef(qrText) {
+    const text = String(qrText || '').trim();
+    if (!text || text.length < 10) return null;
+    let i = 0;
+    while (i + 4 <= text.length) {
+        const id = text.slice(i, i + 2);
+        const len = parseInt(text.slice(i + 2, i + 4), 10);
+        if (!/^\d{2}$/.test(id) || !Number.isFinite(len) || i + 4 + len > text.length) return null;
+        if (id === '00') {
+            const inner = text.slice(i + 4, i + 4 + len);
+            let j = 0;
+            while (j + 4 <= inner.length) {
+                const sid = inner.slice(j, j + 2);
+                const slen = parseInt(inner.slice(j + 2, j + 4), 10);
+                if (!/^\d{2}$/.test(sid) || !Number.isFinite(slen) || j + 4 + slen > inner.length) return null;
+                if (sid === '02') {
+                    const v = inner.slice(j + 4, j + 4 + slen);
+                    return v.length >= 8 ? v : null;   // สั้นผิดปกติ = ไม่ใช่ข้อมูลรายการ
+                }
+                j += 4 + slen;
+            }
+            return null;
+        }
+        i += 4 + len;
+    }
+    return null;
+}
+// ถอด QR จากรูปสลิปเอง (jsqr + jimp ติดตั้งอยู่แล้ว) — ใช้เมื่อ SlipOK ไม่ได้ส่ง qrcodeData มาให้ (เช่น รูปไม่มี QR ที่ตรวจไม่ผ่าน)
+// ถอดไม่ได้ = คืน null → ระบบกลับไปใช้วิธีเดิม (หน้าต่างเวลา + การ์ดยืนยัน) ไม่มีอะไรพัง
+async function decodeImageQrRef(imageBuffer) {
+    try {
+        const JimpMod = require('jimp');
+        const jsqrMod = require('jsqr');
+        const jsQR = jsqrMod.default || jsqrMod;
+        const Jimp = JimpMod.default || JimpMod;
+        const img = await Jimp.read(Buffer.from(imageBuffer));
+        const res = jsQR(img.bitmap.data, img.bitmap.width, img.bitmap.height);
+        return res && res.data ? extractQrRef(res.data) : null;
+    } catch (e) { return null; }
+}
+
 const MANUAL_MATCH_TOLERANCE_SEC = 120;    // ราวบน: เผื่อนาฬิกาเครื่องร้านกับนาฬิกาธนาคารต่างกันเล็กน้อย
 const MANUAL_MATCH_MAX_AGE_SEC = 60 * 60;  // ราวล่าง: การโอนต้องไม่เก่ากว่ารูปที่เข้ามาเกิน 60 นาที
 function pickManualMatch(rows, amount, transferSec, toleranceSec = MANUAL_MATCH_TOLERANCE_SEC, maxAgeSec = MANUAL_MATCH_MAX_AGE_SEC) {
@@ -5011,9 +5057,22 @@ app.post('/webhook', async (req, res) => {
                 // ให้ผูกรหัสสลิปเข้ากับใบเดิม ไม่สร้างใบใหม่ และถ้ายังมีรูปรอใส่ยอดค้างของลูกค้าคนเดียวกัน ให้เตือนไม่ให้กรอกซ้ำ
                 try {
                     const transferSec = stampToSec(slipData.transDate, slipData.transTime);
-                    const manualRows = supabase.db.prepare("SELECT id, amount, trans_date, trans_time, status, trans_ref FROM slips WHERE line_id = ? AND qr_payload LIKE 'manual_image%' AND status != 'rejected' AND trans_date >= ? ORDER BY id ASC").all(userId, bangkokDateString(-2));
-                    const keyedMatch = pickManualMatch(manualRows.filter(r => Number(r.amount) > 0 && !r.trans_ref), amount, transferSec);
-                    if (keyedMatch) {
+                    const manualRows = supabase.db.prepare("SELECT id, amount, trans_date, trans_time, status, trans_ref, qr_ref FROM slips WHERE line_id = ? AND qr_payload LIKE 'manual_image%' AND status != 'rejected' AND trans_date >= ? ORDER BY id ASC").all(userId, bangkokDateString(-2));
+                    const keyedCandidates = manualRows.filter(r => Number(r.amount) > 0 && !r.trans_ref);
+                    // v1.0.18: จับคู่ด้วยรหัส QR ก่อน (แม่นยำ 100% — พิสูจน์ด้วยคีย์จริงว่า sub-tag 02 == transRef) ไม่ต้องพึ่งหน้าต่างเวลา
+                    // รหัสตรงกัน = รายการเดียวกันแน่นอน แม้นาฬิกาเครื่องร้านเพี้ยนเกิน 120 วินาที
+                    const refMatch = keyedCandidates.find(r => r.qr_ref && r.qr_ref === transRef);
+                    if (refMatch) {
+                        supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(transRef, refMatch.id);
+                        addLog('INFO', `สลิปรหัส ${transRef} ของ "${lineName}" ตรงกับรหัส QR ของสลิปที่แม่ค้ากรอกยอดเอง (#${refMatch.id}) — ผูกเป็นใบเดียวกันด้วยรหัสรายการ (แม่นยำ ไม่ใช่การเดาจากเวลา)`);
+                        continue;
+                    }
+                    const keyedMatch = pickManualMatch(keyedCandidates, amount, transferSec);
+                    if (keyedMatch && keyedMatch.qr_ref) {
+                        // v1.0.18: ใบที่กรอกเองมีรหัส QR ของตัวเอง และรหัสไม่ตรงกับสลิปใหม่ = คนละรายการแน่นอน
+                        // นับเป็นยอดใหม่เลย ไม่ต้องผูก ไม่ต้องถามแม่ค้า (แก้เคสโอนยอดเท่ากันติดกัน 2 ครั้งที่เคยหายเงิน)
+                        addLog('INFO', `สลิปรหัส ${transRef} ของ "${lineName}" ไม่ตรงกับรหัส QR ของสลิปที่แม่ค้ากรอกยอดเอง (#${keyedMatch.id}, รหัส ${keyedMatch.qr_ref}) — คนละรายการแน่นอน นับเป็นยอดใหม่`);
+                    } else if (keyedMatch) {
                         supabase.db.prepare("UPDATE slips SET trans_ref = ? WHERE id = ? AND (trans_ref IS NULL OR trans_ref = '')").run(transRef, keyedMatch.id);
                         // v1.0.18: ขึ้นการ์ดยืนยันถาวรให้แม่ค้าตัดสิน (แทน toast 12 วิ ที่หายไปพร้อมเงิน) — กด 1 ปุ่มบวกยอดครั้งที่ 2 ได้
                         recordManualMatchWarning({ name: lineName, lineId: userId, slipId: keyedMatch.id, transRef, amount, transDate: slipData.transDate, transTime: slipData.transTime });
@@ -5111,6 +5170,7 @@ app.post('/webhook', async (req, res) => {
                             session_id: activeLiveSession ? activeLiveSession.id : null,
                             trans_date: getTodayString(), trans_time: getLocalTimeString(),
                             qr_payload: `manual_image|/uploads/${fbName}`, status: 'waiting',
+                            qr_ref: (await decodeImageQrRef(imageBuffer)) || null,   // v1.0.18: ตัวตนรายการจาก QR (ถอดได้จากรูปที่เก็บไว้)
                             arrived_out_of_round: activeLiveSession ? 0 : 1   // v1.0.16: รูปที่เข้าตอนไม่มีไลฟ์ ติดป้ายโอนนอกรอบเหมือนสลิปปกติ
                         }]).select().single();
                         io.emit('pending_amount_slip', { name: lineName });
@@ -5169,18 +5229,23 @@ app.post('/webhook', async (req, res) => {
                 await fs.promises.writeFile(filePath, Buffer.from(imageBuffer));
                 const imageUrl = `/uploads/${fileName}`;
 
-                const payloadRef = `manual_image|${imageUrl}`; 
-                addLog('INFO', `ได้รับภาพจากลูกค้า "${lineName}" ที่ระบบอัตโนมัติอ่านสลิปไม่ได้ นำเข้าคิวเพื่อให้แอดมินตรวจเช็คภาพเอง`);
+                // v1.0.18: เก็บตัวตนของรายการจาก QR ไว้ตั้งแต่รูปเข้า (ใช้ qrcodeData ที่ SlipOK ตอบมาใน 1010 ก่อน — ฟรีและเร็ว
+                // ถอด QR จากรูปเองเป็นทางสำรอง) เพื่อจับคู่กับสลิปที่ตรวจผ่านภายหลังได้แบบแม่นยำ ไม่ต้องเดาจากช่วงเวลา
+                const qrRef = extractQrRef(slipResult && slipResult.data && slipResult.data.qrcodeData) || (await decodeImageQrRef(imageBuffer)) || null;
+
+                const payloadRef = `manual_image|${imageUrl}`;
+                addLog('INFO', `ได้รับภาพจากลูกค้า "${lineName}" ที่ระบบอัตโนมัติอ่านสลิปไม่ได้ นำเข้าคิวเพื่อให้แอดมินตรวจเช็คภาพเอง${qrRef ? ` (จดรหัส QR ของรายการไว้: ${qrRef})` : ''}`);
                 const { data: inserted } = await supabase.from('slips').insert([{
-                    amount: 0, 
-                    draws: 0, 
-                    line_id: userId, 
+                    amount: 0,
+                    draws: 0,
+                    line_id: userId,
                     sender_name: lineName, // ใช้ชื่อ LINE จริงเช่นกัน
-                    line_name: lineName, 
+                    line_name: lineName,
                     session_id: activeLiveSession ? activeLiveSession.id : null,
-                    trans_date: getTodayString(), 
-                    trans_time: getLocalTimeString(), 
-                    qr_payload: payloadRef, 
+                    trans_date: getTodayString(),
+                    trans_time: getLocalTimeString(),
+                    qr_payload: payloadRef,
+                    qr_ref: qrRef,   // v1.0.18: ตัวตนรายการจาก QR (NULL ถ้าถอดไม่ได้ — ใช้วิธีเดิม)
                     status: 'waiting',
                     arrived_out_of_round: activeLiveSession ? 0 : 1   // v1.0.16: รูปที่เข้าตอนไม่มีไลฟ์ ติดป้ายโอนนอกรอบเหมือนสลิปปกติ
                 }]).select().single();
