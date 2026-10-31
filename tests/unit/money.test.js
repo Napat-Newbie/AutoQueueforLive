@@ -13,7 +13,8 @@ function env(overrides = {}) {
     return load(INDEX, {
         functions: ['calculateBestDraws', 'calculateBestDrawsCore', 'describeTopup', 'walletAfter', 'fmtBaht'],
         consts: ['MAX_DP_BUDGET'],
-        globals: { priceList: [{ name: 'A', price: 100 }, { name: 'B', price: 200 }], shippingFee: 40, freeShippingThreshold: 3, addLog() {}, ...overrides },
+        // v1.0.19: สูตรแท้อยู่ใน lib/money.js — ตัวห่อใน index.js เรียกผ่านตัวแปร Money (ทุก assertion เดิมไม่แก้ = พิสูจน์พฤติกรรมเหมือนเดิม)
+        globals: { Money: require('../../lib/money'), priceList: [{ name: 'A', price: 100 }, { name: 'B', price: 200 }], shippingFee: 40, freeShippingThreshold: 3, addLog() {}, ...overrides },
     });
 }
 
