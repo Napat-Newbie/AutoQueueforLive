@@ -1749,6 +1749,7 @@ function saveSessionRecord(rec) {
         return;
     }
     supabase.db.prepare('INSERT OR REPLACE INTO configs (key, value) VALUES (?, ?)').run(`session_hist_${rec.id}`, JSON.stringify(rec));
+    invalidateEndedSessionCache();   // v1.0.19: ป้าย ก่อนไลฟ์/หลังจบไลฟ์ ใช้รายการรอบที่จบแล้ว — เติม cache ใหม่เมื่อสถานะรอบเปลี่ยน
 }
 // กลุ่มรอบที่ต้องส่งของพร้อมกัน (เรียงเก่า -> ใหม่) ถ้าไม่ได้รวมบิล คืนรอบเดียว
 function resolveMergeGroup(id) {
@@ -1790,6 +1791,34 @@ function bangkokDateString(offsetDays = 0) {
     d.setDate(d.getDate() + offsetDays);
     return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 }
+// ===== v1.0.19: แยก "เงินมาก่อนเริ่มไลฟ์" ออกจาก "ยอดจุ่มหลังจบไลฟ์" =====
+// เจ้าของตรวจพบ (2026-10-31): ป้ายเดิมเขียน "เงินมาหลังจบไลฟ์" ทุกกรณี ทั้งที่เงินที่มาก่อนไลฟ์รอบแรกของช่วง
+// คือเงินเตรียมตัว (ไม่เสี่ยงส่งของซ้ำ) ส่วนเงินที่มาหลังมีรอบไลฟ์จบไปแล้วคือยอดจุ่ม (ระวังส่งซ้ำ)
+let endedSessionCache = null;   // เวลาจบของรอบที่จบแล้ว เรียงจากน้อยไปมาก — เติมใหม่เมื่อบันทึกสถานะรอบ
+function invalidateEndedSessionCache() { endedSessionCache = null; }
+function endedSessionList() {
+    if (endedSessionCache) return endedSessionCache;
+    const out = [];
+    try {
+        const rows = supabase.db.prepare("SELECT value FROM configs WHERE key LIKE 'session_hist_%'").all();
+        rows.forEach(r => { try { const s = JSON.parse(r.value); if (s && s.endTime) out.push(Number(s.endTime)); } catch (e) {} });
+    } catch (e) {}
+    out.sort((a, b) => a - b);
+    endedSessionCache = out;
+    return out;
+}
+// เวลาที่สลิปเข้าระบบเป็น epoch ms จริง: stampToSec อ่านเวลากรุงเทพเสมือน UTC → ลบ 7 ชม. กลับเป็นเวลาแท้
+function slipArrivalEpochMs(transDate, transTime) {
+    const sec = stampToSec(transDate, transTime);
+    return sec === null ? null : (sec - 7 * 3600) * 1000;
+}
+// 'before' = ยังไม่มีรอบไหนจบก่อนเงินเข้า (เงินก่อนไลฟ์) / 'after' = มีรอบจบไปก่อนแล้ว (ยอดจุ่ม — ใช้คำเตือนเดิม)
+function outOfRoundWhen(transDate, transTime) {
+    const t = slipArrivalEpochMs(transDate, transTime);
+    if (t === null) return 'after';   // ไม่รู้เวลาเข้า → ใช้คำเตือน (กันเหนียว)
+    return endedSessionList().some(endMs => endMs <= t) ? 'after' : 'before';
+}
+
 function outOfRoundSlipFilter() {
     const last = supabase.db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM slips WHERE session_id IS NOT NULL').get();
     const marks = OUT_OF_ROUND_PENDING_STATUSES.map(() => '?').join(',');
@@ -2077,7 +2106,11 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
                 existing.draws += slip.draws || 0;
                 existing.slipIds.push(slip.id);
                 existing.slips.push({ id: slip.id, breakdown: breakdown || '' });   // v1.0.16: ไว้ให้ปุ่ม "แก้ไขสินค้า" แก้รายการรายสลิป
-                if (slip.arrived_out_of_round === 1) existing.outOfRound = true;
+                if (slip.arrived_out_of_round === 1) {
+                    existing.outOfRound = true;
+                    const w = outOfRoundWhen(slip.trans_date, slip.trans_time);   // v1.0.19: ก่อนไลฟ์/หลังจบไลฟ์ (มีทั้งคู่ใช้ 'after' — กันเหนียว)
+                    if (w === 'after' || !existing.outOfRoundWhen) existing.outOfRoundWhen = w;
+                }
                 if (breakdown) existing.rawBreakdowns.push(breakdown);
             } else {
                 groupMap[statusGroup].set(key, {
@@ -2085,6 +2118,7 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
                     amount: slip.amount, draws: slip.draws || 0, time: slip.trans_time, status: statusGroup,
                     isPendingAmount: isPendingAmount, imageUrl: imageUrl, date: slip.trans_date,
                     outOfRound: slip.arrived_out_of_round === 1,   // v1.0.16: ป้าย "โอนนอกรอบ" (เงินมาตอนไม่มีไลฟ์)
+                    outOfRoundWhen: slip.arrived_out_of_round === 1 ? outOfRoundWhen(slip.trans_date, slip.trans_time) : undefined,   // v1.0.19: 'before'=มาก่อนไลฟ์ / 'after'=ยอดจุ่มหลังจบไลฟ์
                     bankDelay: isPendingAmount ? (bankDelayHints.get(slip.id) || undefined) : undefined,   // v1.0.17: สลิปธนาคารที่ต้องรอ (Code 1010)
                     slips: [{ id: slip.id, breakdown: breakdown || '' }],
                     rawBreakdowns: breakdown ? [breakdown] : []
@@ -2284,7 +2318,7 @@ app.get('/api/history_data', async (req, res) => {
             
             let safeRef = `${transRef}|${breakdownStr}`;
 
-            return { id: slip.id, date: slip.trans_date, time: slip.trans_time, name: slip.sender_name, lineName: slip.line_name, amount: slip.amount, draws: slip.draws || 0, status: slip.status, ref: safeRef, sessionId: slip.session_id || null, outOfRound: slip.arrived_out_of_round === 1, customerKey: slip.line_id || null };   // v1.0.16: ธง "โอนนอกรอบ" ใช้บอกในหน้าประวัติว่ายอดนี้เข้ามาตอนไม่มีไลฟ์แล้วถูกผูกเข้ารอบไหน
+            return { id: slip.id, date: slip.trans_date, time: slip.trans_time, name: slip.sender_name, lineName: slip.line_name, amount: slip.amount, draws: slip.draws || 0, status: slip.status, ref: safeRef, sessionId: slip.session_id || null, outOfRound: slip.arrived_out_of_round === 1, outOfRoundWhen: slip.arrived_out_of_round === 1 ? outOfRoundWhen(slip.trans_date, slip.trans_time) : null, customerKey: slip.line_id || null };   // v1.0.16: ธง "โอนนอกรอบ" ใช้บอกในหน้าประวัติว่ายอดนี้เข้ามาตอนไม่มีไลฟ์แล้วถูกผูกเข้ารอบไหน (+ v1.0.19: ก่อนไลฟ์/หลังจบไลฟ์)
         });
 
         // v1.0.15: สรุปยอดโอนแยกตามรอบไลฟ์ (นับทั้งรอบ แม้ไลฟ์ข้ามเที่ยงคืน / ไม่นับสลิปที่ปัดตก)
@@ -3257,7 +3291,11 @@ async function getOrdersForKerry(options = {}) {
         customerOrders[custKey].totalDraws += Number(slip.draws) || 0;
         customerOrders[custKey].slipsCount += 1;
         customerOrders[custKey].slipIds.push(slip.id);
-        if (slip.arrived_out_of_round === 1) customerOrders[custKey].outOfRound = true;   // v1.0.16: ยอดโอนนอกรอบของลูกค้าคนนี้
+        if (slip.arrived_out_of_round === 1) {   // v1.0.16: ยอดโอนนอกรอบของลูกค้าคนนี้ (+ v1.0.19: จำว่ามาก่อนไลฟ์หรือหลังจบไลฟ์ — มีทั้งคู่ใช้ 'after' กันเหนียว)
+            customerOrders[custKey].outOfRound = true;
+            const w = outOfRoundWhen(slip.trans_date, slip.trans_time);
+            if (w === 'after' || !customerOrders[custKey].outOfRoundWhen) customerOrders[custKey].outOfRoundWhen = w;
+        }
         
         let bd = '';
         if (slip.qr_payload && slip.qr_payload.startsWith('manual_image')) {
@@ -3302,6 +3340,7 @@ async function getOrdersForKerry(options = {}) {
             items: itemSummary,
             hasAddress: hasAddr,
             outOfRound: !!cust.outOfRound,   // v1.0.16: มีสลิปที่เงินเข้าตอนไม่มีไลฟ์ (ติดป้ายในไฟล์ Kerry และหน้าต่างสรุป)
+            outOfRoundWhen: cust.outOfRound ? (cust.outOfRoundWhen || 'after') : null,   // v1.0.19: 'before'=มาก่อนไลฟ์ / 'after'=ยอดจุ่ม
             address: effectiveAddr
         };
     });
@@ -3361,7 +3400,7 @@ app.get('/api/kerry/summary', async (req, res) => {
             if (r && r.holdMerge && !r.mergedInto) held = { sessionId: sid };
             else if (r && canHoldSession(r)) canHold = { sessionId: sid };
         }
-        res.json({ success: true, totalCustomers, readyCustomers, missingCustomers, orders: [...orders], outOfRoundCustomers: orders.filter(o => o.outOfRound).map(o => o.lineName), merge, held, canHold });
+        res.json({ success: true, totalCustomers, readyCustomers, missingCustomers, orders: [...orders], outOfRoundCustomers: orders.filter(o => o.outOfRound).map(o => ({ name: o.lineName, when: o.outOfRoundWhen || 'after' })), merge, held, canHold });   // v1.0.19: ส่ง when ไปด้วย — หน้าต่างแยก "ก่อนเริ่มไลฟ์" กับ "หลังจบไลฟ์ (ยอดจุ่ม ระวังส่งซ้ำ)"
     } catch(e) {
         res.status(500).json({ success: false, error: e.message });
     }

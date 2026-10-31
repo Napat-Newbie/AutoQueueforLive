@@ -6,7 +6,11 @@ cd /d "%~dp0"
 set TARGET_PID=%1
 set UPDATE_ZIP=updates\update_incoming.zip
 set EXTRACT_DIR=updates\extracted
-set BACKUP_DIR=backups\auto_backup_%DATE:~-4%%DATE:~3,2%%DATE:~0,2%_%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%
+rem v1.0.19: ขอวันที่/เวลาจากระบบโดยตรง ได้รูปแบบเดียวกันทุกภาษาเครื่อง (วิธีเดิม %DATE%/%TIME% เพี้ยนตาม locale เช่น ไทยได้ปี พ.ศ. และชื่อวันติดมาด้วย)
+set LDT=
+for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul ^| findstr "="') do set LDT=%%I
+if defined LDT set BACKUP_DIR=backups\auto_backup_%LDT:~0,8%_%LDT:~8,6%
+if not defined LDT set BACKUP_DIR=backups\auto_backup_%DATE:~-4%%DATE:~3,2%%DATE:~0,2%_%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%
 set BACKUP_DIR=%BACKUP_DIR: =0%
 
 echo ========================================================
