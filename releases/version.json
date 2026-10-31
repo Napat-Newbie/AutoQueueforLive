@@ -12,7 +12,7 @@
     "ร้านที่อัปเดตข้ามจาก 1.0.16 มาเป็นรุ่นนี้โดยตรง ให้ปิดแล้วเปิดโปรแกรม 1 ครั้งหลังอัปเดตเสร็จ",
     "ชุดทดสอบอัตโนมัติ 263 ข้อ ผ่านทั้งหมด"
   ],
-  "downloadUrl": "https://github.com/Napat-Newbie/AutoQueueforLive/releases/download/v1.0.18/update_v1.0.18.zip",
+  "downloadUrl": "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/a749f9ba8bf44396b3ade3b9e7c75b334e4c1e95/releases/update_v1.0.18.zip",
   "fileSizeKB": 303.4,
   "sha256": "27a9c26b0fd72dbca22f4f2792c7b9c1b98dd44ce7d873d803a8b0466e66a91e"
 }
