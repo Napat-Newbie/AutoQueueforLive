@@ -3880,12 +3880,22 @@ async function notifyUnrecordedSlip(customerName, messageId, reason, kind = 'oth
 // ตอนนี้เป็นการ์ดยืนยันที่อยู่จนกด และแม่ค้ากด 1 ปุ่มกู้ยอดคืนได้ (บันทึกเป็นสลิปของตัวเอง คิดชิ้นตามสูตรเดิม)
 // ข้อจำกัด: เก็บในหน่วยความจำเหมือนการ์ดแดง — รีสตาร์ทโปรแกรมระหว่างที่การ์ดค้าง = โอกาสกู้ยอดหาย
 // (ยังเห็นเหตุการณ์ได้จากบรรทัด WARN "ผูกเป็นใบเดียวกัน" ใน system.log ให้แม่ค้าตรวจและแก้ด้วยมือ)
-let manualMatchWarnings = [];
-let manualMatchSeq = 0;
+// v1.0.19 (เจ้าของสั่ง 2026-11-01): การ์ดเก็บลงฐานข้อมูลร้าน (configs) ปิด/รีสตาร์ทโปรแกรมแล้วการ์ดและปุ่มกู้ยอดยังอยู่
+function savePendingState(key, value) {
+    try { supabase.db.prepare('INSERT INTO configs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(value)); }
+    catch (e) { console.error('save ' + key + ' failed:', e.message); }
+}
+function loadPendingState(key) {
+    try { const r = supabase.db.prepare('SELECT value FROM configs WHERE key = ?').get(key); const v = r ? JSON.parse(r.value) : []; return Array.isArray(v) ? v : []; }
+    catch (e) { return []; }
+}
+let manualMatchWarnings = loadPendingState('pending_manual_match_cards').slice(-50);
+let manualMatchSeq = manualMatchWarnings.reduce((m, w) => Math.max(m, Number(w.id) || 0), 0);
 function recordManualMatchWarning({ name, lineId, slipId, transRef, amount, transDate, transTime }) {
     const item = { id: ++manualMatchSeq, name: name || 'ลูกค้า (ไม่ทราบชื่อ)', lineId: lineId || null, slipId, transRef, amount: Number(amount) || 0, transDate: transDate || null, transTime: transTime || null, time: new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Bangkok', hour12: false }), sid: activeLiveSession ? activeLiveSession.id : null, date: getTodayString() };
     manualMatchWarnings.push(item);
     if (manualMatchWarnings.length > 50) manualMatchWarnings.shift();
+    savePendingState('pending_manual_match_cards', manualMatchWarnings);
     return item;
 }
 function currentManualMatchWarnings() {
@@ -3897,6 +3907,7 @@ function currentManualMatchWarnings() {
 function dropManualMatchWarning(id) {
     const before = manualMatchWarnings.length;
     manualMatchWarnings = manualMatchWarnings.filter(w => w.id !== id);
+    if (manualMatchWarnings.length !== before) savePendingState('pending_manual_match_cards', manualMatchWarnings);
     return manualMatchWarnings.length !== before;
 }
 
@@ -4774,6 +4785,21 @@ const AI_ADDRESS_RETRY_BACKOFF_MS = [5000, 15000, 30000, 60000, 120000, 300000];
 const aiAddressSeq = new Map();      // userId -> ลำดับข้อความที่อยู่ล่าสุด (ผลลองใหม่ของข้อความเก่าห้ามทับข้อความใหม่)
 const aiAddressRetryJobs = [];
 let aiAddressTimer = null;
+// v1.0.19 (เจ้าของสั่ง 2026-11-01): คิวเก็บลงฐานข้อมูลร้าน เปิดโปรแกรมใหม่แล้วลองต่อ (งานเก่ากว่า 24 ชม. ทิ้ง)
+// ลำดับข้อความ (seq) อยู่ในหน่วยความจำ ตอนโหลดจึงให้ seq ใหม่ ข้อความที่อยู่ใหม่ของลูกค้าคนเดิมยังทำให้งานเก่าถูกข้ามเหมือนเดิม
+function saveAiAddressRetryJobs() {
+    savePendingState('pending_ai_address_jobs', aiAddressRetryJobs.map(j => ({ userId: j.userId, lineName: j.lineName, text: j.text, attempt: j.attempt, notBefore: j.notBefore, createdAt: j.createdAt })));
+}
+function restoreAiAddressRetryJobs() {
+    const latest = new Map();
+    for (const j of loadPendingState('pending_ai_address_jobs')) {
+        if (!j || !j.userId || !j.text || Date.now() - (Number(j.createdAt) || 0) > 24 * 3600 * 1000) continue;
+        latest.set(j.userId, j);   // ลูกค้าคนเดียว เก็บแค่งานล่าสุด
+    }
+    for (const j of latest.values()) aiAddressRetryJobs.push({ userId: j.userId, lineName: j.lineName, text: j.text, attempt: Number(j.attempt) || 0, notBefore: Number(j.notBefore) || Date.now(), createdAt: Number(j.createdAt), seq: nextAddressSeq(j.userId) });
+    saveAiAddressRetryJobs();
+    if (aiAddressRetryJobs.length) { addLog('INFO', `โหลดคิวลองสกัดที่อยู่ด้วย Gemini ที่ค้างจากก่อนปิดโปรแกรม ${aiAddressRetryJobs.length} รายการ`); kickAiAddressRetry(); }
+}
 function nextAddressSeq(userId) {
     const n = (aiAddressSeq.get(userId) || 0) + 1;
     aiAddressSeq.set(userId, n);
@@ -4782,7 +4808,9 @@ function nextAddressSeq(userId) {
 function scheduleAiAddressRetry(job, delayMs) {
     const backoff = AI_ADDRESS_RETRY_BACKOFF_MS[Math.min(job.attempt, AI_ADDRESS_RETRY_BACKOFF_MS.length - 1)];
     job.notBefore = Date.now() + Math.max(Number(delayMs) || 0, backoff) * AI_RETRY_SCALE;
+    if (!job.createdAt) job.createdAt = Date.now();
     aiAddressRetryJobs.push(job);
+    saveAiAddressRetryJobs();
     kickAiAddressRetry();
 }
 function kickAiAddressRetry() {
@@ -4797,6 +4825,7 @@ async function runAiAddressRetry() {
     const idx = now < aiAddressPauseUntil ? -1 : aiAddressRetryJobs.findIndex(j => j.notBefore <= now);
     if (idx < 0) { kickAiAddressRetry(); return; }
     const job = aiAddressRetryJobs.splice(idx, 1)[0];
+    saveAiAddressRetryJobs();   // ถ้ายังต้องลองต่อ scheduleAiAddressRetry จะบันทึกกลับเข้าไปเอง
     try {
         if (aiAddressSeq.get(job.userId) !== job.seq) {
             addLog('INFO', `ข้ามการลองสกัดที่อยู่ของ "${job.lineName || 'ลูกค้า'}" ด้วย Gemini ใหม่ เพราะลูกค้าส่งข้อความที่อยู่ใหม่กว่ามาแล้ว`);
@@ -4825,6 +4854,7 @@ async function runAiAddressRetry() {
         kickAiAddressRetry();
     }
 }
+try { restoreAiAddressRetryJobs(); } catch (e) { console.error('restore Gemini address retry queue failed:', e.message); }
 
 // 🛡️ Cache ป้องกัน Webhook ซ้ำซ้อน / ลูกค้ากดส่งรัวๆ (Deduplication Cache, TTL 5 นาที)
 const processedMessageIds = new Map();

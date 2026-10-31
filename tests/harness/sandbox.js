@@ -97,13 +97,29 @@ class Sandbox {
             DISCORD_WEBHOOK_URL: '',
             ...extraEnv,
         };
-        sb.child = spawn(process.execPath, ['-r', path.join(__dirname, 'preload.js'), 'index.js'], { cwd: sb.dir, env, windowsHide: true });
-        sb.child.stdout.on('data', d => { sb.output += d; });
-        sb.child.stderr.on('data', d => { sb.output += d; });
-        sb.exited = false;
-        sb.child.on('exit', () => { sb.exited = true; });
-        await sb.waitFor(async () => { try { return (await sb.get('/api/health')).status === 200; } catch (e) { return false; } }, 20000, 'server did not become healthy');
+        sb.env = env;
+        await sb._spawn();
         return sb;
+    }
+
+    async _spawn() {
+        this.child = spawn(process.execPath, ['-r', path.join(__dirname, 'preload.js'), 'index.js'], { cwd: this.dir, env: this.env, windowsHide: true });
+        this.child.stdout.on('data', d => { this.output += d; });
+        this.child.stderr.on('data', d => { this.output += d; });
+        this.exited = false;
+        this.child.on('exit', () => { this.exited = true; });
+        await this.waitFor(async () => { try { return (await this.get('/api/health')).status === 200; } catch (e) { return false; } }, 20000, 'server did not become healthy');
+    }
+
+    /** Close the program and open it again on the SAME data folder and port (what a shop PC restart does). */
+    async restart() {
+        if (this.child && !this.exited) {
+            this.child.kill();
+            await new Promise(r => { const t = setTimeout(r, 3000); this.child.on('exit', () => { clearTimeout(t); r(); }); });
+        }
+        try { this._db && this._db.close(); this._wdb && this._wdb.close(); } catch (e) { /* ignore */ }
+        this._db = null; this._wdb = null;
+        await this._spawn();
     }
 
     async stop() {

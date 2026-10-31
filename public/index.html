@@ -1838,7 +1838,7 @@
 
         // ===== v1.0.16: ท่อสัญญาณ (Tunnel) หลุด / ซิงค์ LINE Webhook ล้มเหลว = แถบเตือนสีแดง + เสียงไซเรน (เฉพาะตอนกำลังไลฟ์) =====
         function tunnelHealthVerdict(data) {
-            if (!data || !data.active) return { bad: true, kind: 'down', message: '⚠️ ท่อสัญญาณ (Tunnel) หลุด — สลิปจากลูกค้าจะไม่เข้าระบบจนกว่าจะเชื่อมต่อใหม่ (ระบบกำลังต่อให้อัตโนมัติ) ลูกค้าที่ส่งสลิปช่วงนี้อาจต้องส่งใหม่' };
+            if (!data || !data.active) return { bad: true, kind: 'down', message: '⚠️ ระบบเชื่อมต่อ LINE หลุด — สลิปจากลูกค้าจะไม่เข้าระบบจนกว่าจะเชื่อมต่อใหม่ (ระบบกำลังต่อให้อัตโนมัติ) ลูกค้าที่ส่งสลิปช่วงนี้อาจต้องส่งใหม่' };
             if (data.synced === false) return { bad: true, kind: 'sync', message: '⚠️ ซิงค์ LINE Webhook ไม่สำเร็จ — LINE อาจยังไม่ส่งสลิปมาที่โปรแกรม ตรวจสอบ Token ในหน้าตั้งค่า (กดป้าย LINE Webhook ด้านบน)' };
             return { bad: false, kind: null, message: '' };
         }
