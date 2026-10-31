@@ -66,3 +66,21 @@ test('no name ever sent: the LINE name is still used (old behaviour kept)', () =
     await sb.waitFor(() => addrOf(sb, 'Ualice'), 8000, 'address not saved');
     assert.equal(addrOf(sb, 'Ualice').recipient_name, 'Alice');
 }));
+
+test('a later message with ONLY a new phone keeps the earlier address, and Kerry still has a full address', () => withSandbox(async sb => {
+    await buyer(sb);
+    await sendText(sb, 'Ualice', 't1', 'สมชาย ใจดี\n99/1 ถนนสุขุมวิท แขวงคลองเตย เขตคลองเตย กรุงเทพ 10110\n0812345678');
+    await sb.waitFor(() => addrOf(sb, 'Ualice'), 8000, 'address not saved');
+    const before = addrOf(sb, 'Ualice');
+    assert.match(before.address, /99\/1 ถนนสุขุมวิท/);
+
+    await sendText(sb, 'Ualice', 't2', 'เปลี่ยนเบอร์ 0899999999');
+    await sb.waitFor(() => (addrOf(sb, 'Ualice') || {}).phone === '0899999999', 8000, 'second message not applied');
+    const after = addrOf(sb, 'Ualice');
+    assert.equal(after.address, before.address, 'the address must not become the phone message');
+    assert.equal(after.postcode, '10110');
+    assert.equal(after.recipient_name, 'สมชาย ใจดี');
+    const summary = (await sb.get('/api/kerry/summary')).json;
+    assert.equal(summary.orders[0].hasAddress, true);
+    assert.match(summary.orders[0].address.address, /99\/1 ถนนสุขุมวิท/);
+}));

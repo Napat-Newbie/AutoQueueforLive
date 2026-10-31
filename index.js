@@ -4579,6 +4579,10 @@ function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE')
         .replace(/\n+/g, ' ')
         .trim();
 
+    // v1.0.17 (เจ้าของอนุมัติ 2026-10-31): ข้อความที่ไม่มีส่วนของที่อยู่เลย (เช่น "เปลี่ยนเบอร์ 08x") เดิมเก็บทั้งข้อความเป็นที่อยู่
+    // ทำให้ขั้นรวมที่อยู่เดิมใน webhook ไม่คืนที่อยู่เก่า และ Kerry ได้ "ที่อยู่" เป็นเบอร์โทร -> ให้ช่องที่อยู่ว่างแทน
+    const hasAddressPart = !!(postcode || province || district || subdistrict) || /[0-9๐-๙]/.test(addressClean);
+
     const genericNames = ['ลูกค้า line', 'ลูกค้าline', 'ลูกค้า', 'คุณ', 'คุณลูกค้า', 'ลูกค้าทั่วไป'];
     let finalRecipient = recipient_name ? recipient_name.trim() : '';
     if (!finalRecipient || genericNames.includes(finalRecipient.toLowerCase())) {
@@ -4588,7 +4592,7 @@ function parseThaiAddressFallback(text, defaultName = 'ลูกค้า LINE')
     return {
         recipient_name: finalRecipient,
         phone: phone || '',
-        address: addressClean || text,
+        address: hasAddressPart ? (addressClean || text) : '',
         subdistrict: subdistrict || '',
         district: district || '',
         province: province || '',

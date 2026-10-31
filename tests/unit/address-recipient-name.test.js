@@ -53,3 +53,17 @@ test('chat words are not a name: "เปลี่ยนเบอร์", "ขอ
 test('pickRecipientName returns "" when nothing looks like a name (caller decides the fallback)', () => {
     assert.equal(ctx.pickRecipientName('99/1 ซอย 5\n0812345678', '0812345678'), '');
 });
+
+// 2026-10-31 (owner approved): a message with nothing but a phone number used to store the WHOLE message as the
+// address ("0899999999"), so the merge with the earlier address never kicked in and Kerry got a phone as address.
+test('a message with only a phone number leaves the address EMPTY (so the earlier address can be kept)', () => {
+    const r = ctx.parseThaiAddressFallback('0899999999', 'LINEname');
+    assert.equal(r.phone, '0899999999');
+    assert.equal(r.address, '');
+    assert.equal(ctx.parseThaiAddressFallback('เปลี่ยนเบอร์ 0899999999', 'LINEname').address, '');
+});
+
+test('a normal address message still keeps its address text', () => {
+    const r = ctx.parseThaiAddressFallback('สมชาย ใจดี\n99/1 ถนนสุขุมวิท แขวงคลองเตย เขตคลองเตย กรุงเทพ 10110\n0812345678', 'LINEname');
+    assert.match(r.address, /99\/1 ถนนสุขุมวิท/);
+});
