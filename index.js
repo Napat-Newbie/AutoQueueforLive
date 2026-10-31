@@ -382,9 +382,11 @@ function getShopLabel() {
 }
 
 // 🛡️ ปิดบังข้อมูลส่วนตัวลูกค้าก่อนส่งออกนอกเครื่อง
+// v1.0.18 (แก้ 2026-10-31): ตัวเลข 13 หลักที่ติดกับ "_" เป็นรหัสของโปรแกรม (LIVE_<เวลา>, manual_<เวลา>_...) ไม่ใช่เลขบัตรประชาชน
+// เดิมปิดหมด รหัสรอบไลฟ์ในช่องกิจกรรม Discord จึงกลายเป็น LIVE_[เลขบัตร] ตั้งแต่ v1.0.16 ไล่ปัญหาตามรอบไม่ได้
 function redactPersonalInfo(text) {
     return String(text === undefined || text === null ? '' : text)
-        .replace(/(?<!\d)\d{13}(?!\d)/g, '[เลขบัตร]')
+        .replace(/(?<![\d_])\d{13}(?![\d_])/g, '[เลขบัตร]')
         .replace(/(?<!\d)0\d[\d\- ]{7,11}\d(?!\d)/g, (m) => {
             const digits = m.replace(/\D/g, '');
             return (digits.length === 9 || digits.length === 10) ? `0xx-xxx-${digits.slice(-4, -2)}xx` : m;
@@ -597,6 +599,22 @@ function appendLogFile(logItem) {
         logFileBytes += size;
         fs.appendFile(LOG_FILE, line, () => {});     // ไม่รอผล: การเขียน Log ล้มเหลวต้องไม่กระทบโปรแกรม
     } catch (e) { /* ไม่ทำให้การบันทึก Log หลักล้ม */ }
+}
+
+// v1.0.18 (เจ้าของขอ 2026-10-31): ตัดบรรทัด log ของรอบไลฟ์ออกจาก system.log ตามเวลา (ใช้ส่งเข้าช่อง Dev Report หลังจบไลฟ์)
+// เวลาในแต่ละบรรทัดมาจาก toLocaleString en-US เขตเวลา Asia/Bangkok เช่น [10/31/2026, 7:34:12 PM] -- Node รุ่นใหม่คั่น PM ด้วย U+202F ซึ่ง \s ครอบคลุม
+function parseLogLineTime(line) {
+    const m = /^\[(\d{1,2})\/(\d{1,2})\/(\d{4}),\s(\d{1,2}):(\d{2}):(\d{2})\s(AM|PM)\]/.exec(String(line || ''));
+    if (!m) return null;
+    let h = Number(m[4]) % 12;
+    if (m[7] === 'PM') h += 12;
+    return Date.UTC(Number(m[3]), Number(m[1]) - 1, Number(m[2]), h - 7, Number(m[5]), Number(m[6]));
+}
+function sliceLogForLive(text, startMs, endMs) {
+    return String(text || '').split(/\r?\n/).filter(line => {
+        const t = parseLogLineTime(line);
+        return t !== null && t >= startMs && t <= endMs;
+    });
 }
 
 const systemLogs = [];
@@ -2799,6 +2817,49 @@ async function sendEndOfLiveReport(endedSession) {
     }
 }
 
+// v1.0.18 (เจ้าของขอ 2026-10-31): หลังจบไลฟ์ ส่งไฟล์ log ของรอบนั้นเข้าช่อง Dev Report (DISCORD_DEVREPORT_WEBHOOK_URL) เพื่อให้ผู้พัฒนาเปิดดูได้ทุกเครื่อง
+// เฉพาะบรรทัดตั้งแต่เริ่มถึงจบรอบ (อ่าน system-prev.log ด้วย เผื่อไฟล์หมุนกลางไลฟ์) ปิดเบอร์โทร/เลขบัตรด้วย redactPersonalInfo แบบเดียวกับช่องกิจกรรม
+// ส่งไม่ได้ = WARN (ตอนนี้ไม่มีไลฟ์แล้ว จึงไม่ไปปนในสรุปรอบถัดไป) ไฟล์ system.log ต้นฉบับยังอยู่ในเครื่องร้านเสมอ
+const LIVE_LOG_MAX_BYTES = 8 * 1024 * 1024;   // ต่ำกว่าขีดจำกัดไฟล์แนบของ Discord webhook
+async function sendLiveLogToDevReport(endedSession) {
+    const url = getDevReportWebhook();
+    if (!url || process.env.DISCORD_ALERTS_ENABLED === 'false' || !endedSession || !endedSession.startTime) return;
+    await new Promise(r => setTimeout(r, 1500));   // รอให้บรรทัด "จบไลฟ์" ถูกเขียนลงไฟล์ก่อน (appendLogFile เขียนแบบไม่รอผล)
+    const sid = endedSession.id;
+    const startMs = Math.floor(Number(endedSession.startTime) / 1000) * 1000;   // เวลาใน log ละเอียดถึงวินาที
+    const endMs = Date.now();
+    let text = '';
+    for (const f of [LOG_FILE_PREV, LOG_FILE]) { try { text += fs.readFileSync(f, 'utf8') + '\n'; } catch (e) { /* ไม่มีไฟล์ */ } }
+    const lines = sliceLogForLive(text, startMs, endMs).map(l => redactPersonalInfo(l));
+    if (lines.length === 0) return;
+    let body = lines.join('\r\n') + '\r\n';
+    let note = '';
+    if (Buffer.byteLength(body) > LIVE_LOG_MAX_BYTES) {
+        const buf = Buffer.from(body, 'utf8');
+        body = buf.slice(buf.length - LIVE_LOG_MAX_BYTES).toString('utf8');
+        note = ' (ไฟล์ใหญ่เกิน ตัดช่วงต้นของรอบออก ดูฉบับเต็มใน system.log ที่เครื่องร้าน)';
+    }
+    const fmt = (ms) => new Date(ms).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', hour12: false });
+    const content = `📄 System log รอบไลฟ์ ${sid} — ${getShopLabel()} — v${getAppVersionSafe()}\n${lines.length} บรรทัด (${fmt(startMs)} ถึง ${fmt(endMs)}) ปิดเบอร์โทร/เลขบัตรแล้ว${note}`;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const form = new FormData();
+            form.append('payload_json', JSON.stringify({ content: content.slice(0, 1900) }));
+            form.append('files[0]', Buffer.from(body, 'utf8'), { filename: `system-log_${sid}.txt`, contentType: 'text/plain; charset=utf-8' });
+            await axios.post(url, form, { headers: form.getHeaders(), timeout: 30000, maxBodyLength: Infinity, maxContentLength: Infinity });
+            addLog('INFO', `ส่งไฟล์ log ของรอบไลฟ์ ${sid} เข้าช่อง Dev Report แล้ว (${lines.length} บรรทัด)`);
+            return;
+        } catch (e) {
+            if (attempt === 3) {
+                addLog('WARN', `ส่งไฟล์ log ของรอบไลฟ์ ${sid} เข้าช่อง Dev Report ไม่สำเร็จ (ลอง 3 ครั้ง): ${e.response ? 'HTTP ' + e.response.status : e.message} — ไฟล์ system.log ยังอยู่ในเครื่องร้าน`);
+                return;
+            }
+            const retryAfter = e.response && e.response.data ? Number(e.response.data.retry_after) : 0;
+            await new Promise(r => setTimeout(r, retryAfter > 0 ? Math.min(retryAfter * 1000, 30000) : attempt * 3000));
+        }
+    }
+}
+
 app.get('/api/live_session/current', (req, res) => {
     res.json({ success: true, session: activeLiveSession });
 });
@@ -2929,7 +2990,8 @@ app.post('/api/live_session/end', async (req, res) => {
         }
 
         // 🏁 v1.0.16: ส่งสรุปหลังจบไลฟ์เข้า Discord ทุกครั้ง (สถิติรอบ + Error ทั้งหมดที่เจอพร้อมแนวทางแก้ไข)
-        sendEndOfLiveReport(endedSession).catch(() => {});
+        // v1.0.18: ตามด้วยไฟล์ log ของรอบนี้เข้าช่อง Dev Report (ล้มก็ไม่กระทบการจบไลฟ์)
+        sendEndOfLiveReport(endedSession).catch(() => {}).then(() => sendLiveLogToDevReport(endedSession)).catch(() => {});
 
         io.emit('live_session_changed', null);
         await broadcastTodayStats();
