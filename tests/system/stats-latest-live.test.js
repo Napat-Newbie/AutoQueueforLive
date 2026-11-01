@@ -77,3 +77,40 @@ test('ปิดการ์ดส้ม "รอโอนเพิ่ม" ขอ�
     const row = sb.slips().find(s => s.id === eveId);
     assert.equal(row.status, 'cleared');
 }));
+
+test('รอบล่าสุดที่จบมี id ผิดรูปแบบ (ไม่ผ่าน LIVE_ID_RE): isCurrentStatsScope ถอยไปใช้วันนี้ และการ์ดยังแสดงครบ', () => withSandbox(async sb => {
+    // ใส่ประวัติรอบที่มี id ผิดรูปแบบ (ไม่ผ่าน LIVE_ID_RE)
+    sb.exec("INSERT OR REPLACE INTO configs (key, value) VALUES ('session_hist_corrupt', ?)", JSON.stringify({
+        id: 'corrupt_session_id',
+        endTime: Date.now()
+    }));
+
+    // 1) topups: สลิป accumulated ยอดไม่พอ
+    const eveId = sb.insertSlip({ line_id: 'Ueve', name: 'Eve', amount: 50, draws: 0, trans_date: bkkDate(0), trans_time: '12:00:00', status: 'accumulated' });
+    sb.exec('INSERT OR REPLACE INTO customers (line_id, name, balance) VALUES (?, ?, ?)', 'Ueve', 'Eve', 50);
+
+    // 2) imageFails: สลิปโอนผิดบัญชี
+    sb.mock.profile('Uwrong', 'WrongCust');
+    sb.mock.slipOk('kwrong', { amount: 100, transRef: 'WRONG01', receiverName: 'OTHER PERSON' });
+    await sb.sendSlip('Uwrong', 'mwrong', 'kwrong');
+    await sb.waitFor(() => sb.mock.calls.filter(c => c.path === '/v2/bot/profile/Uwrong').length >= 1, 10000);
+
+    // 3) manualMatches: สลิปซ้ำที่แม่ค้ากรอกยอดเอง (back-to-back second transfer)
+    sb.mock.profile('Ualice', 'Alice');
+    sb.mock.slips.set('kbbl', { status: 400, body: { code: 1010, message: 'wait', data: { qrcodeData: 'QR', bankCode: '002', bankName: 'กรุงเทพ', delay: 7, message: 'wait' } } });
+    await sb.sendSlip('Ualice', 'm1', 'kbbl');
+    await sb.waitFor(() => sb.slips().some(s => s.line_id === 'Ualice'), 10000);
+    const bblSlip = sb.slips().find(s => s.line_id === 'Ualice');
+    sb.exec('UPDATE slips SET trans_date = ?, trans_time = ? WHERE id = ?', bkkDate(0), '12:00:00', bblSlip.id);
+    await sb.post('/api/queue/manual_amount', { slipId: bblSlip.id, amount: 140 });
+    sb.mock.slipOk('ksecond', { amount: 140, transRef: 'SEC0002', transDate: bkkDate(0), transTime: '11:59:00' });
+    await sb.sendSlip('Ualice', 'm2', 'ksecond');
+    await sb.waitFor(() => sb.mock.calls.filter(c => c.path === '/v2/bot/profile/Ualice').length >= 2, 10000);
+
+    const st = await sb.stats();
+    assert.equal(st.topups.length, 1, 'การ์ดส้ม (topups) ยังแสดง');
+    assert.equal(st.topups[0].id, eveId);
+    assert.equal(st.imageFails.length, 1, 'การ์ดแดง (imageFails) ยังแสดง');
+    assert.equal(st.manualMatches.length, 1, 'การ์ดยืนยันยอดกรอกเอง (manualMatches) ยังแสดง');
+    assert.equal(st.manualMatches[0].transRef, 'SEC0002');
+}));

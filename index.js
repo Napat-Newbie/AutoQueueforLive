@@ -1815,7 +1815,7 @@ function currentDashboardScope() {
 function isCurrentStatsScope(targetSessionId, targetDate) {
     if (activeLiveSession) return targetSessionId === activeLiveSession.id;
     const last = latestEndedSessionRecord();
-    if (last && last.id) return String(targetSessionId) === String(last.id);
+    if (last && LIVE_ID_RE.test(String(last.id))) return String(targetSessionId) === String(last.id);
     return !targetSessionId && targetDate === getTodayString();
 }
 // เวลาที่สลิปเข้าระบบเป็น epoch ms จริง: stampToSec อ่านเวลากรุงเทพเสมือน UTC → ลบ 7 ชม. กลับเป็นเวลาแท้
