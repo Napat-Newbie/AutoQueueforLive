@@ -13,7 +13,7 @@ const vm = require('vm');
 const { load } = require('../harness/extract');
 
 const ROOT = process.env.AQ_TEST_APP_ROOT || path.join(__dirname, '..', '..');
-const server = load(path.join(ROOT, 'index.js'), { functions: ['notificationFromEvent'] });
+const server = require(path.join(ROOT, 'lib', 'notificationFormat'));
 const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
 function grab(name) {
     const start = html.indexOf(`function ${name}(`);
