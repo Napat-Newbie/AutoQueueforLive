@@ -7,14 +7,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
-const { load } = require('../harness/extract');
 
-const INDEX = path.join(__dirname, '..', '..', 'index.js');
+const ROOT = process.env.AQ_TEST_APP_ROOT || path.join(__dirname, '..', '..');
+const {
+    buildUpdateRequestEmbed,
+    shouldRequestNewVersion,
+    UPDATE_REQUEST_REPEAT_THRESHOLD
+} = require(path.join(ROOT, 'lib', 'devReport'));
 function env() {
-    return load(INDEX, {
-        functions: ['buildUpdateRequestEmbed', 'shouldRequestNewVersion'],
-        consts: ['UPDATE_REQUEST_REPEAT_THRESHOLD']
-    });
+    return {
+        buildUpdateRequestEmbed,
+        shouldRequestNewVersion,
+        UPDATE_REQUEST_REPEAT_THRESHOLD
+    };
 }
 
 const field = (embed, name) => embed.fields.find(f => f.name.includes(name));
