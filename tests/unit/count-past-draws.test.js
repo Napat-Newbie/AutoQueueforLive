@@ -8,7 +8,9 @@ const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 const { load } = require('../harness/extract');
 
-const INDEX = path.join(__dirname, '..', '..', 'index.js');
+const ROOT = process.env.AQ_TEST_APP_ROOT || path.join(__dirname, '..', '..');
+const INDEX = path.join(ROOT, 'index.js');
+const { LIVE_ID_RE } = require(path.join(ROOT, 'lib', 'products'));
 
 function env() {
     const db = new DatabaseSync(':memory:');
@@ -16,8 +18,7 @@ function env() {
     const state = { today: '20261029' };
     const ctx = load(INDEX, {
         functions: ['countPastDraws'],
-        consts: ['LIVE_ID_RE'],
-        globals: { supabase: { db }, getTodayString: () => state.today, activeLiveSession: null },
+        globals: { supabase: { db }, getTodayString: () => state.today, activeLiveSession: null, LIVE_ID_RE },
     });
     const add = (line_id, draws, { status = 'waiting', session_id = null, trans_date = state.today } = {}) =>
         db.prepare('INSERT INTO slips (line_id, draws, status, session_id, trans_date) VALUES (?,?,?,?,?)').run(line_id, draws, status, session_id, trans_date);

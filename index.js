@@ -1646,7 +1646,9 @@ const { getTodayString, getLocalTimeString, bangkokDateString, stampToSec, thaiL
 //   holdMerge: true  = รอบนี้ยังไม่ส่งของ รอรวมกับรอบถัดไป
 //   mergedInto: id   = รอบ B ที่รวมบิลด้วยแล้ว (ตั้งตอนกดเริ่มไลฟ์รอบ B)
 //   mergeFrom: id    = (อยู่ที่รอบ B) รอบ A ที่รวมบิลด้วย -> รอบ B กดพักต่อไม่ได้ (รวมได้สูงสุด 2 รอบ)
-const LIVE_ID_RE = /^LIVE_\d+$/;
+// 🔴 v1.0.20 (P5: 1.1): รูปแบบรหัสรอบไลฟ์และตารางสินค้าแยกไป lib/products.js
+const Products = require('./lib/products');
+const { LIVE_ID_RE, buildProductRoundSummary } = Products;
 function getSessionRecord(id) {
     if (!id || !LIVE_ID_RE.test(String(id))) return null;
     if (activeLiveSession && activeLiveSession.id === id) return activeLiveSession;
@@ -2628,38 +2630,12 @@ function renderLiveIssueGroup(g) {
 
 // สรุปสินค้าที่ได้สิทธิ์ของรอบ — กติกาเดียวกับหน้าประวัติ (public/history.html): ไม่นับใบที่ปัดตก/ข้าม และ draws ต้อง > 0
 // breakdown เก็บใน qr_payload: "รหัสอ้างอิง|ชื่อ xจำนวน, ชื่อ xจำนวน" (ใบ manual_image คือ "manual_image|url|breakdown")
-// v1.0.20 (P2): ตัวนับย้ายไป lib/products.js เป็นกติกาเดียวกับตาราง "สินค้า × รอบไลฟ์" ของหน้าประวัติ — ห้ามแก้ข้างเดียว
-const Products = require('./lib/products');
 function summarizeLiveProducts(rows) {
     const { counts, pieces } = Products.countProducts(rows);
     const list = Object.keys(counts).map(n => ({ name: n, qty: counts[n] })).sort((a, b) => (b.qty - a.qty) || a.name.localeCompare(b.name));
     return { list, pieces };
 }
 
-// v1.0.20 (P2): ประกอบตาราง สินค้า × รอบไลฟ์ จากสลิปในช่วงที่เลือก (นับด้วยกติกาเดียวกันจาก lib/products.js)
-// คอลัมน์ = รอบใหม่ → เก่า (ตามลำดับ rounds ที่ส่งเข้ามา ซึ่งเรียงแล้ว) + "นอกรอบไลฟ์" ท้ายสุดถ้ามีสลิปไม่มีรอบ
-// ใช้ร่วมทั้ง /api/history_data (แสดงบนหน้าประวัติ) และ /api/history/product_rounds_excel (ดาวน์โหลด Excel)
-function buildProductRoundSummary(slips, rounds) {
-    const byRound = new Map();
-    (slips || []).forEach(s => {
-        const key = s.session_id && LIVE_ID_RE.test(String(s.session_id)) ? String(s.session_id) : '__oor__';
-        if (!byRound.has(key)) byRound.set(key, []);
-        byRound.get(key).push(s);
-    });
-    const columns = [];
-    (rounds || []).forEach(r => { if (r.sessionId) columns.push({ key: String(r.sessionId), sessionId: r.sessionId }); });
-    if (byRound.has('__oor__')) columns.push({ key: '__oor__', sessionId: null });
-    const perCol = {};
-    columns.forEach(c => { perCol[c.key] = Products.countProducts(byRound.get(c.key) || []); });
-    const names = new Set();
-    Object.keys(perCol).forEach(k => Object.keys(perCol[k].counts).forEach(n => names.add(n)));
-    const rows = [...names].map(n => {
-        const cells = columns.map(c => perCol[c.key].counts[n] || 0);
-        return { name: n, cells, total: cells.reduce((a, b) => a + b, 0) };
-    }).sort((a, b) => (b.total - a.total) || a.name.localeCompare(b.name, 'th'));
-    const columnTotals = columns.map(c => perCol[c.key].pieces);
-    return { columns, rows, columnTotals, grandTotal: columnTotals.reduce((a, b) => a + b, 0) };
-}
 
 // 🏁 v1.0.16: ตัวสร้าง embed สรุปหลังจบไลฟ์ (pure function — ตัดมาทดสอบแบบ unit test ได้ตรงๆ)
 // session = { id, startTimeStr, endTimeStr, startTime, endTime, holdMerge } / stats = { slips, amount, draws, customers, byStatus, rejected?, products? } / issues = [{type:'ERROR'|'WARN', message}]
