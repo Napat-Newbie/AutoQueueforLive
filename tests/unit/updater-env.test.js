@@ -9,15 +9,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { load } = require('../harness/extract');
 
-const INDEX = process.env.AQ_TEST_APP_ROOT ? path.join(process.env.AQ_TEST_APP_ROOT, 'index.js') : path.join(__dirname, '..', '..', 'index.js');
+const ROOT = process.env.AQ_TEST_APP_ROOT || path.join(__dirname, '..', '..');
+const INDEX = path.join(ROOT, 'index.js');
+const { updaterEnv } = require(path.join(ROOT, 'lib', 'updaterValidation'));
 const src = fs.readFileSync(INDEX, 'utf8');
 
 test('updaterEnv drops the supervisor markers and keeps everything else', () => {
-    const ctx = load(INDEX, { functions: ['updaterEnv'] });
     const input = { PATH: 'C:\\Windows', NODE_OPTIONS: '--max-old-space-size=512', AQ_SUPERVISED: '1', AQ_RESTART_COUNT: '2', UPDATE_MANIFEST_URL: 'https://x' };
-    const out = ctx.updaterEnv(input);
+    const out = updaterEnv(input);
     assert.equal(out.AQ_SUPERVISED, undefined);
     assert.equal(out.AQ_RESTART_COUNT, undefined);
     assert.equal(out.PATH, 'C:\\Windows');
