@@ -5355,17 +5355,13 @@ try {
     CURRENT_VERSION = pkg.version || '1.0.0';
 } catch(e) {}
 
-function compareVersions(v1, v2) {
-    const p1 = (v1 || '').replace(/[^0-9.]/g, '').split('.').map(n => parseInt(n) || 0);
-    const p2 = (v2 || '').replace(/[^0-9.]/g, '').split('.').map(n => parseInt(n) || 0);
-    for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
-        const num1 = p1[i] || 0;
-        const num2 = p2[i] || 0;
-        if (num1 > num2) return 1;
-        if (num1 < num2) return -1;
-    }
-    return 0;
-}
+// 🚀 v1.0.20 (P5: 1.6): ตัวตรวจความถูกต้องของการอัปเดต แยกไป lib/updaterValidation.js
+const {
+    compareVersions,
+    DEFAULT_MANIFEST_URL,
+    isUpdateUrlAllowed,
+    updaterEnv
+} = require('./lib/updaterValidation');
 
 // 1. ดึงข้อมูลเวอร์ชันปัจจุบัน และประวัติอัปเดตล่าสุดที่เพิ่งทำสำเร็จ
 app.get('/api/system/version', (req, res) => {
@@ -5386,8 +5382,6 @@ app.get('/api/system/version', (req, res) => {
         lastUpdateApplied
     });
 });
-
-const DEFAULT_MANIFEST_URL = 'https://github.com/Napat-Newbie/AutoQueueforLive/releases/latest/download/version.json';
 
 // 2. ตรวจสอบว่ามีเวอร์ชันใหม่หรือไม่
 app.get('/api/system/check_update', async (req, res) => {
@@ -5442,45 +5436,7 @@ app.get('/api/system/check_update', async (req, res) => {
     }
 });
 
-// 🛡️ SEC-01: ป้องกัน Arbitrary URL Download / Remote Code Execution (RCE)
-// อนุญาตให้ดาวน์โหลดแพตช์อัปเดตได้เฉพาะจาก GitHub Releases ของ Repository ทางการเท่านั้น (ตัด Local Path Bypass 100%)
-function isUpdateUrlAllowed(url) {
-    if (!url || typeof url !== 'string') return false;
-    const trimmed = url.trim();
-
-    // บังคับต้องเป็น HTTPS จากโดเมนทางการของ GitHub Repository เท่านั้น
-    if (!trimmed.startsWith('https://')) return false;
-
-    try {
-        const parsed = new URL(trimmed);
-        const hostname = parsed.hostname.toLowerCase();
-        const pathname = parsed.pathname;
-
-        // อนุญาตเฉพาะโดเมนทางการของ GitHub และต้องเป็น Repository AutoQueueforLive เท่านั้น
-        const isOfficialGitHub = (
-            (hostname === 'github.com' && pathname.startsWith('/Napat-Newbie/AutoQueueforLive/')) ||
-            (hostname === 'raw.githubusercontent.com' && pathname.startsWith('/Napat-Newbie/AutoQueueforLive/')) ||
-            (hostname === 'objects.githubusercontent.com' && pathname.includes('AutoQueueforLive')) ||
-            // GitHub ย้ายไฟล์ release ไปโดเมนนี้ (ต.ค. 2026) อนุญาตเฉพาะไฟล์ของ repo นี้ (repo id 1419733580)
-            (hostname === 'release-assets.githubusercontent.com' && pathname.startsWith('/github-production-release-asset/1419733580/'))
-        );
-
-        return isOfficialGitHub;
-    } catch (e) {
-        return false;
-    }
-}
-
 // 3. เริ่มกระบวนการดาวน์โหลดและติดตั้งอัปเดต (1-Click Apply)
-// v1.0.17 (พบตอนทดสอบอัปเดตจริง 2026-10-31): env ที่ส่งให้ updater.bat ต้องไม่มีค่าของตัวเฝ้า -- ตัวงานรันด้วย AQ_SUPERVISED=1
-// ถ้าส่งต่อไป โปรแกรมที่ updater เปิดใหม่ (vbs -> run_background.bat -> index.js) จะคิดว่ามีตัวเฝ้าอยู่แล้วและรันโดยไม่มีตัวเฝ้า
-// (พังแล้วไม่เปิดตัวเองใหม่จนกว่าแม่ค้าจะปิด-เปิดโปรแกรม) มีผลกับการอัปเดตที่สั่งจากโค้ดรุ่นนี้ขึ้นไป
-function updaterEnv(env) {
-    const out = Object.assign({}, env || {});
-    delete out.AQ_SUPERVISED;
-    delete out.AQ_RESTART_COUNT;
-    return out;
-}
 app.post('/api/system/apply_update', async (req, res) => {
     try {
         const { downloadUrl, latestVersion, changelog, sha256 } = req.body;
