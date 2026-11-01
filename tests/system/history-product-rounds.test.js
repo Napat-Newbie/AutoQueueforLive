@@ -4,6 +4,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('http');
 const { withSandbox, bkkDate } = require('../harness/sandbox');
 
 function excelText(buffer, ExcelJS) {
@@ -66,4 +67,26 @@ test('endpoint ดาวน์โหลด Excel: ได้ไฟล์ .xlsx �
     assert.match(text, /ไม่ระบุสินค้า/);
     assert.match(text, /รวมทุกสินค้า/);
     assert.match(text, /นอกรอบไลฟ์|รวม/, 'มีคอลัมน์รวม');
+}));
+
+test('endpoint Excel ผ่าน tunnel โดยไม่ล็อกอิน = 401 (Tier A เหมือน /api/history_data) และชื่อไฟล์กรองเฉพาะตัวเลข', () => withSandbox(async sb => {
+    // จำลอง "ผ่าน tunnel ไม่ใช่เครื่องร้าน": ยิงจาก loopback แต่แนบ header ของ proxy ตามที่ isDirectLocalRequest ตรวจ
+    const viaTunnel = (path) => new Promise((resolve, reject) => {
+        http.get(`${sb.base}${path}`, { headers: { 'x-forwarded-for': '203.0.113.9' } }, res => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, buffer: Buffer.concat(chunks) }));
+        }).on('error', reject);
+    });
+    const tun = await viaTunnel('/api/history/product_rounds_excel');
+    assert.equal(tun.status, 401, 'คนแปลกหน้าผ่าน tunnel ต้องล็อกอินก่อน (เดิมเปิดหมด)');
+
+    const local = await sb.get('/api/history/product_rounds_excel');
+    assert.equal(local.status, 200, 'เครื่องร้านโดยตรงใช้ได้ตามปกติ');
+    assert.match(String(local.headers['content-disposition'] || ''), /^attachment; filename="product_rounds_\d*_\d*\.xlsx"$/, 'ชื่อไฟล์เหลือแค่ตัวเลข');
+
+    // ค่าที่ส่งมาไม่ใช่วันที่ ต้องไม่หลุดเข้า header ดิบๆ (กัน header injection)
+    const dirty = await sb.get('/api/history/product_rounds_excel?startDate=2026-11-01%22%3Bx&endDate=%0D%0Aevil');
+    assert.equal(dirty.status, 200);
+    assert.match(String(dirty.headers['content-disposition'] || ''), /^attachment; filename="product_rounds_\d*_\d*\.xlsx"$/, 'ค่าแปลกปลอมถูกกรองออกจากชื่อไฟล์');
 }));

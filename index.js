@@ -1347,6 +1347,7 @@ app.use((req, res, next) => {
         p.startsWith('/api/queue/') ||
         (p.startsWith('/api/live_session/') && (p === '/api/live_session/start' || p === '/api/live_session/end' || p === '/api/live_session/hold' || p === '/api/live_session/pending_merge')) ||
         p === '/api/history_data' ||
+        p.startsWith('/api/history/') ||
         p.startsWith('/api/notifications')
     );
     if (isTierA) {
@@ -2274,7 +2275,9 @@ app.get('/api/history/product_rounds_excel', async (req, res) => {
         ws.getRow(1).font = { bold: true };
         ws.getRow(ws.rowCount).font = { bold: true };
 
-        const filename = `product_rounds_${startDate || getTodayString()}_${endDate || getTodayString()}.xlsx`;
+        const cleanStart = startDate ? String(startDate).replace(/\D/g, '').slice(0, 8) : getTodayString();
+        const cleanEnd = endDate ? String(endDate).replace(/\D/g, '').slice(0, 8) : getTodayString();
+        const filename = `product_rounds_${cleanStart}_${cleanEnd}.xlsx`;
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         await workbook.xlsx.write(res);
