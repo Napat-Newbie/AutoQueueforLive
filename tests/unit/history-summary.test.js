@@ -36,13 +36,15 @@ const day = [
     row({ name: 'Dave', status: 'abnormal_pending', amount: 0, draws: 0, ref: 'MANUAL (รอเช็ค)|' }),
 ];
 
-test('cancelled slips are left out of money, pieces, slip count, product summary and customer list', () => {
+test('cancelled slips are left out of money, pieces, slip count and the customer list', () => {
     const s = ctx.summarizeHistory(day);
     assert.equal(s.totalAmount, 800, 'Bob 140 is not counted');
     assert.equal(s.totalDraws, 5);
     assert.equal(s.totalSlips, 7, '8 rows, 1 cancelled');
     assert.equal(s.rejectedSlips, 1);
-    assert.equal(s.productCounts.A, 5, 'product total equals the pieces total (was 6 before: it counted the cancelled slip)');
+    // v1.0.20 (P2): การนับสินค้าย้ายไปอยู่ที่เซิร์ฟเวอร์ (lib/products.js กติกาเดียวกับสรุป Discord)
+    // summarizeHistory เลิกแยกสินค้าเอง — หน้าเว็บใช้ตาราง productSummary ที่ API ส่งมาแทน ไม่มีสองกติกา
+    assert.ok(!s.productCounts || Object.keys(s.productCounts).length === 0, 'หน้าเว็บไม่นับสินค้าเองอีกต่อไป');
     const names = Array.from(s.dailyCustomers['20261029'].values());
     assert.ok(!names.includes('Bob'), 'cancelled customer is not listed');
     assert.equal(s.dailyCustomers['20261029'].size, 5);
@@ -62,17 +64,18 @@ test('old data without LINE id still groups by name; the same customer buying tw
     assert.equal(s2.dailyCustomers['20261029'].size, 1);
 });
 
-test('skipped / zero-piece slips stay out of the product summary and customer list (rule unchanged), but money still counts', () => {
+test('skipped / zero-piece slips stay out of the customer list (rule unchanged), but money still counts', () => {
+    // v1.0.20 (P2): การนับสินค้าย้ายไปเซิร์ฟเวอร์ (lib/products.js — ดู tests/unit/products.test.js) หน้าเว็บไม่แยกสินค้าเองแล้ว
     const s = ctx.summarizeHistory([row({ name: 'Skip', status: 'skipped' }), row({ name: 'Zero', draws: 0, status: 'accumulated', ref: 'R|' })]);
-    assert.deepEqual(Object.keys(s.productCounts), []);
     assert.deepEqual(Object.keys(s.dailyCustomers), []);
     assert.equal(s.totalAmount, 280);
 });
 
-test('product names: several items per slip, with and without a count', () => {
-    const s = ctx.summarizeHistory([row({ name: 'X', draws: 3, ref: 'R|A x2, B x1' }), row({ name: 'Y', draws: 1, ref: 'R|เสื้อสีแดง' })]);
-    assert.equal(s.productCounts.A, 2); assert.equal(s.productCounts.B, 1); assert.equal(s.productCounts['เสื้อสีแดง'], 1);
+test('summarizeHistory tolerates null and keeps the money/draws totals contract', () => {
     assert.deepEqual(ctx.summarizeHistory(null).totalSlips, 0);
+    const s = ctx.summarizeHistory([row({ name: 'X', draws: 3, ref: 'R|A x2, B x1' }), row({ name: 'Y', draws: 1, ref: 'R|เสื้อสีแดง' })]);
+    assert.equal(s.totalSlips, 2);
+    assert.equal(s.totalDraws, 4, 'จำนวนชิ้นยังนับตาม draws (ส่วนแยกชื่อสินค้าเป็นหน้าที่ของเซิร์ฟเวอร์)');
 });
 
 test('every status has Thai text; waiting-for-image-check and cleared are not shown as "เสร็จสิ้น"', () => {
