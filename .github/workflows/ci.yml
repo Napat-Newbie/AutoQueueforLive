@@ -1,5 +1,5 @@
 # CI: รันชุดเทสต์ทั้งหมด (tests/README ดูที่ tests/MANUAL_TEST_CHECKLIST.md)
-# หมายเหตุ: better-sqlite3 v13 ไม่มี binary prebuild แล้ว ต้องคอมไพล์จากซอร์ส
+# หมายเหตุ: better-sqlite3 v13.0.3 มี binary prebuild สำหรับ win32-x64 และ linux แล้ว
 # ubuntu runner มี python3 + g++ ติดตั้งอยู่แล้ว จึง build ผ่านเสมอ
 # Node 24: node:sqlite (ที่ test harness ใช้) เปิดใช้ได้โดยไม่ต้องมี flag
 name: CI
