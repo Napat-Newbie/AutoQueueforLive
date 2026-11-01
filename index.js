@@ -1054,7 +1054,8 @@ const ACTION_LOG_LABELS = {
     'POST /api/system/shutdown': () => 'กดปิดโปรแกรม',
     'POST /api/system/apply_update': () => 'กดติดตั้งอัปเดต',
     'POST /api/admin/setup_keys': () => 'บันทึกหน้าตั้งค่าเชื่อมต่อ',
-    'GET /api/kerry/export_excel': (b, q) => `ดาวน์โหลดไฟล์ Kerry${q && q.sessionId ? ' (เลือกรอบไลฟ์)' : (q && q.date ? ` (วันที่ ${String(q.date).slice(0, 8)})` : '')}`
+    'GET /api/kerry/export_excel': (b, q) => `ดาวน์โหลดไฟล์ Kerry${q && q.sessionId ? ' (เลือกรอบไลฟ์)' : (q && q.date ? ` (วันที่ ${String(q.date).slice(0, 8)})` : '')}`,
+    'GET /api/history/product_rounds_excel': () => 'ดาวน์โหลดรายงานสินค้าแยกรอบไลฟ์ (Excel)'
 };
 app.use((req, res, next) => {
     const labelFn = ACTION_LOG_LABELS[`${req.method} ${req.path}`];
@@ -2218,8 +2219,70 @@ app.get('/api/history_data', async (req, res) => {
             addLog('WARN', `สรุปยอดแยกรอบไลฟ์ไม่สำเร็จ (ประวัติสลิปยังแสดงปกติ): ${roundErr.message}`);
             rounds = [];
         }
-        res.json({ success: true, history, rounds });
+        // v1.0.20 (P2): ตาราง สินค้า × รอบไลฟ์ — คำนวณที่เซิร์ฟเวอร์ด้วยกติกาเดียวกับสรุป Discord (lib/products.js)
+        // หน้าประวัติเลิกแยกสินค้าเอง ใช้ตารางนี้แทน เพื่อไม่ให้มีสองกติกาให้ตัวเลขไม่ตรงกัน
+        let productSummary = null;
+        try { productSummary = buildProductRoundSummary(data, rounds); }
+        catch (prodErr) { addLog('WARN', `สรุปสินค้าแยกรอบไม่สำเร็จ (ส่วนอื่นของประวัติยังแสดงปกติ): ${prodErr.message}`); }
+        res.json({ success: true, history, rounds, productSummary });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// 📊 v1.0.20 (P2): ดาวน์โหลดตาราง สินค้า × รอบไลฟ์ เป็น Excel — ข้อมูลชุดเดียวกับที่หน้าประวัติแสดง (กติกาเดียวกัน)
+app.get('/api/history/product_rounds_excel', async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query;
+        let query = supabase.from('slips').select('*').order('trans_date', { ascending: false }).order('trans_time', { ascending: false });
+        if (startDate) query = query.gte('trans_date', String(startDate).replace(/-/g, ''));
+        if (endDate) query = query.lte('trans_date', String(endDate).replace(/-/g, ''));
+        const { data, error } = await query;
+        if (error) throw error;
+
+        // เรียงคอลัมน์รอบใหม่ → เก่าเหมือนหน้าประวัติ (จากเวลาเริ่มรอบ) แล้วให้ buildProductRoundSummary จัด "นอกรอบ" ไว้ท้าย
+        const sessionIds = [...new Set((data || []).map(s => s.session_id).filter(id => id && LIVE_ID_RE.test(String(id))))];
+        const roundsLike = sessionIds.map(id => ({ sessionId: id, startTime: ((getSessionRecord(id) || {}).startTime) || Number(String(id).slice(5)) || 0 }))
+            .sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+        const ps = buildProductRoundSummary(data, roundsLike);
+
+        // ชื่อคอลัมน์รอบแบบเดียวกับหน้าประวัติ ("ไลฟ์ 1 พ.ย. 21:00 - 01:30")
+        const f = (ms, withTimeOnly) => withTimeOnly
+            ? new Date(ms).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit' })
+            : new Date(ms).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+        const colLabel = (c) => {
+            if (!c.sessionId) return 'นอกรอบไลฟ์';
+            const rec = getSessionRecord(c.sessionId) || {};
+            const startMs = rec.startTime || Number(String(c.sessionId).slice(5)) || 0;
+            if (!startMs) return `ไลฟ์ ${c.sessionId}`;
+            return `ไลฟ์ ${f(startMs)}${rec.endTime ? ' - ' + f(rec.endTime, true) : ''}`;
+        };
+
+        const workbook = new ExcelJS.Workbook();
+        const ws = workbook.addWorksheet('สินค้ารายรอบ');
+        ws.columns = [
+            { header: 'สินค้า', key: 'name', width: 26 },
+            ...ps.columns.map((c, i) => ({ header: colLabel(c), key: 'c' + i, width: 18 })),
+            { header: 'รวม', key: 'total', width: 10 },
+        ];
+        ps.rows.forEach(r => {
+            const obj = { name: r.name, total: r.total };
+            ps.columns.forEach((c, i) => { obj['c' + i] = r.cells[i] || 0; });
+            ws.addRow(obj);
+        });
+        const sum = { name: 'รวมทุกสินค้า', total: ps.grandTotal };
+        ps.columns.forEach((c, i) => { sum['c' + i] = ps.columnTotals[i] || 0; });
+        ws.addRow(sum);
+        ws.getRow(1).font = { bold: true };
+        ws.getRow(ws.rowCount).font = { bold: true };
+
+        const filename = `product_rounds_${startDate || getTodayString()}_${endDate || getTodayString()}.xlsx`;
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (e) {
+        console.error('Product Rounds Excel Error:', e);
+        res.status(500).send('Error generating Excel file: ' + e.message);
+    }
 });
 
 const ALLOWED_QUEUE_ACTIONS = new Set(['completed', 'called', 'skipped', 'waiting', 'cleared', 'rejected']);
@@ -2595,29 +2658,39 @@ function renderLiveIssueGroup(g) {
     return out.length > 950 ? out.slice(0, 949) + '…' : out;
 }
 
-// สรุปสินค้าที่ได้สิทธิ์ของรอบ — กติกาเดียวกับหน้าประวัติ (public/history.html summarizeHistory): ไม่นับใบที่ปัดตก/ข้าม และ draws ต้อง > 0
+// สรุปสินค้าที่ได้สิทธิ์ของรอบ — กติกาเดียวกับหน้าประวัติ (public/history.html): ไม่นับใบที่ปัดตก/ข้าม และ draws ต้อง > 0
 // breakdown เก็บใน qr_payload: "รหัสอ้างอิง|ชื่อ xจำนวน, ชื่อ xจำนวน" (ใบ manual_image คือ "manual_image|url|breakdown")
+// v1.0.20 (P2): ตัวนับย้ายไป lib/products.js เป็นกติกาเดียวกับตาราง "สินค้า × รอบไลฟ์" ของหน้าประวัติ — ห้ามแก้ข้างเดียว
+const Products = require('./lib/products');
 function summarizeLiveProducts(rows) {
-    const counts = {};
-    let pieces = 0;
-    (rows || []).forEach(r => {
-        if (r.status === 'rejected' || r.status === 'skipped' || !(Number(r.draws) > 0)) return;
-        const payload = String(r.qr_payload || '');
-        const parts = payload.split('|');
-        const breakdown = payload.startsWith('manual_image') ? parts[2] : parts[1];
-        if (!breakdown) return;
-        breakdown.split(',').forEach(p => {
-            const t = p.trim();
-            if (!t) return;
-            const m = t.match(/(.+)\s+x(\d+)$/);
-            const name = m ? m[1].trim() : t;
-            const qty = m ? parseInt(m[2], 10) : 1;
-            counts[name] = (counts[name] || 0) + qty;
-            pieces += qty;
-        });
-    });
+    const { counts, pieces } = Products.countProducts(rows);
     const list = Object.keys(counts).map(n => ({ name: n, qty: counts[n] })).sort((a, b) => (b.qty - a.qty) || a.name.localeCompare(b.name));
     return { list, pieces };
+}
+
+// v1.0.20 (P2): ประกอบตาราง สินค้า × รอบไลฟ์ จากสลิปในช่วงที่เลือก (นับด้วยกติกาเดียวกันจาก lib/products.js)
+// คอลัมน์ = รอบใหม่ → เก่า (ตามลำดับ rounds ที่ส่งเข้ามา ซึ่งเรียงแล้ว) + "นอกรอบไลฟ์" ท้ายสุดถ้ามีสลิปไม่มีรอบ
+// ใช้ร่วมทั้ง /api/history_data (แสดงบนหน้าประวัติ) และ /api/history/product_rounds_excel (ดาวน์โหลด Excel)
+function buildProductRoundSummary(slips, rounds) {
+    const byRound = new Map();
+    (slips || []).forEach(s => {
+        const key = s.session_id && LIVE_ID_RE.test(String(s.session_id)) ? String(s.session_id) : '__oor__';
+        if (!byRound.has(key)) byRound.set(key, []);
+        byRound.get(key).push(s);
+    });
+    const columns = [];
+    (rounds || []).forEach(r => { if (r.sessionId) columns.push({ key: String(r.sessionId), sessionId: r.sessionId }); });
+    if (byRound.has('__oor__')) columns.push({ key: '__oor__', sessionId: null });
+    const perCol = {};
+    columns.forEach(c => { perCol[c.key] = Products.countProducts(byRound.get(c.key) || []); });
+    const names = new Set();
+    Object.keys(perCol).forEach(k => Object.keys(perCol[k].counts).forEach(n => names.add(n)));
+    const rows = [...names].map(n => {
+        const cells = columns.map(c => perCol[c.key].counts[n] || 0);
+        return { name: n, cells, total: cells.reduce((a, b) => a + b, 0) };
+    }).sort((a, b) => (b.total - a.total) || a.name.localeCompare(b.name, 'th'));
+    const columnTotals = columns.map(c => perCol[c.key].pieces);
+    return { columns, rows, columnTotals, grandTotal: columnTotals.reduce((a, b) => a + b, 0) };
 }
 
 // 🏁 v1.0.16: ตัวสร้าง embed สรุปหลังจบไลฟ์ (pure function — ตัดมาทดสอบแบบ unit test ได้ตรงๆ)

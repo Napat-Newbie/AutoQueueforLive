@@ -46,6 +46,14 @@
         .customer-date-title { font-weight: 600; color: #1a73e8; font-size: 0.9em; margin-bottom: 5px; background: #f0f4f8; padding: 4px 10px; border-radius: 6px; display: inline-block; }
         .customer-names { font-size: 0.9em; color: #444; line-height: 1.6; padding-left: 5px; }
 
+        /* v1.0.20 (P2): ตาราง สินค้า × รอบไลฟ์ — รอบเยอะเกินจอเลื่อนแนวนอนได้ คอลัมน์ชื่อสินค้าตรึงซ้าย */
+        .prod-rounds-table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+        .prod-rounds-table th, .prod-rounds-table td { border: 1px solid #e4e7ec; padding: 6px 10px; text-align: right; white-space: nowrap; }
+        .prod-rounds-table th:first-child, .prod-rounds-table td:first-child { position: sticky; left: 0; background: #fff; text-align: left; font-weight: 600; z-index: 1; box-shadow: 2px 0 4px rgba(0,0,0,0.06); }
+        .prod-rounds-table thead th { background: #f5f7fa; position: sticky; top: 0; z-index: 2; }
+        .prod-rounds-table thead th:first-child { z-index: 3; }
+        .prod-rounds-table tfoot td { background: #f5f7fa; }
+
         .table-container { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); overflow-x: auto; border: 1px solid #f0f0f0; }
         table { width: 100%; border-collapse: collapse; text-align: left; }
         th { padding: 15px 10px; color: #555; border-bottom: 2px solid #eee; font-weight: 600; white-space: nowrap; }
@@ -119,12 +127,17 @@
         <!-- 🆕 แดชบอร์ดสรุป Report แยกตามสินค้าและรายชื่อลูกค้า -->
         <div class="report-grid">
             <div class="report-card">
-                <h3>📊 สรุปยอดขายแยกตามสินค้า</h3>
-                <ul class="report-list" id="product-summary-list">
-                    <li style="color: #888; justify-content: center;">กำลังคำนวณข้อมูล...</li>
-                </ul>
+                <h3>📊 สรุปยอดขายแยกตามสินค้า (รายรอบไลฟ์)</h3>
+                <button id="productRoundsExcelBtn" class="view-btn" style="margin-bottom: 8px;" onclick="downloadProductRoundsExcel()">⬇️ ดาวน์โหลด Excel</button>
+                <!-- v1.0.20 (P2): ข้อมูลจากเซิร์ฟเวอร์ (กติกานับเดียวกับสรุป Discord) หน้าเว็บไม่นับเอง -->
+                <div id="product-rounds-box" style="overflow-x: auto; max-height: 320px; overflow-y: auto;">
+                    <div style="color: #888; text-align: center; padding: 10px;">กำลังคำนวณข้อมูล...</div>
+                </div>
+                <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
+                    💡 ไม่นับสลิปที่ปัดตก/ถูกข้าม นับเฉพาะใบที่ได้ชิ้น · "ไม่ระบุสินค้า" คือใบที่มีชิ้นแต่ไม่มีรายการสินค้า · ตัวเลข "รวมทุกสินค้า" ของแต่ละรอบเท่ากับจำนวนชิ้นของรอบนั้น · รอบเยอะเกินจอเลื่อนไปด้านข้างได้
+                </div>
             </div>
-            
+
             <div class="report-card">
                 <h3>👥 รายชื่อลูกค้าที่ได้รับสินค้า (แบ่งตามวัน)</h3>
                 <div id="customer-summary-list" style="max-height: 250px; overflow-y: auto; padding-right: 10px;">
@@ -209,29 +222,17 @@
             }
         }
 
-        // v1.0.17: ตัวเลขสรุปของหน้า -- สลิปที่ปัดตก/ยกเลิก (rejected) ไม่นับใน ยอดเงิน / สิทธิ์ / จำนวนสลิป / สรุปสินค้า / รายชื่อลูกค้า
+        // v1.0.17: ตัวเลขสรุปของหน้า -- สลิปที่ปัดตก/ยกเลิก (rejected) ไม่นับใน ยอดเงิน / สิทธิ์ / จำนวนสลิป / รายชื่อลูกค้า
         // (แถวของมันยังแสดงในตารางให้เห็นว่าเคยมี) ลูกค้านับตามรหัส LINE (customerKey) ไม่ใช่ตามชื่อ เพราะชื่อ LINE ซ้ำกันได้
+        // v1.0.20 (P2): เลิกแยกสินค้าเอง — ตารางสินค้าใช้ productSummary ที่เซิร์ฟเวอร์คำนวณ (กติกาเดียวกับสรุป Discord ผ่าน lib/products.js)
         function summarizeHistory(rows) {
-            const s = { totalAmount: 0, totalDraws: 0, totalSlips: 0, rejectedSlips: 0, productCounts: {}, dailyCustomers: {} };
+            const s = { totalAmount: 0, totalDraws: 0, totalSlips: 0, rejectedSlips: 0, dailyCustomers: {} };
             (rows || []).forEach(item => {
                 if (item.status === 'rejected') { s.rejectedSlips += 1; return; }
                 s.totalAmount += (Number(item.amount) || 0);
                 s.totalDraws += (Number(item.draws) || 0);
                 s.totalSlips += 1;
                 if (item.draws > 0 && item.status !== 'skipped') {   // นับเฉพาะบิลที่มีการจ่ายของออกไป
-                    const payloadParts = (item.ref || '').split('|');
-                    if (payloadParts[1]) {
-                        payloadParts[1].split(',').forEach(prod => {
-                            const match = prod.trim().match(/(.+)\s+x(\d+)$/);
-                            if (match) {
-                                const name = match[1].trim();
-                                s.productCounts[name] = (s.productCounts[name] || 0) + parseInt(match[2], 10);
-                            } else {
-                                const name = prod.trim();
-                                if (name) s.productCounts[name] = (s.productCounts[name] || 0) + 1;
-                            }
-                        });
-                    }
                     const day = item.date;
                     if (!s.dailyCustomers[day]) s.dailyCustomers[day] = new Map();
                     const key = item.customerKey || item.name || '-';
@@ -341,7 +342,6 @@
                 document.getElementById('sumDraws').innerText = "0";
                 document.getElementById('sumSlips').innerText = "0";
                 document.getElementById('sumSlipsNote').innerText = '';
-                document.getElementById('product-summary-list').innerHTML = '<li style="color: #999; justify-content: center;">ไม่พบข้อมูลสินค้า</li>';
                 document.getElementById('customer-summary-list').innerHTML = '<div style="color: #999; text-align: center;">ไม่พบข้อมูลลูกค้า</div>';
                 __historyRows = [];
                 return;
@@ -358,19 +358,7 @@
             document.getElementById('sumSlips').innerText = summary.totalSlips;
             document.getElementById('sumSlipsNote').innerText = summary.rejectedSlips > 0 ? 'ไม่รวมที่ปัดตก/ยกเลิก ' + summary.rejectedSlips + ' ใบ (ยังเห็นในตารางด้านล่าง)' : '';
 
-            // 🆕 แสดงผล Report ยอดสินค้า
-            const productListUI = document.getElementById('product-summary-list');
-            productListUI.innerHTML = '';
-            let hasProduct = false;
-            // จัดเรียงตามยอดขายจากมากไปน้อย
-            const sortedProducts = Object.entries(summary.productCounts).sort((a, b) => b[1] - a[1]);
-            for (let [name, qty] of sortedProducts) {
-                hasProduct = true;
-                productListUI.innerHTML += `<li><span>${escapeHtml(name)}</span> <strong>${qty} ชิ้น</strong></li>`;
-            }
-            if (!hasProduct) productListUI.innerHTML = '<li style="color: #999; justify-content: center;">ไม่มียอดการแพ็คสินค้า</li>';
-
-            // 🆕 แสดงผล Report รายชื่อลูกค้า
+            // 🆕 แสดงผล Report รายชื่อลูกค้า (v1.0.20 P2: สรุปสินค้าย้ายไปเป็นตารางรายรอบ — renderProductRounds)
             const customerListUI = document.getElementById('customer-summary-list');
             customerListUI.innerHTML = '';
             let hasCustomer = false;
@@ -433,6 +421,38 @@
                 </tr></thead><tbody>${rows}</tbody></table>`;
         }
 
+        // v1.0.20 (P2): ตาราง สินค้า × รอบไลฟ์ — วาดจาก productSummary ที่เซิร์ฟเวอร์คำนวณให้
+        // (กติกานับเดียวกับสรุป Discord ผ่าน lib/products.js) หน้าเว็บไม่มีกติกานับของตัวเองอีก
+        function renderProductRounds(ps) {
+            const box = document.getElementById('product-rounds-box');
+            if (!box) return;
+            if (!ps || !ps.columns || ps.columns.length === 0) {
+                box.innerHTML = '<div style="color: #999; text-align: center; padding: 10px;">ไม่มียอดการแพ็คสินค้า</div>';
+                return;
+            }
+            const colLabel = (c) => c.sessionId
+                ? formatRoundLabel(roundLabels[c.sessionId] || { sessionId: c.sessionId, startTime: Number(String(c.sessionId).slice(5)) || null })
+                : 'นอกรอบไลฟ์';
+            let html = '<table class="prod-rounds-table"><thead><tr><th>สินค้า</th>';
+            ps.columns.forEach(c => { html += `<th>${escapeHtml(colLabel(c))}</th>`; });
+            html += '<th>รวม</th></tr></thead><tbody>';
+            ps.rows.forEach(r => {
+                html += `<tr><td>${escapeHtml(r.name)}</td>` + r.cells.map(v => `<td>${v > 0 ? v : '-'}</td>`).join('') + `<td><strong>${r.total}</strong></td></tr>`;
+            });
+            html += '</tbody><tfoot><tr><td>รวมทุกสินค้า</td>' + ps.columnTotals.map(v => `<td><strong>${v > 0 ? v : '-'}</strong></td>`).join('') + `<td><strong>${ps.grandTotal}</strong></td></tr></tfoot></table>`;
+            box.innerHTML = html;
+        }
+
+        // v1.0.20 (P2): ดาวน์โหลดตารางนี้เป็น Excel — ใช้ช่วงวันที่เดียวกับที่กรองอยู่บนหน้า
+        function downloadProductRoundsExcel() {
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            let url = '/api/history/product_rounds_excel?';
+            if (startDate) url += `startDate=${startDate}&`;
+            if (endDate) url += `endDate=${endDate}`;
+            window.open(url, '_blank');
+        }
+
         function fetchHistory() {
             const startDate = document.getElementById('startDate').value;
             const endDate = document.getElementById('endDate').value;
@@ -451,6 +471,7 @@
                         (data.rounds || []).forEach(r => { if (r.sessionId) roundLabels[r.sessionId] = r; });
                         renderHistoryTable(data.history);
                         renderRounds(data.rounds);
+                        renderProductRounds(data.productSummary);
                     } else {
                         alert("เกิดข้อผิดพลาดในการดึงข้อมูล");
                     }
