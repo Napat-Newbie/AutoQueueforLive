@@ -13,12 +13,11 @@ const ROOT = process.env.AQ_TEST_APP_ROOT || path.join(__dirname, '..', '..');
 const INDEX = path.join(ROOT, 'index.js');
 const LIB_SLIP = path.join(ROOT, 'lib', 'slipVerify.js');   // v1.0.19: classifySlipOkError ย้ายบ้านแล้ว (assertion เดิมทุกตัว ไม่แก้)
 const LIB_DEV = path.join(ROOT, 'lib', 'devReport.js');
+const LIB_REPORT = path.join(ROOT, 'lib', 'liveReport.js');
+const LiveReport = require(LIB_REPORT);
+
 function env() {
-    const fromIndex = load(INDEX, {
-        functions: ['buildEndOfLiveReportEmbed', 'buildEndOfLiveReportEmbeds', 'analyzeLiveIssues', 'getLiveIssueRules', 'renderLiveIssueGroup',
-            'quotedNamesOf', 'summarizeLiveProducts'],
-        consts: ['SEVERITY_STYLE']
-    });
+    const fromIndex = { ...LiveReport };
     fromIndex.classifySlipOkError = load(LIB_SLIP, { functions: ['classifySlipOkError'] }).classifySlipOkError;
     fromIndex.Products = require(path.join(ROOT, 'lib', 'products'));   // v1.0.20 (P2): summarizeLiveProducts ใช้กติกานับสินค้าจาก lib/products.js
     fromIndex.assessErrorForDevReport = require(LIB_DEV).assessErrorForDevReport;
@@ -257,17 +256,20 @@ test('AI opinion (aiNotes) is shown ONLY for unknown groups, clearly marked as u
 test('getAiOpinionsForUnknownIssues: one batched Gemini call, JSON parsed back by index; 429/no-key/empty -> {} and never throws', async () => {
     const calls = [];
     const mkAxios = (status, text) => ({ post: async (url, body) => { calls.push({ url, body }); if (status !== 200) { const e = new Error('429'); e.response = { status }; throw e; } return { data: { candidates: [{ content: { parts: [{ text }] } }] } }; } });
-    const path = require('path');
-    const { load } = require('../harness/extract');
-    const IDX = path.join(__dirname, '..', '..', 'index.js');
-    const FNS = ['getAiOpinionsForUnknownIssues', 'analyzeLiveIssues', 'getLiveIssueRules'];
+    const FNS = ['getAiOpinionsForUnknownIssues'];
     const MSGS = [E('ERROR', 'ปัญหาแปลกกลุ่มที่ 1 ที่ไม่มีกฎ xyz'), E('WARN', 'ปัญหาแปลกกลุ่มที่ 2 ที่ไม่มีกฎ abc')];
     // สำเร็จ
-    const okCtx = load(IDX, {
+    const okCtx = load(INDEX, {
         functions: FNS,
-        globals: { axios: mkAxios(200, JSON.stringify([{ i: 1, opinion: 'สันนิษฐานข้อ 1' }, { i: 2, opinion: 'สันนิษฐานข้อ 2' }])), process: { env: { GEMINI_API_KEY: 'test-key' } }, addLog: () => {} }
+        globals: {
+            axios: mkAxios(200, JSON.stringify([{ i: 1, opinion: 'สันนิษฐานข้อ 1' }, { i: 2, opinion: 'สันนิษฐานข้อ 2' }])),
+            process: { env: { GEMINI_API_KEY: 'test-key' } },
+            addLog: () => {},
+            analyzeLiveIssues: LiveReport.analyzeLiveIssues,
+            getLiveIssueRules: LiveReport.getLiveIssueRules
+        }
     });
-    const okRaw = okCtx.analyzeLiveIssues(MSGS).filter(g => !g.rule);
+    const okRaw = LiveReport.analyzeLiveIssues(MSGS).filter(g => !g.rule);
     assert.equal(okRaw.length, 2, 'both test messages are unknown to the rules');
     const notes = await okCtx.getAiOpinionsForUnknownIssues(okRaw);
     assert.equal(calls.length, 1, 'exactly one batched call');
@@ -276,14 +278,14 @@ test('getAiOpinionsForUnknownIssues: one batched Gemini call, JSON parsed back b
     assert.equal(Object.keys(notes).length, 2);
     assert.match(notes[okRaw[0].key], /สันนิษฐานข้อ 1/);
     // 429 -> {}
-    const qCtx = load(path.join(__dirname, '..', '..', 'index.js'), {
+    const qCtx = load(INDEX, {
         functions: ['getAiOpinionsForUnknownIssues'],
         globals: { axios: mkAxios(429, ''), process: { env: { GEMINI_API_KEY: 'test-key' } }, addLog: () => {} }
     });
     assert.equal(Object.keys(await qCtx.getAiOpinionsForUnknownIssues([{ type: 'ERROR', key: 'raw:x', rule: null, messages: ['x'] }])).length, 0);
     // ไม่มี key -> ไม่ยิงเรียกเลย
     const nCalls = calls.length;
-    const noKeyCtx = load(path.join(__dirname, '..', '..', 'index.js'), {
+    const noKeyCtx = load(INDEX, {
         functions: ['getAiOpinionsForUnknownIssues'],
         globals: { axios: mkAxios(200, '[]'), process: { env: {} }, addLog: () => {} }
     });
@@ -291,4 +293,17 @@ test('getAiOpinionsForUnknownIssues: one batched Gemini call, JSON parsed back b
     assert.equal(calls.length, nCalls, 'no call without a key');
     // รายการว่าง -> ไม่เรียก
     assert.equal(Object.keys(await okCtx.getAiOpinionsForUnknownIssues([])).length, 0);
+});
+
+test('anti-copy: live report functions and SEVERITY_STYLE must be moved out of index.js', () => {
+    const fs = require('fs');
+    const src = fs.readFileSync(INDEX, 'utf8');
+    assert.doesNotMatch(src, /function\s+buildEndOfLiveReportEmbed\s*\(/, 'ห้ามมีนิยาม function buildEndOfLiveReportEmbed ใน index.js');
+    assert.doesNotMatch(src, /function\s+buildEndOfLiveReportEmbeds\s*\(/, 'ห้ามมีนิยาม function buildEndOfLiveReportEmbeds ใน index.js');
+    assert.doesNotMatch(src, /function\s+analyzeLiveIssues\s*\(/, 'ห้ามมีนิยาม function analyzeLiveIssues ใน index.js');
+    assert.doesNotMatch(src, /function\s+getLiveIssueRules\s*\(/, 'ห้ามมีนิยาม function getLiveIssueRules ใน index.js');
+    assert.doesNotMatch(src, /function\s+renderLiveIssueGroup\s*\(/, 'ห้ามมีนิยาม function renderLiveIssueGroup ใน index.js');
+    assert.doesNotMatch(src, /function\s+summarizeLiveProducts\s*\(/, 'ห้ามมีนิยาม function summarizeLiveProducts ใน index.js');
+    assert.doesNotMatch(src, /function\s+quotedNamesOf\s*\(/, 'ห้ามมีนิยาม function quotedNamesOf ใน index.js');
+    assert.doesNotMatch(src, /const\s+SEVERITY_STYLE\s*=\s*\{/, 'ห้ามมีนิยาม const SEVERITY_STYLE = { ใน index.js');
 });

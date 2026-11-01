@@ -87,21 +87,20 @@ test('buildProductRoundSummary: จัดกลุ่มสลิปตามร
     assert.equal(shirtRow.total, 6);
 });
 
-test('กติกาเดียวกับตัวจริงใน index.js: summarizeLiveProducts (สรุป Discord) ให้ผลเท่ากับ lib ทุกกรณี', () => {
-    const ctx = load(INDEX, { functions: ['summarizeLiveProducts'] });
-    ctx.Products = Products;   // v1.0.20 (P2): ตัวจริงเรียกใช้ lib/products.js
+test('กติกาเดียวกับตัวจริง: summarizeLiveProducts (สรุป Discord ใน lib/liveReport) ให้ผลเท่ากับ lib ทุกกรณี', () => {
+    const { summarizeLiveProducts } = require(path.join(ROOT, 'lib', 'liveReport'));
     const rows = [
         row({ qr_payload: 'R1|A x2, B x1', draws: 3 }),
         row({ qr_payload: 'manual_image|/u.jpg|C x2', draws: 2 }),
         row({ qr_payload: 'R3|', draws: 2 }),
         row({ status: 'rejected', qr_payload: 'R4|A x9', draws: 9 }),
     ];
-    const fromIndex = ctx.summarizeLiveProducts(rows);
+    const fromLib = summarizeLiveProducts(rows);
     const lib = Products.countProducts(rows);
     const libList = Object.keys(lib.counts).map(n => ({ name: n, qty: lib.counts[n] })).sort((a, b) => (b.qty - a.qty) || a.name.localeCompare(b.name));
-    assert.equal(JSON.stringify(fromIndex.list), JSON.stringify(libList));
-    assert.equal(fromIndex.pieces, lib.pieces);
-    assert.ok(fromIndex.list.some(i => i.name === Products.UNKNOWN_PRODUCT && i.qty === 2), 'แถว ไม่ระบุสินค้า ปรากฏในสรุปด้วย');
+    assert.equal(JSON.stringify(fromLib.list), JSON.stringify(libList));
+    assert.equal(fromLib.pieces, lib.pieces);
+    assert.ok(fromLib.list.some(i => i.name === Products.UNKNOWN_PRODUCT && i.qty === 2), 'แถว ไม่ระบุสินค้า ปรากฏในสรุปด้วย');
 });
 
 test('anti-copy: buildProductRoundSummary และ LIVE_ID_RE ต้องถูกย้ายออกจาก index.js', () => {
