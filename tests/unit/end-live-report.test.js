@@ -9,16 +9,19 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { load } = require('../harness/extract');
 
-const INDEX = path.join(__dirname, '..', '..', 'index.js');
-const LIB_SLIP = path.join(__dirname, '..', '..', 'lib', 'slipVerify.js');   // v1.0.19: classifySlipOkError ย้ายบ้านแล้ว (assertion เดิมทุกตัว ไม่แก้)
+const ROOT = process.env.AQ_TEST_APP_ROOT || path.join(__dirname, '..', '..');
+const INDEX = path.join(ROOT, 'index.js');
+const LIB_SLIP = path.join(ROOT, 'lib', 'slipVerify.js');   // v1.0.19: classifySlipOkError ย้ายบ้านแล้ว (assertion เดิมทุกตัว ไม่แก้)
+const LIB_DEV = path.join(ROOT, 'lib', 'devReport.js');
 function env() {
     const fromIndex = load(INDEX, {
-        functions: ['buildEndOfLiveReportEmbed', 'buildEndOfLiveReportEmbeds', 'assessErrorForDevReport', 'analyzeLiveIssues', 'getLiveIssueRules', 'renderLiveIssueGroup',
+        functions: ['buildEndOfLiveReportEmbed', 'buildEndOfLiveReportEmbeds', 'analyzeLiveIssues', 'getLiveIssueRules', 'renderLiveIssueGroup',
             'quotedNamesOf', 'summarizeLiveProducts'],
         consts: ['SEVERITY_STYLE']
     });
     fromIndex.classifySlipOkError = load(LIB_SLIP, { functions: ['classifySlipOkError'] }).classifySlipOkError;
-    fromIndex.Products = require('../../lib/products');   // v1.0.20 (P2): summarizeLiveProducts ใช้กติกานับสินค้าจาก lib/products.js
+    fromIndex.Products = require(path.join(ROOT, 'lib', 'products'));   // v1.0.20 (P2): summarizeLiveProducts ใช้กติกานับสินค้าจาก lib/products.js
+    fromIndex.assessErrorForDevReport = require(LIB_DEV).assessErrorForDevReport;
     return fromIndex;
 }
 
