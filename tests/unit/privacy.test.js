@@ -6,8 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { redactPersonalInfo, parseLogLineTime, sliceLogForLive } = require('../../lib/privacy');
-const ROOT = path.join(__dirname, '..', '..');
+const ROOT = process.env.AQ_TEST_APP_ROOT || path.join(__dirname, '..', '..');
+const { redactPersonalInfo, parseLogLineTime, sliceLogForLive } = require(path.join(ROOT, 'lib', 'privacy'));
 
 const bkk = (y, mo, d, h, mi, s) => Date.UTC(y, mo - 1, d, h - 7, mi, s);
 

@@ -5,8 +5,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('path');
 // v1.0.20 (P5: 1.2): โหลดจาก lib/privacy โดยตรงตามกติกา P5 (เดิมตัดจาก index.js ด้วย extract.js)
-const ctx = require('../../lib/privacy');
+const ROOT = process.env.AQ_TEST_APP_ROOT || path.join(__dirname, '..', '..');
+const ctx = require(path.join(ROOT, 'lib', 'privacy'));
 const bkk = (y, mo, d, h, mi, s) => Date.UTC(y, mo - 1, d, h - 7, mi, s);
 
 test('parses the timestamp addLog writes on THIS Node (whatever space ICU puts before AM/PM)', () => {
