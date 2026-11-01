@@ -1,16 +1,31 @@
 // tests/unit/products.test.js
-// v1.0.20 (P2): กติกาเดียวของการนับ "สินค้า × จำนวนชิ้น" — lib/products.js ใช้ร่วมทั้งสรุป Discord
-// หลังจบไลฟ์ (summarizeLiveProducts ใน index.js) และตาราง "สินค้า × รอบไลฟ์" ของหน้าประวัติ — ห้ามมีสองกติกา
-// (มีเทสต์เทียบกับตัวจริงที่ตัดมาจาก index.js เพื่อกันคนลืมแก้ข้างเดียว)
+// v1.0.20 (P2, P5: 1.1): กติกาเดียวของการนับ "สินค้า × จำนวนชิ้น", การประกอบตาราง "สินค้า × รอบไลฟ์" (buildProductRoundSummary),
+// และรูปแบบรหัสรอบไลฟ์ LIVE_ID_RE — lib/products.js ใช้ร่วมกันทั้งสรุป Discord หลังจบไลฟ์ และหน้าประวัติ
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
-const Products = require('../../lib/products');
+
+const ROOT = process.env.AQ_TEST_APP_ROOT || path.join(__dirname, '..', '..');
+const Products = require(path.join(ROOT, 'lib', 'products'));
 const { load } = require('../harness/extract');
 
-const INDEX = path.join(__dirname, '..', '..', 'index.js');
+const INDEX = path.join(ROOT, 'index.js');
 const row = (o) => Object.assign({ status: 'completed', draws: 1, qr_payload: 'REF|A x1' }, o);
+
+test('LIVE_ID_RE: ตรวจจับรูปแบบรหัสรอบไลฟ์ LIVE_<timestamp> ถูกต้อง', () => {
+    const { LIVE_ID_RE } = Products;
+    assert.ok(LIVE_ID_RE instanceof RegExp);
+    assert.equal(LIVE_ID_RE.test('LIVE_1793450521936'), true);
+    assert.equal(LIVE_ID_RE.test('LIVE_1'), true);
+    assert.equal(LIVE_ID_RE.test('LIVE_0'), true);
+    assert.equal(LIVE_ID_RE.test('LIVE_'), false);
+    assert.equal(LIVE_ID_RE.test('1793450521936'), false);
+    assert.equal(LIVE_ID_RE.test('manual_123'), false);
+    assert.equal(LIVE_ID_RE.test('LIVE_123_abc'), false);
+    assert.equal(LIVE_ID_RE.test(''), false);
+});
 
 test('นับสินค้า: ไม่นับ rejected/skipped/ไม่มีชิ้น · manual_image อ่าน breakdown ช่องที่ 3 · ไม่มี x นับเป็น 1', () => {
     const rows = [
@@ -41,6 +56,37 @@ test('มีชิ้นแต่ breakdown ว่าง → แถว "ไม�
     assert.equal(r.pieces, 4, 'ผลรวมชิ้น = draws ทั้งหมด');
 });
 
+test('buildProductRoundSummary: จัดกลุ่มสลิปตามรอบไลฟ์ และนอกรอบไลฟ์ (__oor__) พร้อมคำนวณผลรวม', () => {
+    const { buildProductRoundSummary } = Products;
+    assert.equal(typeof buildProductRoundSummary, 'function');
+
+    const slips = [
+        row({ session_id: 'LIVE_100', qr_payload: 'REF|เสื้อยืด x2, กางเกง x1', draws: 3 }),
+        row({ session_id: 'LIVE_200', qr_payload: 'REF|เสื้อยืด x1', draws: 1 }),
+        row({ session_id: null, qr_payload: 'REF|หมวก x1', draws: 1 }),               // นอกรอบ
+        row({ session_id: 'INVALID_ID', qr_payload: 'REF|เสื้อยืด x3', draws: 3 }),   // session_id ผิดรูปแบบ -> นอกรอบ
+    ];
+    const rounds = [
+        { sessionId: 'LIVE_200' },
+        { sessionId: 'LIVE_100' }
+    ];
+
+    const res = buildProductRoundSummary(slips, rounds);
+
+    assert.equal(res.columns.length, 3);
+    assert.deepEqual(res.columns.map(c => c.key), ['LIVE_200', 'LIVE_100', '__oor__']);
+
+    assert.equal(res.columnTotals[0], 1); // LIVE_200: เสื้อยืด x1
+    assert.equal(res.columnTotals[1], 3); // LIVE_100: เสื้อยืด x2, กางเกง x1
+    assert.equal(res.columnTotals[2], 4); // __oor__: หมวก x1, เสื้อยืด x3
+    assert.equal(res.grandTotal, 8);
+
+    const shirtRow = res.rows.find(r => r.name === 'เสื้อยืด');
+    assert.ok(shirtRow);
+    assert.deepEqual(shirtRow.cells, [1, 2, 3]);
+    assert.equal(shirtRow.total, 6);
+});
+
 test('กติกาเดียวกับตัวจริงใน index.js: summarizeLiveProducts (สรุป Discord) ให้ผลเท่ากับ lib ทุกกรณี', () => {
     const ctx = load(INDEX, { functions: ['summarizeLiveProducts'] });
     ctx.Products = Products;   // v1.0.20 (P2): ตัวจริงเรียกใช้ lib/products.js
@@ -53,9 +99,13 @@ test('กติกาเดียวกับตัวจริงใน index.j
     const fromIndex = ctx.summarizeLiveProducts(rows);
     const lib = Products.countProducts(rows);
     const libList = Object.keys(lib.counts).map(n => ({ name: n, qty: lib.counts[n] })).sort((a, b) => (b.qty - a.qty) || a.name.localeCompare(b.name));
-    // เทียบผ่าน JSON เพราะ object จาก vm context มี prototype ต่าง realm จากของ test (deepStrictEqual ไม่ผ่านทั้งที่ค่าเท่ากัน)
     assert.equal(JSON.stringify(fromIndex.list), JSON.stringify(libList));
     assert.equal(fromIndex.pieces, lib.pieces);
-    // เจาะจง: ใบไม่มี breakdown ต้องไม่หายไปเงียบๆ อีก (พฤติกรรมเดิมทิ้งทำให้ยอดชิ้นไม่ตรง draws)
     assert.ok(fromIndex.list.some(i => i.name === Products.UNKNOWN_PRODUCT && i.qty === 2), 'แถว ไม่ระบุสินค้า ปรากฏในสรุปด้วย');
+});
+
+test('anti-copy: buildProductRoundSummary และ LIVE_ID_RE ต้องถูกย้ายออกจาก index.js', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8');
+    assert.doesNotMatch(src, /function\s+buildProductRoundSummary\s*\(/, 'ห้ามมีนิยาม function buildProductRoundSummary ใน index.js');
+    assert.doesNotMatch(src, /const\s+LIVE_ID_RE\s*=\s*\/\^LIVE_\\d\+\$\/;/, 'ห้ามมีนิยามค่าคงที่ const LIVE_ID_RE = /^LIVE_\\d+$/; ใน index.js');
 });
