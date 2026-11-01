@@ -5,11 +5,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('path');
-const { load } = require('../harness/extract');
-
-const INDEX = process.env.AQ_TEST_APP_ROOT ? path.join(process.env.AQ_TEST_APP_ROOT, 'index.js') : path.join(__dirname, '..', '..', 'index.js');
-const ctx = load(INDEX, { functions: ['parseLogLineTime', 'sliceLogForLive'] });
+// v1.0.20 (P5: 1.2): โหลดจาก lib/privacy โดยตรงตามกติกา P5 (เดิมตัดจาก index.js ด้วย extract.js)
+const ctx = require('../../lib/privacy');
 const bkk = (y, mo, d, h, mi, s) => Date.UTC(y, mo - 1, d, h - 7, mi, s);
 
 test('parses the timestamp addLog writes on THIS Node (whatever space ICU puts before AM/PM)', () => {
@@ -44,7 +41,7 @@ test('sliceLogForLive keeps only the lines inside [start, end], across a midnigh
 // Found while building the log file (2026-10-31): redactPersonalInfo masked ANY 13-digit run as a Thai ID card number,
 // so the live round id "LIVE_1793450521936" (Date.now() = 13 digits) became "LIVE_[เลขบัตร]" — in the activity channel
 // since v1.0.16 and in the new log file, making a round impossible to trace. Digits glued to "_" are program ids, not ID cards.
-const redact = load(INDEX, { functions: ['redactPersonalInfo'] }).redactPersonalInfo;
+const redact = ctx.redactPersonalInfo;
 test('redactPersonalInfo keeps program ids (LIVE_<ms>, manual_<ms>_...) but still masks ID cards and phones', () => {
     assert.equal(redact('จบไลฟ์ (รหัสรอบ LIVE_1793450521936, ใช้เวลา 5 นาที)'), 'จบไลฟ์ (รหัสรอบ LIVE_1793450521936, ใช้เวลา 5 นาที)');
     assert.equal(redact('/uploads/manual_1793435171091_Ubob.jpg'), '/uploads/manual_1793435171091_Ubob.jpg');
