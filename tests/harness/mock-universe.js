@@ -49,7 +49,12 @@ class MockUniverse {
     profile(userId, displayName) { this.profiles.set(userId, displayName); }
 
     /** SlipOK reads slip `key` as a valid transfer. */
-    slipOk(key, { amount, transRef, receiverName = 'TestShop', receiverNameEn, transDate = '20261029', transTime = '11:00:00', qrcodeData }) {
+    // v1.0.20 (P3): transDate เริ่มต้นเป็น "วันนี้" กรุงเทพ ไม่ใช่วันที่ตายตัว — ค่าคงที่เคยทำเทสต์ล้มเมื่อรันคนละวันกับที่แต่งไว้
+    slipOk(key, { amount, transRef, receiverName = 'TestShop', receiverNameEn, transDate, transTime = '11:00:00', qrcodeData }) {
+        if (!transDate) {
+            const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+            transDate = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+        }
         this.slips.set(key, {
             status: 200,
             body: {
