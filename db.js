@@ -63,6 +63,13 @@ db.exec(`
     session_id TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_notifications_kind_id ON notifications(kind, id);
+
+  -- PR R1: ป้องกัน Webhook Event ซ้ำซ้อนแบบถาวรข้ามการรีสตาร์ท (ลบเก่ากว่า 8 วัน)
+  CREATE TABLE IF NOT EXISTS processed_events (
+    event_id TEXT PRIMARY KEY,
+    seen_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_processed_events_seen_at ON processed_events(seen_at);
 `);
 
 // 🛡️ Migration: เพิ่ม trans_ref & session_id หากยังไม่มี และสร้าง UNIQUE INDEX ป้องกันสลิปซ้ำระดับฐานข้อมูล
@@ -138,6 +145,21 @@ try {
 } catch(migErr) {
   console.error('Migration warning (session_id):', migErr.message);
 }
+
+// 🛡️ Migration: สร้างตาราง processed_events สำหรับฐานข้อมูลเดิมที่สร้างก่อน R1
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS processed_events (
+      event_id TEXT PRIMARY KEY,
+      seen_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_processed_events_seen_at ON processed_events(seen_at);
+  `);
+} catch (migErr) {
+  console.error('Migration processed_events warning:', migErr.message);
+}
+
+try { cleanupProcessedEvents(8); } catch (e) {}
 
 console.log('📦 Local SQLite Database Initialized:', dbPath);
 
@@ -467,8 +489,21 @@ function cleanupBackups(dirPath, keepLatest = 10, maxAgeDays = 30) {
 }
 
 // ⚡ บำรุงรักษาฐานข้อมูล SQLite (Checkpoint WAL & Analyze Query Plan)
+// ลบ event ที่ประมวลผลแล้วเก่ากว่า 8 วัน
+function cleanupProcessedEvents(maxAgeDays = 8) {
+  try {
+    const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+    const result = db.prepare('DELETE FROM processed_events WHERE seen_at < ?').run(cutoff);
+    return result.changes;
+  } catch (err) {
+    console.error('cleanupProcessedEvents error:', err.message);
+    return 0;
+  }
+}
+
 function optimizeDb() {
   try {
+    cleanupProcessedEvents(8);
     db.pragma('wal_checkpoint(TRUNCATE)');
     db.pragma('optimize');
     console.log('⚡ บำรุงรักษาฐานข้อมูล SQLite สำเร็จ (WAL Checkpointed & Optimized)');
@@ -499,6 +534,7 @@ module.exports = {
   cleanupBackups,
   optimizeDb,
   closeDb,
+  cleanupProcessedEvents,
   transaction: (fn) => db.transaction(fn),
   runTransaction: (fn) => db.transaction(fn)()
 };

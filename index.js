@@ -1045,6 +1045,9 @@ function cleanupOldBackups(maxAgeDays = 30, keepLatest = 10) {
         if (supabase && typeof supabase.optimizeDb === 'function') {
             supabase.optimizeDb();
         }
+        if (supabase && typeof supabase.cleanupProcessedEvents === 'function') {
+            supabase.cleanupProcessedEvents(8);
+        }
     } catch (e) {
         console.error('cleanupOldBackups error:', e.message);
     }
@@ -4570,15 +4573,42 @@ app.post('/webhook', async (req, res) => {
                 const userId = event.source?.userId;
                 if (!userId) continue;
 
-        // 🛡️ ตรวจสอบ Message Deduplication
-        if (event.type === 'message' && event.message?.id) {
-            const msgId = event.message.id;
-            if (processedMessageIds.has(msgId)) {
-                addLog('INFO', `บล็อกข้อความซ้ำ (Deduplication): Message ID ${msgId}`);
-                console.log(`⚠️ ข้อความซ้ำถูกบล็อก (Duplicate Webhook Drop): ${msgId}`);
+        // 🛡️ PR R1: ตรวจสอบ Event Deduplication แบบถาวร (processed_events ใน DB)
+        // ใช้ webhookEventId ของ LINE เป็นหลัก (ถ้าไม่มีใช้ message.id) ข้ามทั้งก้อนและเขียน log INFO
+        const eventId = event.webhookEventId || event.message?.id;
+        const fallbackMsgId = (event.webhookEventId && event.message?.id && event.message.id !== event.webhookEventId) ? event.message.id : null;
+        if (eventId) {
+            let isDuplicate = false;
+            try {
+                const existing = supabase.db.prepare(
+                    fallbackMsgId
+                        ? "SELECT 1 FROM processed_events WHERE event_id IN (?, ?) LIMIT 1"
+                        : "SELECT 1 FROM processed_events WHERE event_id = ?"
+                ).get(...(fallbackMsgId ? [eventId, fallbackMsgId] : [eventId]));
+
+                if (existing) {
+                    isDuplicate = true;
+                } else {
+                    const now = Date.now();
+                    supabase.db.prepare("INSERT OR IGNORE INTO processed_events (event_id, seen_at) VALUES (?, ?)").run(eventId, now);
+                    if (fallbackMsgId) {
+                        supabase.db.prepare("INSERT OR IGNORE INTO processed_events (event_id, seen_at) VALUES (?, ?)").run(fallbackMsgId, now);
+                    }
+                }
+            } catch (dbErr) {
+                console.error('processed_events query error:', dbErr.message);
+                if (processedMessageIds.has(eventId) || (fallbackMsgId && processedMessageIds.has(fallbackMsgId))) {
+                    isDuplicate = true;
+                }
+            }
+
+            if (isDuplicate) {
+                addLog('INFO', `บล็อกข้อความซ้ำ (Deduplication): Event ID ${eventId}`);
+                console.log(`⚠️ ข้อความซ้ำถูกบล็อก (Duplicate Webhook Drop): ${eventId}`);
                 continue;
             }
-            processedMessageIds.set(msgId, Date.now());
+            processedMessageIds.set(eventId, Date.now());
+            if (fallbackMsgId) processedMessageIds.set(fallbackMsgId, Date.now());
         }
         
         if (event.type === 'message' && event.message.type === 'text') {
