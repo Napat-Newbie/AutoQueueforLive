@@ -30,9 +30,20 @@ test('assessErrorForDevReport: จัดระดับความรุนแ�
     assert.equal(assessErrorForDevReport('LINE', 'webhook verify failed').severity, 'HIGH');
     assert.equal(assessErrorForDevReport('SYSTEM', 'ดิสก์เต็ม').severity, 'HIGH');
 
-    // MEDIUM (tunnel, gemini, fallback)
+    // MEDIUM (tunnel, gemini, kerry/excel, fallback)
     assert.equal(assessErrorForDevReport('TUNNEL', 'cloudflare tunnel dropped').severity, 'MEDIUM');
     assert.equal(assessErrorForDevReport('AI', 'gemini timeout reading ที่อยู่').severity, 'MEDIUM');
+    assert.equal(assessErrorForDevReport('AI', 'gemini reading ที่อยู่ error').fix, 'ตรวจโควตา Gemini และปรับตัวอ่านที่อยู่สำรอง (Regex) ให้รองรับรูปแบบนี้');
+
+    // Kerry / Excel export rule (ข้อความ error มี kerry/excel ต้องได้ severity MEDIUM และ cause 'ส่งออกไฟล์ Kerry ไม่สำเร็จ')
+    const kerryErr = assessErrorForDevReport('EXPORT', 'เกิดข้อผิดพลาดในการสร้างไฟล์ kerry excel');
+    assert.equal(kerryErr.severity, 'MEDIUM');
+    assert.equal(kerryErr.cause, 'ส่งออกไฟล์ Kerry ไม่สำเร็จ');
+    assert.equal(assessErrorForDevReport('KERRY', 'export error').severity, 'MEDIUM');
+    assert.equal(assessErrorForDevReport('KERRY', 'export error').cause, 'ส่งออกไฟล์ Kerry ไม่สำเร็จ');
+    assert.equal(assessErrorForDevReport('EXCEL', 'kerry error').severity, 'MEDIUM');
+    assert.equal(assessErrorForDevReport('EXCEL', 'kerry error').cause, 'ส่งออกไฟล์ Kerry ไม่สำเร็จ');
+
     assert.equal(assessErrorForDevReport('UNKNOWN', 'random unexpected text').severity, 'MEDIUM');
 
     // null / undefined
