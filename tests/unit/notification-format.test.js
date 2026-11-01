@@ -6,8 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { notificationFromEvent } = require('../../lib/notificationFormat');
-const ROOT = path.join(__dirname, '..', '..');
+const ROOT = process.env.AQ_TEST_APP_ROOT || path.join(__dirname, '..', '..');
+const { notificationFromEvent } = require(path.join(ROOT, 'lib', 'notificationFormat'));
 
 const plain = (v) => JSON.parse(JSON.stringify(v));
 
