@@ -12,7 +12,7 @@
     "จัดระเบียบโค้ดภายในให้ดูแลง่ายขึ้น การทำงานเหมือนเดิมทุกอย่าง",
     "ชุดทดสอบอัตโนมัติ 353 ข้อ ผ่านทั้งหมด"
   ],
-  "downloadUrl": "https://github.com/Napat-Newbie/AutoQueueforLive/releases/download/v1.0.20/update_v1.0.20.zip",
+  "downloadUrl": "https://raw.githubusercontent.com/Napat-Newbie/AutoQueueforLive/c873751890113b701f19a2409244ee11ea6377be/releases/update_v1.0.20.zip",
   "fileSizeKB": 327.1,
   "sha256": "f62294f1c522d36be23406d33145433b8bfb7f8573c7732a58292d4ac1d6c814"
 }
