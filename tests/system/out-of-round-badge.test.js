@@ -115,9 +115,22 @@ test('history page data says which round an out-of-round payment belongs to', ()
 // v1.0.19: เคสตรงข้าม — เงินที่เข้ามาหลังมีรอบไลฟ์จบไปแล้ว (ยอดจุ่ม) ต้องติดป้าย when='after'
 // เพื่อให้หน้าต่าง Kerry คงคำเตือน "อย่าส่งของซ้ำ" ไว้กับกลุ่มนี้ ไม่ปนกับเงินก่อนเริ่มไลฟ์
 test('money arriving AFTER a live has ended is labelled when=after (the dip case keeps the double-ship warning)', () => withSandbox(async sb => {
+    // เวลาโอนบนสลิปต้องช้ากว่าเวลาจบรอบเสมอ ไม่ว่าจะรันเทสต์ตอนไหนของวัน
+    // (เดิมใช้ค่าคงที่ 11:00:00 ของ mock ผสมกับ trans_date=วันนี้ที่เซิร์ฟเวอร์เขียนเอง — รันหลัง 11:00 น. จริงเทสต์ล้ม)
+    // ส่งทั้ง transDate/transTime = เวลาไทยปัจจุบัน +2 นาที ถ้า +2 นาทีข้ามเที่ยงคืน ใช้ 23:59:59 ของวันนี้แทน (เวลาจบรอบย่อมเร็วกว่าเสมอ)
+    const bkkNow = () => new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+    const later = new Date(bkkNow().getTime() + 2 * 60 * 1000);
+    const today = bkkNow();
+    const sameDay = later.getDate() === today.getDate() && later.getMonth() === today.getMonth();
+    const pad = n => String(n).padStart(2, '0');
+    const transDate = `${today.getFullYear()}${pad(today.getMonth() + 1)}${pad(today.getDate())}`;
+    const transTime = sameDay ? `${pad(later.getHours())}:${pad(later.getMinutes())}:${pad(later.getSeconds())}` : '23:59:59';
+
     const live1 = await sb.startLive();
     await sb.endLive();                                              // จบรอบแรกแล้ว (ไม่ต้องส่งอะไร)
-    await slipFor(sb, 'Ucarol', 'Carol', 'm9', 'k9', 140, 'DIP1');   // โอนตอนไม่มีไลฟ์ หลังมีรอบจบไปแล้ว
+    sb.mock.profile('Ucarol', 'Carol');
+    sb.mock.slipOk('k9', { amount: 140, transRef: 'DIP1', transDate, transTime });
+    await sb.sendSlip('Ucarol', 'm9', 'k9');                         // โอนตอนไม่มีไลฟ์ หลังมีรอบจบไปแล้ว
     await sb.waitForSlips(1);
     const st = await sb.stats();
     assert.equal(st.queues.waiting[0].outOfRound, true);

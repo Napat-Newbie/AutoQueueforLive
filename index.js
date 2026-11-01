@@ -1054,7 +1054,8 @@ const ACTION_LOG_LABELS = {
     'POST /api/system/shutdown': () => 'กดปิดโปรแกรม',
     'POST /api/system/apply_update': () => 'กดติดตั้งอัปเดต',
     'POST /api/admin/setup_keys': () => 'บันทึกหน้าตั้งค่าเชื่อมต่อ',
-    'GET /api/kerry/export_excel': (b, q) => `ดาวน์โหลดไฟล์ Kerry${q && q.sessionId ? ' (เลือกรอบไลฟ์)' : (q && q.date ? ` (วันที่ ${String(q.date).slice(0, 8)})` : '')}`
+    'GET /api/kerry/export_excel': (b, q) => `ดาวน์โหลดไฟล์ Kerry${q && q.sessionId ? ' (เลือกรอบไลฟ์)' : (q && q.date ? ` (วันที่ ${String(q.date).slice(0, 8)})` : '')}`,
+    'GET /api/history/product_rounds_excel': () => 'ดาวน์โหลดรายงานสินค้าแยกรอบไลฟ์ (Excel)'
 };
 app.use((req, res, next) => {
     const labelFn = ACTION_LOG_LABELS[`${req.method} ${req.path}`];
@@ -1346,6 +1347,7 @@ app.use((req, res, next) => {
         p.startsWith('/api/queue/') ||
         (p.startsWith('/api/live_session/') && (p === '/api/live_session/start' || p === '/api/live_session/end' || p === '/api/live_session/hold' || p === '/api/live_session/pending_merge')) ||
         p === '/api/history_data' ||
+        p.startsWith('/api/history/') ||
         p.startsWith('/api/notifications')
     );
     if (isTierA) {
@@ -1713,7 +1715,7 @@ app.post('/api/admin/storage/cleanup_uploads', (req, res) => {
 });
 
 // v1.0.19: ตัวช่วยวันที่/เวลาไทย (ล้วนทั้ง 4) ย้ายไป lib/dates.js — ตัวอักษรเดิมทุกตัว / เทสต์ตรง: tests/unit/dates.test.js
-const { getTodayString, getLocalTimeString, bangkokDateString, stampToSec } = require('./lib/dates');
+const { getTodayString, getLocalTimeString, bangkokDateString, stampToSec, thaiLiveSpan } = require('./lib/dates');
 
 // v1.0.15: รวมบิล 2 รอบไลฟ์ (รอบ A กด "รอรวมกับรอบหน้า" -> รอบ B ถัดไปรวมบิลกับ A)
 // เก็บสถานะไว้ในข้อมูลรอบไลฟ์เดิม (configs: session_hist_<id> / active_live_session) ไม่แตะตารางสลิปหรือลูกค้า
@@ -1778,7 +1780,7 @@ const OUT_OF_ROUND_PENDING_STATUSES = ['waiting', 'called', 'skipped', 'abnormal
 // เจ้าของตรวจพบ (2026-10-31): ป้ายเดิมเขียน "เงินมาหลังจบไลฟ์" ทุกกรณี ทั้งที่เงินที่มาก่อนไลฟ์รอบแรกของช่วง
 // คือเงินเตรียมตัว (ไม่เสี่ยงส่งของซ้ำ) ส่วนเงินที่มาหลังมีรอบไลฟ์จบไปแล้วคือยอดจุ่ม (ระวังส่งซ้ำ)
 let endedSessionCache = null;   // เวลาจบของรอบที่จบแล้ว เรียงจากน้อยไปมาก — เติมใหม่เมื่อบันทึกสถานะรอบ
-function invalidateEndedSessionCache() { endedSessionCache = null; }
+function invalidateEndedSessionCache() { endedSessionCache = null; latestEndedSessionCache = undefined; }
 function endedSessionList() {
     if (endedSessionCache) return endedSessionCache;
     const out = [];
@@ -1789,6 +1791,34 @@ function endedSessionList() {
     out.sort((a, b) => a - b);
     endedSessionCache = out;
     return out;
+}
+// v1.0.20 (P1): รอบไลฟ์ล่าสุด "ที่จบแล้ว" ทั้ง record — undefined = ยังไม่ได้ไล่, null = ไม่เคยมีรอบที่จบ
+let latestEndedSessionCache;
+function latestEndedSessionRecord() {
+    if (latestEndedSessionCache !== undefined) return latestEndedSessionCache;
+    let best = null;
+    try {
+        const rows = supabase.db.prepare("SELECT value FROM configs WHERE key LIKE 'session_hist_%'").all();
+        rows.forEach(r => { try { const s = JSON.parse(r.value); if (s && s.endTime && (!best || Number(s.endTime) > Number(best.endTime))) best = s; } catch (e) {} });
+    } catch (e) {}
+    latestEndedSessionCache = best;
+    return best;
+}
+// v1.0.20 (P1): ขอบเขตยอดบนหน้า Dashboard — มีไลฟ์ = รอบนั้น / ไม่มีไลฟ์ = รอบล่าสุดที่จบแล้ว "ทั้งรอบ"
+// (ไลฟ์ 21:00–01:30 พ้นเที่ยงคืนแล้วยอดไม่ถูกตัดครึ่ง) / ไม่เคยมีไลฟ์ = ยอดวันนี้ตามเดิม
+function currentDashboardScope() {
+    if (activeLiveSession) return { date: getTodayString(), sessionId: activeLiveSession.id };
+    const last = latestEndedSessionRecord();
+    if (last && LIVE_ID_RE.test(String(last.id))) return { date: getTodayString(), sessionId: String(last.id) };
+    return { date: getTodayString(), sessionId: null };
+}
+// ขอบเขตที่กำลังดูตรงกับ "ปัจจุบัน" ไหม — ชี้ว่าการ์ดในหน่วยความจำ (รอโอนเพิ่ม/รูปโหลดไม่สำเร็จ/การ์ดยืนยันสลิปซ้ำ) จะแสดงไหม
+// v1.0.20 (P1): "ปัจจุบัน" คือรอบที่กำลังไลฟ์ หรือรอบล่าสุดที่จบแล้ว (ยังไม่เคยมีไลฟ์ = วันนี้)
+function isCurrentStatsScope(targetSessionId, targetDate) {
+    if (activeLiveSession) return targetSessionId === activeLiveSession.id;
+    const last = latestEndedSessionRecord();
+    if (last && LIVE_ID_RE.test(String(last.id))) return String(targetSessionId) === String(last.id);
+    return !targetSessionId && targetDate === getTodayString();
 }
 // เวลาที่สลิปเข้าระบบเป็น epoch ms จริง: stampToSec อ่านเวลากรุงเทพเสมือน UTC → ลบ 7 ชม. กลับเป็นเวลาแท้
 function slipArrivalEpochMs(transDate, transTime) {
@@ -1930,11 +1960,25 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
         });
     }
 
-    let queueQuery = supabase.from('slips').select('*').in('status', ['waiting', 'called', 'skipped', 'abnormal_pending']);
-    if (targetSessionId) {
-        queueQuery = queueQuery.eq('session_id', targetSessionId);
+    let queueData;
+    if (targetSessionId && !activeLiveSession) {
+        // v1.0.20 (P1): ดูยอดของรอบที่จบแล้ว — คิวยังต้องแสดงการ์ดค้างของรอบนั้น + การ์ดโอนนอกรอบที่ยังไม่ถูกผูก (กติกา ก: ห้ามหายจากจอ)
+        // เงื่อนไขโอนนอกรอบ = outOfRoundSlipFilter ตัด accumulated ออก (การ์ดส้มมาจาก topups ไม่ใช่คิว)
+        try {
+            const lastSessioned = supabase.db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM slips WHERE session_id IS NOT NULL').get();
+            const oorStatuses = OUT_OF_ROUND_PENDING_STATUSES.filter(s => s !== 'accumulated');
+            queueData = supabase.db.prepare(
+                `SELECT * FROM slips WHERE (session_id = ? AND status IN ('waiting','called','skipped','abnormal_pending'))` +
+                ` OR (session_id IS NULL AND id > ? AND trans_date >= ? AND status IN (${oorStatuses.map(() => '?').join(',')})) ORDER BY id ASC`
+            ).all(targetSessionId, Number(lastSessioned && lastSessioned.m) || 0, bangkokDateString(-OUT_OF_ROUND_LOOKBACK_DAYS), ...oorStatuses);
+        } catch (e) { queueData = null; }
+    } else {
+        let queueQuery = supabase.from('slips').select('*').in('status', ['waiting', 'called', 'skipped', 'abnormal_pending']);
+        if (targetSessionId) {
+            queueQuery = queueQuery.eq('session_id', targetSessionId);
+        }
+        ({ data: queueData } = await queueQuery.order('id', { ascending: true }));
     }
-    const { data: queueData } = await queueQuery.order('id', { ascending: true });
     let queues = { waiting: [], called: [], skipped: [], abnormal_pending: [] };
     
     if (queueData && queueData.length > 0) {
@@ -2035,7 +2079,7 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
     let topups = [];
     const topupByCustomer = new Map();
     try {
-        const isCurrentScope = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
+        const isCurrentScope = isCurrentStatsScope(targetSessionId, targetDate);
         if (isCurrentScope && dailySlips && dailySlips.length > 0) {
             const sortedAsc = dailySlips.slice().sort((a, b) => a.id - b.id);
             const listByCustomer = new Map();
@@ -2087,16 +2131,30 @@ async function getStatsByDate(targetDate, targetSessionId = null) {
     } catch (e) { recentSlips = []; }
     let imageFails = [];
     try {
-        const scopeIsCurrent = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
+        const scopeIsCurrent = isCurrentStatsScope(targetSessionId, targetDate);
         if (scopeIsCurrent) imageFails = currentLineImageFailures();
     } catch (e) { imageFails = []; }
     // v1.0.18: การ์ดยืนยัน "สลิปตรงกับยอดที่กรอกเอง" (รอแม่ค้าตัดสินใจ อยู่จนกด — ค่าเริ่มต้นผูกเป็นใบเดียวกัน)
     let manualMatches = [];
     try {
-        const scopeIsCurrent2 = activeLiveSession ? (targetSessionId === activeLiveSession.id) : (!targetSessionId && targetDate === getTodayString());
+        const scopeIsCurrent2 = isCurrentStatsScope(targetSessionId, targetDate);
         if (scopeIsCurrent2) manualMatches = currentManualMatchWarnings();
     } catch (e) { manualMatches = []; }
-    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.filter(q => !q.isPendingAmount).length }, queues, topups, recentSlips, imageFails, manualMatches };
+    // v1.0.20 (P1): ดูยอดของรอบที่จบแล้ว → แนบป้ายช่วงรอบ และแยกเงินที่เข้า "หลังจบไลฟ์" ออกจากยอดรอบ
+    let liveBadge = null; let afterLive = null;
+    if (targetSessionId && !activeLiveSession) {
+        const last = latestEndedSessionRecord();
+        if (last && String(last.id) === String(targetSessionId)) {
+            const span = thaiLiveSpan(last.startDateStr, last.startTimeStr, last.endTime, last.endTimeStr);
+            liveBadge = span ? `ไลฟ์ล่าสุด: ${span}` : null;
+            try {
+                const f = outOfRoundSlipFilter();   // กติกาเดียวกับตอน claim: สถานะยังค้าง + เข้าหลังสลิปสุดท้ายที่มีรหัสรอบ
+                const row = supabase.db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS a FROM slips WHERE ${f.where}`).get(...f.params);
+                if (row && Number(row.n) > 0) afterLive = { amount: Number(row.a) || 0, slips: Number(row.n) };
+            } catch (e) { afterLive = null; }
+        }
+    }
+    return { stats: { totalAmount, totalSlips: dailySlips ? dailySlips.length : 0, totalDraws, uniqueCustomers: uniqueCustomersSet.size, waitingCount: queues.waiting.filter(q => !q.isPendingAmount).length, liveBadge, afterLive }, queues, topups, recentSlips, imageFails, manualMatches };
 }
 
 let broadcastTimer = null;
@@ -2111,8 +2169,8 @@ function broadcastTodayStats() {
             broadcastWaiters = [];
             let data = null;
             try {
-                const sid = activeLiveSession ? activeLiveSession.id : null;
-                data = await getStatsByDate(getTodayString(), sid);
+                const scope = currentDashboardScope();   // v1.0.20 (P1): ไม่มีไลฟ์ = ยอดรอบล่าสุดที่จบแล้ว ไม่ใช่ยอดตามวันที่
+                data = await getStatsByDate(scope.date, scope.sessionId);
                 io.emit('update_stats', data.stats);
                 io.emit('full_sync', data);
             } catch (e) {
@@ -2124,16 +2182,16 @@ function broadcastTodayStats() {
 }
 
 async function getCurrentQueueNumber() {
-    const currentSessionId = activeLiveSession ? activeLiveSession.id : null;
-    const statsData = await getStatsByDate(getTodayString(), currentSessionId);
+    const scope = currentDashboardScope();
+    const statsData = await getStatsByDate(scope.date, scope.sessionId);
     return statsData.stats.waitingCount;
 }
 
 app.get('/history.html', (req, res) => { res.sendFile(path.join(__dirname, 'public', 'history.html')); });
 app.get('/api/stats/today', async (req, res) => {
     try {
-        const sid = activeLiveSession ? activeLiveSession.id : null;
-        const data = await getStatsByDate(getTodayString(), sid);
+        const scope = currentDashboardScope();   // v1.0.20 (P1): ไม่มีไลฟ์ = ยอดรอบล่าสุดที่จบแล้ว ไม่ใช่ยอดตามวันที่
+        const data = await getStatsByDate(scope.date, scope.sessionId);
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -2218,8 +2276,72 @@ app.get('/api/history_data', async (req, res) => {
             addLog('WARN', `สรุปยอดแยกรอบไลฟ์ไม่สำเร็จ (ประวัติสลิปยังแสดงปกติ): ${roundErr.message}`);
             rounds = [];
         }
-        res.json({ success: true, history, rounds });
+        // v1.0.20 (P2): ตาราง สินค้า × รอบไลฟ์ — คำนวณที่เซิร์ฟเวอร์ด้วยกติกาเดียวกับสรุป Discord (lib/products.js)
+        // หน้าประวัติเลิกแยกสินค้าเอง ใช้ตารางนี้แทน เพื่อไม่ให้มีสองกติกาให้ตัวเลขไม่ตรงกัน
+        let productSummary = null;
+        try { productSummary = buildProductRoundSummary(data, rounds); }
+        catch (prodErr) { addLog('WARN', `สรุปสินค้าแยกรอบไม่สำเร็จ (ส่วนอื่นของประวัติยังแสดงปกติ): ${prodErr.message}`); }
+        res.json({ success: true, history, rounds, productSummary });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+// 📊 v1.0.20 (P2): ดาวน์โหลดตาราง สินค้า × รอบไลฟ์ เป็น Excel — ข้อมูลชุดเดียวกับที่หน้าประวัติแสดง (กติกาเดียวกัน)
+app.get('/api/history/product_rounds_excel', async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query;
+        let query = supabase.from('slips').select('*').order('trans_date', { ascending: false }).order('trans_time', { ascending: false });
+        if (startDate) query = query.gte('trans_date', String(startDate).replace(/-/g, ''));
+        if (endDate) query = query.lte('trans_date', String(endDate).replace(/-/g, ''));
+        const { data, error } = await query;
+        if (error) throw error;
+
+        // เรียงคอลัมน์รอบใหม่ → เก่าเหมือนหน้าประวัติ (จากเวลาเริ่มรอบ) แล้วให้ buildProductRoundSummary จัด "นอกรอบ" ไว้ท้าย
+        const sessionIds = [...new Set((data || []).map(s => s.session_id).filter(id => id && LIVE_ID_RE.test(String(id))))];
+        const roundsLike = sessionIds.map(id => ({ sessionId: id, startTime: ((getSessionRecord(id) || {}).startTime) || Number(String(id).slice(5)) || 0 }))
+            .sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+        const ps = buildProductRoundSummary(data, roundsLike);
+
+        // ชื่อคอลัมน์รอบแบบเดียวกับหน้าประวัติ ("ไลฟ์ 1 พ.ย. 21:00 - 01:30")
+        const f = (ms, withTimeOnly) => withTimeOnly
+            ? new Date(ms).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit' })
+            : new Date(ms).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+        const colLabel = (c) => {
+            if (!c.sessionId) return 'นอกรอบไลฟ์';
+            const rec = getSessionRecord(c.sessionId) || {};
+            const startMs = rec.startTime || Number(String(c.sessionId).slice(5)) || 0;
+            if (!startMs) return `ไลฟ์ ${c.sessionId}`;
+            return `ไลฟ์ ${f(startMs)}${rec.endTime ? ' - ' + f(rec.endTime, true) : ''}`;
+        };
+
+        const workbook = new ExcelJS.Workbook();
+        const ws = workbook.addWorksheet('สินค้ารายรอบ');
+        ws.columns = [
+            { header: 'สินค้า', key: 'name', width: 26 },
+            ...ps.columns.map((c, i) => ({ header: colLabel(c), key: 'c' + i, width: 18 })),
+            { header: 'รวม', key: 'total', width: 10 },
+        ];
+        ps.rows.forEach(r => {
+            const obj = { name: r.name, total: r.total };
+            ps.columns.forEach((c, i) => { obj['c' + i] = r.cells[i] || 0; });
+            ws.addRow(obj);
+        });
+        const sum = { name: 'รวมทุกสินค้า', total: ps.grandTotal };
+        ps.columns.forEach((c, i) => { sum['c' + i] = ps.columnTotals[i] || 0; });
+        ws.addRow(sum);
+        ws.getRow(1).font = { bold: true };
+        ws.getRow(ws.rowCount).font = { bold: true };
+
+        const cleanStart = startDate ? String(startDate).replace(/\D/g, '').slice(0, 8) : getTodayString();
+        const cleanEnd = endDate ? String(endDate).replace(/\D/g, '').slice(0, 8) : getTodayString();
+        const filename = `product_rounds_${cleanStart}_${cleanEnd}.xlsx`;
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (e) {
+        console.error('Product Rounds Excel Error:', e);
+        res.status(500).send('Error generating Excel file: ' + e.message);
+    }
 });
 
 const ALLOWED_QUEUE_ACTIONS = new Set(['completed', 'called', 'skipped', 'waiting', 'cleared', 'rejected']);
@@ -2374,11 +2496,19 @@ app.post('/api/queue/dismiss_topup', async (req, res) => {
         if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ success: false, message: 'รหัสการ์ดไม่ถูกต้อง' });
         const slip = supabase.db.prepare('SELECT line_id, line_name FROM slips WHERE id = ?').get(id);
         if (!slip || !slip.line_id) return res.status(404).json({ success: false, message: 'ไม่พบการ์ดนี้' });
-        // ขอบเขตเดียวกับที่หน้าจอใช้แสดงการ์ด: รอบไลฟ์ที่กำลังไลฟ์ หรือวันนี้ถ้าไม่ได้ไลฟ์
+        // ขอบเขตเดียวกับที่หน้าจอใช้แสดงการ์ด: รอบไลฟ์ที่กำลังไลฟ์ / รอบล่าสุดที่จบแล้ว (+ สลิปโอนนอกรอบที่ยังค้าง) / วันนี้ถ้าไม่เคยมีไลฟ์
         let sql = "UPDATE slips SET status = 'cleared' WHERE line_id = ? AND status = 'accumulated'";
         const params = [slip.line_id];
         if (activeLiveSession) { sql += ' AND session_id = ?'; params.push(activeLiveSession.id); }
-        else { sql += ' AND trans_date = ?'; params.push(getTodayString()); }
+        else {
+            const last = latestEndedSessionRecord();
+            if (last && LIVE_ID_RE.test(String(last.id))) {
+                // v1.0.20 (P1): ไลฟ์ข้ามเที่ยงคืน — การ์ดส้มของรอบ (trans_date เมื่อวาน) ต้องปิดได้ เหมือนที่จอแสดงให้เห็น
+                sql += ' AND (session_id = ? OR (session_id IS NULL AND id > (SELECT COALESCE(MAX(id), 0) FROM slips WHERE session_id IS NOT NULL) AND trans_date >= ?))';
+                params.push(String(last.id), bangkokDateString(-OUT_OF_ROUND_LOOKBACK_DAYS));
+            }
+            else { sql += ' AND trans_date = ?'; params.push(getTodayString()); }
+        }
         const r = supabase.db.prepare(sql).run(...params);
         addLog('INFO', `🖥️ แม่ค้าปิดการ์ดส้ม "รอโอนเพิ่ม" ของ ${slip.line_name || 'ลูกค้า'} (${r.changes} ใบ) — ไม่กระทบยอดรวมและเงินในกระเป๋า`);
         await broadcastTodayStats();
@@ -2595,29 +2725,39 @@ function renderLiveIssueGroup(g) {
     return out.length > 950 ? out.slice(0, 949) + '…' : out;
 }
 
-// สรุปสินค้าที่ได้สิทธิ์ของรอบ — กติกาเดียวกับหน้าประวัติ (public/history.html summarizeHistory): ไม่นับใบที่ปัดตก/ข้าม และ draws ต้อง > 0
+// สรุปสินค้าที่ได้สิทธิ์ของรอบ — กติกาเดียวกับหน้าประวัติ (public/history.html): ไม่นับใบที่ปัดตก/ข้าม และ draws ต้อง > 0
 // breakdown เก็บใน qr_payload: "รหัสอ้างอิง|ชื่อ xจำนวน, ชื่อ xจำนวน" (ใบ manual_image คือ "manual_image|url|breakdown")
+// v1.0.20 (P2): ตัวนับย้ายไป lib/products.js เป็นกติกาเดียวกับตาราง "สินค้า × รอบไลฟ์" ของหน้าประวัติ — ห้ามแก้ข้างเดียว
+const Products = require('./lib/products');
 function summarizeLiveProducts(rows) {
-    const counts = {};
-    let pieces = 0;
-    (rows || []).forEach(r => {
-        if (r.status === 'rejected' || r.status === 'skipped' || !(Number(r.draws) > 0)) return;
-        const payload = String(r.qr_payload || '');
-        const parts = payload.split('|');
-        const breakdown = payload.startsWith('manual_image') ? parts[2] : parts[1];
-        if (!breakdown) return;
-        breakdown.split(',').forEach(p => {
-            const t = p.trim();
-            if (!t) return;
-            const m = t.match(/(.+)\s+x(\d+)$/);
-            const name = m ? m[1].trim() : t;
-            const qty = m ? parseInt(m[2], 10) : 1;
-            counts[name] = (counts[name] || 0) + qty;
-            pieces += qty;
-        });
-    });
+    const { counts, pieces } = Products.countProducts(rows);
     const list = Object.keys(counts).map(n => ({ name: n, qty: counts[n] })).sort((a, b) => (b.qty - a.qty) || a.name.localeCompare(b.name));
     return { list, pieces };
+}
+
+// v1.0.20 (P2): ประกอบตาราง สินค้า × รอบไลฟ์ จากสลิปในช่วงที่เลือก (นับด้วยกติกาเดียวกันจาก lib/products.js)
+// คอลัมน์ = รอบใหม่ → เก่า (ตามลำดับ rounds ที่ส่งเข้ามา ซึ่งเรียงแล้ว) + "นอกรอบไลฟ์" ท้ายสุดถ้ามีสลิปไม่มีรอบ
+// ใช้ร่วมทั้ง /api/history_data (แสดงบนหน้าประวัติ) และ /api/history/product_rounds_excel (ดาวน์โหลด Excel)
+function buildProductRoundSummary(slips, rounds) {
+    const byRound = new Map();
+    (slips || []).forEach(s => {
+        const key = s.session_id && LIVE_ID_RE.test(String(s.session_id)) ? String(s.session_id) : '__oor__';
+        if (!byRound.has(key)) byRound.set(key, []);
+        byRound.get(key).push(s);
+    });
+    const columns = [];
+    (rounds || []).forEach(r => { if (r.sessionId) columns.push({ key: String(r.sessionId), sessionId: r.sessionId }); });
+    if (byRound.has('__oor__')) columns.push({ key: '__oor__', sessionId: null });
+    const perCol = {};
+    columns.forEach(c => { perCol[c.key] = Products.countProducts(byRound.get(c.key) || []); });
+    const names = new Set();
+    Object.keys(perCol).forEach(k => Object.keys(perCol[k].counts).forEach(n => names.add(n)));
+    const rows = [...names].map(n => {
+        const cells = columns.map(c => perCol[c.key].counts[n] || 0);
+        return { name: n, cells, total: cells.reduce((a, b) => a + b, 0) };
+    }).sort((a, b) => (b.total - a.total) || a.name.localeCompare(b.name, 'th'));
+    const columnTotals = columns.map(c => perCol[c.key].pieces);
+    return { columns, rows, columnTotals, grandTotal: columnTotals.reduce((a, b) => a + b, 0) };
 }
 
 // 🏁 v1.0.16: ตัวสร้าง embed สรุปหลังจบไลฟ์ (pure function — ตัดมาทดสอบแบบ unit test ได้ตรงๆ)

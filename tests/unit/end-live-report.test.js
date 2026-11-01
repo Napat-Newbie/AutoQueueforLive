@@ -18,6 +18,7 @@ function env() {
         consts: ['SEVERITY_STYLE']
     });
     fromIndex.classifySlipOkError = load(LIB_SLIP, { functions: ['classifySlipOkError'] }).classifySlipOkError;
+    fromIndex.Products = require('../../lib/products');   // v1.0.20 (P2): summarizeLiveProducts ใช้กติกานับสินค้าจาก lib/products.js
     return fromIndex;
 }
 
@@ -222,8 +223,9 @@ test('summarizeLiveProducts: same rule as the history page (no rejected / skippe
         { status: 'completed', draws: 1, qr_payload: 'REF7' }
     ];
     const r = env().summarizeLiveProducts(rows);
-    assert.deepEqual(JSON.parse(JSON.stringify(r.list)), [{ name: 'A', qty: 3 }, { name: 'B', qty: 3 }, { name: 'C', qty: 1 }]);
-    assert.equal(r.pieces, 7);
+    // v1.0.20 (P2): ใบที่มีชิ้นแต่ไม่มีรายการสินค้า (REF7) นับเป็นแถว "ไม่ระบุสินค้า" แทนที่จะหายไปเงียบๆ — ให้ผลรวมตรง draws เสมอ
+    assert.deepEqual(JSON.parse(JSON.stringify(r.list)), [{ name: 'A', qty: 3 }, { name: 'B', qty: 3 }, { name: 'C', qty: 1 }, { name: 'ไม่ระบุสินค้า', qty: 1 }]);
+    assert.equal(r.pieces, 8);
     assert.deepEqual(JSON.parse(JSON.stringify(env().summarizeLiveProducts([]))), { list: [], pieces: 0 });
 });
 
