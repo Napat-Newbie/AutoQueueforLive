@@ -21,7 +21,7 @@
                 <div>
                     <div class="flex items-center space-x-2.5">
                         <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">Version History & Changelog</h1>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.19 (CURRENT)</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.20 (CURRENT)</span>
                     </div>
                     <p class="text-xs text-zinc-400 mt-0.5">บันทึกประวัติการปรับปรุง แก้ไขบั๊ก และฟีเจอร์ใหม่ของ AutoQueue for Live ทั้งหมด</p>
                 </div>
@@ -34,12 +34,36 @@
         <!-- Timeline Container -->
         <div class="space-y-6">
 
+            <!-- v1.0.20 -->
+            <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-lg font-bold text-white">🚀 Version 1.0.20</span>
+                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
+                    </div>
+                    <span class="text-xs text-zinc-400 font-mono">2 พฤศจิกายน 2026</span>
+                </div>
+                <div class="space-y-3 text-xs leading-relaxed">
+                    <div>
+                        <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1.5">✨ ปรับปรุง:</h3>
+                        <ul class="list-disc list-inside space-y-1 text-zinc-300 ml-1">
+                            <li>หน้าหลัก: หลังจบไลฟ์ ยอดรวมและจำนวนเงินเป็นของ "ไลฟ์ล่าสุด" ทั้งรอบ แม้ไลฟ์ข้ามเที่ยงคืน ยอดไม่ถูกตัดเป็นของวันใหม่อีก พร้อมป้ายบอกช่วงเวลาของรอบ</li>
+                            <li>หน้าหลัก: เงินที่โอนเข้ามาหลังจบไลฟ์ แสดงแยกเป็นบรรทัด "เงินเข้าหลังจบไลฟ์" ไม่ปนกับยอดของรอบ</li>
+                            <li>หน้าประวัติ: ตารางจำนวนชิ้นของสินค้าแยกตามรอบไลฟ์ เห็นยอดขายแต่ละไลฟ์ชัดเจน มีคอลัมน์รวม และปุ่มดาวน์โหลดเป็นไฟล์ Excel</li>
+                            <li>สลิปที่มีจำนวนชิ้นแต่ไม่มีรายการสินค้า แสดงเป็นแถว "ไม่ระบุสินค้า" ทั้งในหน้าประวัติและสรุปหลังจบไลฟ์ ยอดชิ้นจึงตรงกันทุกที่</li>
+                            <li>ปิดการ์ดส้ม "รอโอนเพิ่ม" ของไลฟ์ที่ข้ามเที่ยงคืนได้ตามปกติ</li>
+                            <li>ไฟล์รายงานสินค้าต้องเข้าสู่ระบบก่อน เมื่อเปิดจากนอกเครื่องร้าน</li>
+                            <li>จัดระเบียบโค้ดภายในให้ดูแลง่ายขึ้น การทำงานเหมือนเดิมทุกอย่าง</li>
+                            <li>ชุดทดสอบอัตโนมัติ 353 ข้อ ผ่านทั้งหมด</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
             <!-- v1.0.19 -->
             <div class="p-5 rounded-2xl bg-zinc-900/90 border border-emerald-500/40 shadow-lg space-y-4 relative">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
                     <div class="flex items-center space-x-3">
                         <span class="text-lg font-bold text-white">🚀 Version 1.0.19</span>
-                        <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">LATEST RELEASE</span>
                     </div>
                     <span class="text-xs text-zinc-400 font-mono">1 พฤศจิกายน 2026</span>
                 </div>
