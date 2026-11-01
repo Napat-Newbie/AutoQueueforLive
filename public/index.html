@@ -638,6 +638,9 @@
                 <div class="metric-main-card">
                     <h3>ยอดโอนรวม</h3>
                     <div class="amount"><span class="currency">฿</span> <span id="totalAmount">0.00</span></div>
+                    <!-- v1.0.20 (P1): หลังจบไลฟ์ ยอดนี้เป็นของ "รอบล่าสุด" — บอกช่วงรอบ และแยกเงินที่เข้าหลังจบไลฟ์ออกจากยอดรอบ -->
+                    <div id="liveScopeBadge" style="display:none; margin-top:6px; font-size:0.88em; color:#5f6368; font-weight:600;"></div>
+                    <div id="afterLiveMoney" style="display:none; margin-top:4px; font-size:0.82em; color:#c77700;"></div>
                 </div>
                 <div class="metrics-grid-4">
                     <div class="metric-small-card"><div class="metric-icon icon-purple">👤</div><div class="metric-info"><span class="label">จำนวนลูกค้า</span><span class="value" id="uniqueCustomers">0</span></div></div>
@@ -1547,6 +1550,19 @@
             document.getElementById('totalSlips').innerText = stats.totalSlips;
             document.getElementById('totalDraws').innerText = stats.totalDraws;
             document.getElementById('waitingQueuesCount').innerText = stats.waitingCount;
+            // v1.0.20 (P1): ป้ายบอกว่ายอดนี้เป็นของรอบไหน (หลังจบไลฟ์ = รอบล่าสุด) + บรรทัดเงินที่เข้าหลังจบไลฟ์ (ไม่ปนในยอดรอบ)
+            const scopeBadge = document.getElementById('liveScopeBadge');
+            if (scopeBadge) {
+                if (stats.liveBadge) { scopeBadge.innerText = stats.liveBadge; scopeBadge.style.display = 'block'; }
+                else scopeBadge.style.display = 'none';
+            }
+            const afterLiveEl = document.getElementById('afterLiveMoney');
+            if (afterLiveEl) {
+                if (stats.afterLive && Number(stats.afterLive.slips) > 0) {
+                    afterLiveEl.innerText = `เงินเข้าหลังจบไลฟ์ ฿${Number(stats.afterLive.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })} (${stats.afterLive.slips} สลิป)`;
+                    afterLiveEl.style.display = 'block';
+                } else afterLiveEl.style.display = 'none';
+            }
         }
 
         function renumberQueues() {
